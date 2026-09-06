@@ -26,6 +26,12 @@ El backend PostgreSQL crea las tablas propias de autenticacion y modulos del ERP
 
 El servidor tambien expone colecciones transaccionales en `/api/domain/<coleccion>` para proveedores, cuentas por pagar, devoluciones, conteos, reservas, garantias, caja, bancos, cotizaciones, pedidos, entregas, notas credito y configuracion empresarial. `/api/report/<coleccion>.csv` exporta reportes CSV. El primer administrador se configura una sola vez mediante `/api/auth/setup` y luego inicia sesion en `/api/auth/login`. `/api/backup` genera un respaldo JSON y `/api/restore` lo restaura.
 
+### Cliente API local y produccion
+
+Las llamadas del frontend pasan por `js/services/api-client.js`. La URL se configura en un unico lugar, `js/config.js`: en `localhost` usa automaticamente `http://127.0.0.1:8024/api`; en GitHub Pages permanece en modo demo hasta definir una URL HTTPS real en `FAMIMUEBLES_API_BASE_URL`. No se deben poner credenciales en ese archivo.
+
+Para una API publicada, establece `FAMIMUEBLES_API_BASE_URL` antes de cargar `app-v3.js` o reemplaza el valor de configuracion por la URL HTTPS real del backend. En el servidor define `FAMIMUEBLES_ALLOWED_ORIGINS` con una lista separada por comas, por ejemplo `https://famimuebles16.github.io,http://127.0.0.1:8024`, y conserva `POSTGRES_PASSWORD` unicamente como secreto del entorno. PostgreSQL no debe exponerse a Internet: la API debe accederlo por red privada o mediante un tunel seguro.
+
 Los reportes de la pantalla Reportes se descargan como PDF mediante `/api/report-pdf/<coleccion>.pdf`. El generador usa ReportLab y el diseno de FAMIMUEBLES con encabezado, fecha, local, usuario, tarjetas de resumen, tabla con filas alternadas y pie de pagina. La dependencia esta fijada en `requirements.txt`.
 
 El Service Worker no intercepta rutas `/api/` y el frontend verifica la firma `%PDF` antes de descargar un reporte, evitando guardar `offline.html` con extension `.pdf`. Si existe un PDF anterior de 492 bytes, debe eliminarse y generarse nuevamente desde la version actual del servidor.

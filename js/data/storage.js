@@ -1,10 +1,12 @@
 import { createAccountPayable } from '../services/accounts-payable-service.js?v=14';
 import { demoState } from './demo-data.js';
+import { api } from '../services/api-client.js';
+import { API_BASE_URL } from '../config.js';
 
 export const TENANT_STORAGE_KEY = 'famimuebles-tenant-id';
 export function activeTenantId() { return localStorage.getItem(TENANT_STORAGE_KEY) || 'tenant-default'; }
 export function authHeaders() { const token = localStorage.getItem('famimuebles-auth-token'); return token ? { Authorization: `Bearer ${token}` } : {}; }
-export function isStaticDeployment() { return window.location.hostname.endsWith('.github.io'); }
+export function isStaticDeployment() { return !API_BASE_URL && window.location.hostname.endsWith('.github.io'); }
 
 function createEmptyState() {
   return {
@@ -97,24 +99,13 @@ export function saveState(state) {
     localStorage.setItem('famimuebles-static-state', JSON.stringify(state));
     return Promise.resolve(true);
   }
-  return fetch('/api/state', { method: 'POST', headers: { ...authHeaders(), 'Content-Type': 'application/json', 'X-Tenant-ID': activeTenantId() }, body: JSON.stringify({ state, tenantId: activeTenantId() }) }).then(response => {
-    if (!response.ok) throw new Error('No se pudo sincronizar el estado con PostgreSQL.');
-    return true;
-  });
+  return api.post('/api/state', { state, tenantId: activeTenantId() }, { headers: { 'X-Tenant-ID': activeTenantId() } }).then(() => true);
 }
 export async function hydrateState() {
   if (window.location.protocol !== 'http:' && window.location.protocol !== 'https:') return null;
   try {
-    const response = await fetch('/api/state', { headers: { ...authHeaders(), Accept: 'application/json', 'X-Tenant-ID': activeTenantId() }, cache: 'no-store' });
-    if (response.status === 401 || response.status === 403) {
-      localStorage.removeItem('famimuebles-auth-token');
-      localStorage.removeItem('famimuebles-user');
-      location.reload();
-      return null;
-    }
-    if (!response.ok) return null;
-    const payload = await response.json();
-    if (!payload.state || typeof payload.state !== 'object') return null;
+    const payload = await api.get('/api/state', { headers: { 'X-Tenant-ID': activeTenantId() }, cache: 'no-store' });
+    if (!payload?.state || typeof payload.state !== 'object') return null;
     const remoteState = { ...createEmptyState(), ...payload.state, demoMode: false };
     Object.keys(createEmptyState()).forEach(collection => {
       if (collection !== 'demoMode' && !Array.isArray(remoteState[collection])) remoteState[collection] = [];
@@ -122,15 +113,19 @@ export async function hydrateState() {
     remoteState.demoMode = false;
     return remoteState;
   } catch (error) {
+    if (error.status === 401 || error.status === 403) {
+      localStorage.removeItem('famimuebles-auth-token');
+      localStorage.removeItem('famimuebles-user');
+      location.reload();
+      return null;
+    }
     return null;
   }
 }
 export async function hydrateCatalog(state) {
   if (window.location.protocol !== 'http:' && window.location.protocol !== 'https:') return state;
   try {
-    const response = await fetch('/api/catalog', { headers: { ...authHeaders(), Accept: 'application/json', 'X-Tenant-ID': activeTenantId() }, cache: 'no-store' });
-    if (!response.ok) return state;
-    const catalog = await response.json();
+    const catalog = await api.get('/api/catalog', { headers: { 'X-Tenant-ID': activeTenantId() }, cache: 'no-store' });
     if (!Array.isArray(catalog.products) || !Array.isArray(catalog.stores)) return state;
     state.products = catalog.products.map(product => ({ ...product, price:0, salePrice:0, specialPrice:0, minimumPrice:0 }));
     state.stores = catalog.stores;
