@@ -1219,7 +1219,7 @@ class AppHandler(SimpleHTTPRequestHandler):
                 username = str(payload.get("username", "")).strip()
                 password = str(payload.get("password", ""))
                 with connection() as database:
-                    user = database.execute("SELECT * FROM auth_users WHERE username = ? AND active = 1", (username,)).fetchone()
+                    user = database.execute("SELECT * FROM auth_users WHERE LOWER(username) = LOWER(?) AND active = 1", (username,)).fetchone()
                     if not user or not password_matches(password, user["password_hash"]):
                         self.send_json(401, {"error": "Credenciales invalidas"})
                         return
