@@ -1,4 +1,4 @@
-import { API_BASE_URL } from '../config.js';
+import { API_BASE_URL } from '../config.js?v=2';
 
 const REQUEST_TIMEOUT_MS = 15000;
 
@@ -38,7 +38,7 @@ async function parseResponse(response) {
 export async function apiRequest(path, options = {}) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), options.timeout || REQUEST_TIMEOUT_MS);
-  const headers = { Accept: 'application/json', 'ngrok-skip-browser-warning': 'true', ...authHeaders(), ...(options.headers || {}) };
+  const headers = { Accept: 'application/json', ...authHeaders(), ...(options.headers || {}) };
   try {
     const response = await fetch(buildUrl(path), { ...options, headers, signal: controller.signal });
     return await parseResponse(response);

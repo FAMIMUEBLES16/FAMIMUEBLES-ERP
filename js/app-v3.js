@@ -3,8 +3,8 @@ function transferRecord(transferId){const local=(store.collection.transfers||[])
 function showTransferDetail(transferId){const transfer=transferRecord(transferId);if(!transfer)return showToast('No se encontro el traslado.','error');const items=transfer.items||[];$('#modal-root').innerHTML=`<div class="modal-backdrop"><section class="modal"><button type="button" class="modal-close">×</button><p class="eyebrow">INVENTARIO</p><h2>Traslado ${transfer.id}</h2><div class="detail-grid"><div><span>Origen</span><strong>${transfer.originStoreId||transfer.local_origen||'-'}</strong></div><div><span>Destino</span><strong>${transfer.destinationStoreId||transfer.local_destino||'-'}</strong></div><div><span>Fecha</span><strong>${transfer.createdAt||transfer.fecha||'-'}</strong></div><div><span>Estado</span><strong>${transfer.status||transfer.estado||'-'}</strong></div></div><h3>Productos</h3>${table(['Producto','Cantidad'],items.map(item=>`<tr><td>${item.name||item.descripcion||item.productId||item.codigo||'Producto'}</td><td>${item.quantity||item.cantidad||0}</td></tr>`))}</section></div>`;$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';}
 function editTransfer(transferId){const transfer=transferRecord(transferId);if(!transfer)return showToast('No se encontro el traslado.','error');$('#modal-root').innerHTML=`<div class="modal-backdrop"><form class="modal" id="transfer-edit-form"><button type="button" class="modal-close">×</button><p class="eyebrow">INVENTARIO</p><h2>Editar traslado</h2><textarea class="field" name="data" rows="12" required>${JSON.stringify(transfer,null,2)}</textarea><button class="primary wide">Guardar cambios</button></form></div>`;$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';$('#transfer-edit-form').onsubmit=async event=>{event.preventDefault();try{const updated=JSON.parse(new FormData(event.target).get('data'));if(String(updated.id)!==String(transfer.id))throw new Error('El ID no puede cambiarse.');await persistDomainRecord('transfers',updated);store.collection.transfers=[...(store.collection.transfers||[]).filter(item=>String(item.id)!==String(updated.id)),updated];$('#modal-root').innerHTML='';render();showToast('Traslado actualizado correctamente.');}catch(error){showToast(error.message,'error');}};}
 async function deleteTransferRemote(transferId){if(!window.confirm('¿Eliminar este traslado?'))return;try{await persistCatalogRecord(`/api/domain/transfers/${encodeURIComponent(transferId)}`,{},'DELETE');store.collection.transfers=(store.collection.transfers||[]).filter(item=>String(item.id)!==String(transferId));$('#modal-root').innerHTML='';render();showToast('Traslado eliminado correctamente.');}catch(error){showToast(error.message,'error');}}
-import { store } from './data/store.js?v=19';
-import { hydrateState, hydrateCatalog, saveState, authHeaders, activeTenantId, isStaticDeployment } from './data/storage.js?v=21';
+import { store } from './data/store.js?v=20';
+import { hydrateState, hydrateCatalog, saveState, authHeaders, activeTenantId, isStaticDeployment } from './data/storage.js?v=22';
 import { generateId } from './utils/ids.js';
 import { currentRoute, startRouter } from './router.js?v=18';
 import { navItems, navGroups } from './components/sidebar.js?v=21';
@@ -44,7 +44,7 @@ import { renderCuentasPorPagar, payableTable } from './modules/cuentas-por-pagar
 import { accountsPayableDetail } from './modules/accounts-payable-detail.js?v=14';
 import { calculateBalance, registerPayment as registerSupplierPayment, updateAccountPayableStatus } from './services/accounts-payable-service.js?v=14';
 import { renderOperaciones, advancedModal, nextAdvancedId } from './modules/operaciones.js?v=2';
-import { api } from './services/api-client.js';
+import { api } from './services/api-client.js?v=2';
 
 const state = { cart:[], payment:'Efectivo', customerId:'CLI-00001', storeId:store.collection.stores[0]?.id || '', transport:0, transportDestination:'', transportNote:'' };
 let sharedRefreshInFlight = false;
@@ -504,7 +504,7 @@ async function boot() {
 		syncCustomerBalances();
 		render();
 	} else {
-		saveState(store.collection);
+		console.warn('No se pudo cargar el estado remoto; se conserva el estado actual.');
 	}
 }
 document.addEventListener('click', async event => {
