@@ -1,0 +1,1 @@
+export function generateId(prefix, collection = []) { const numbers = collection.map(item => Number(String(item.id || '').replace(/\D/g, '')) || 0); return `${prefix}-${String(Math.max(0, ...numbers) + 1).padStart(5, '0')}`; }

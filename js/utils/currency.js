@@ -1,0 +1,1 @@
+export function formatCurrency(value) { const numericValue=Number(value); return new Intl.NumberFormat('es-CO', { style:'currency', currency:'COP', maximumFractionDigits:0 }).format(Number.isFinite(numericValue) ? numericValue : 0); }

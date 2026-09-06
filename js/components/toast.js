@@ -1,0 +1,1 @@
+export function showToast(message, type = 'success') { const item = document.createElement('div'); item.className = `toast ${type}`; item.textContent = message; document.querySelector('#toast-region').append(item); setTimeout(() => item.remove(), 3000); }

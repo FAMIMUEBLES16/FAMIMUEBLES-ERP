@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#123b5d">
+  <meta name="description" content="FAMIMUEBLES ERP, sistema empresarial local.">
+  <link rel="manifest" href="manifest.json">
+  <link rel="stylesheet" href="css/main.css?v=33">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <title>FAMIMUEBLES ERP</title>
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" id="sidebar">
+      <div class="brand-menu">
+        <button class="brand-trigger" id="tenant-toggle" type="button" aria-expanded="false" aria-controls="tenant-menu">
+          <img class="brand-logo" src="Logo Famimuebles.png" alt="FAMIMUEBLES">
+          <span class="brand-copy"><strong>FAMIMUEBLES</strong><small>ERP LOCAL</small></span>
+          <span class="brand-chevron" aria-hidden="true">⌄</span>
+        </button>
+        <div class="tenant-switcher" id="tenant-menu" hidden>
+          <span class="tenant-label">EMPRESA ACTIVA</span>
+          <select class="field tenant-selector" id="tenant-selector" aria-label="Empresa activa"></select>
+          <button class="outline tenant-create" id="tenant-create" type="button">+ Crear empresa</button>
+        </div>
+      </div>
+      <nav class="main-nav" aria-label="Navegacion principal" id="main-nav"></nav>
+      <div class="sidebar-bottom">
+        <label class="sidebar-store"><span>LOCAL ACTIVO</span><select class="field" id="active-store-selector" aria-label="Local activo"></select></label>
+        <button class="user-menu sidebar-user" id="user-menu" aria-label="Abrir menu de usuario"><span class="avatar">AD</span><span class="user-info"><strong class="user-name">Administrador</strong><small>Administrador del sistema</small></span><span>⌄</span></button>
+        <div class="sidebar-foot">
+          <span class="sidebar-mode"><span class="status-dot"></span><span>Modo local</span></span>
+          <span class="sidebar-actions">
+            <button class="icon-button" id="sync-data" type="button" aria-label="Actualizar datos" title="Actualizar datos"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 0 0-14.9-3M4 5v4h4M4 13a8 8 0 0 0 14.9 3M20 19v-4h-4"/></svg></button>
+            <button class="icon-button notification-button" id="notification-toggle" data-action="open-notifications" aria-label="Ver notificaciones" title="Ver notificaciones"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0"/></svg><b id="notification-count">0</b></button>
+          </span>
+        </div>
+      </div>
+    </aside>
+    <div class="app-main">
+      <button id="menu-toggle" type="button" hidden aria-hidden="true"></button>
+      <span id="section-title" hidden aria-hidden="true"></span>
+      <main class="content" id="app-content"></main>
+    </div>
+  </div>
+  <nav class="bottom-nav" id="bottom-nav" aria-label="Navegacion movil"></nav>
+  <div id="toast-region" class="toast-region" aria-live="polite"></div>
+  <div id="modal-root"></div>
+  <script type="module" src="js/app-v3.js?v=79"></script>
+  <script>
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.getRegistrations().then(registrations => registrations.forEach(reg => reg.unregister())).catch(() => {});
+      navigator.serviceWorker.register('./service-worker.js?v=31').catch(() => {});
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,12 @@
+{
+  "name": "FAMIMUEBLES ERP",
+  "short_name": "FAMIMUEBLES",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#f4f7f9",
+  "theme_color": "#123b5d",
+  "icons": [
+    { "src": "Logo Famimuebles.png", "sizes": "640x640", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
