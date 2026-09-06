@@ -938,7 +938,7 @@ class AppHandler(SimpleHTTPRequestHandler):
             self.send_header("Access-Control-Allow-Origin", origin)
             self.send_header("Vary", "Origin")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, Accept, Authorization, X-Tenant-ID, Idempotency-Key")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Accept, Authorization, X-Tenant-ID, Idempotency-Key, ngrok-skip-browser-warning")
 
     def do_GET(self) -> None:
         parsed_url = urlparse(self.path)

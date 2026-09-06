@@ -1,4 +1,4 @@
-const PRODUCTION_API_URL = 'https://investments-capacity-ellen-employer.trycloudflare.com/api';
+const PRODUCTION_API_URL = 'https://crouch-untitled-harness.ngrok-free.dev/api';
 
 const configuredApiBase = String(
   (typeof localStorage !== 'undefined' && localStorage.getItem('famimuebles-api-base-url')) ||
