@@ -1,8 +1,10 @@
 import { createAccountPayable } from '../services/accounts-payable-service.js?v=14';
+import { demoState } from './demo-data.js';
 
 export const TENANT_STORAGE_KEY = 'famimuebles-tenant-id';
 export function activeTenantId() { return localStorage.getItem(TENANT_STORAGE_KEY) || 'tenant-default'; }
 export function authHeaders() { const token = localStorage.getItem('famimuebles-auth-token'); return token ? { Authorization: `Bearer ${token}` } : {}; }
+export function isStaticDeployment() { return window.location.hostname.endsWith('.github.io'); }
 
 function createEmptyState() {
   return {
@@ -85,10 +87,16 @@ function normalizeState(state) {
 }
 function nextId(collection,prefix) { const max=collection.reduce((value,item)=>Math.max(value,Number(String(item.id || '').replace(/\D/g,'')) || 0),0); return `${prefix}-${String(max + 1).padStart(5,'0')}`; }
 export function loadState() {
-  return normalizeState(createEmptyState());
+  if (!isStaticDeployment()) return normalizeState(createEmptyState());
+  const saved = localStorage.getItem('famimuebles-static-state');
+  return normalizeState(saved ? JSON.parse(saved) : structuredClone(demoState));
 }
 export function saveState(state) {
   if (!state || typeof state !== 'object') return Promise.resolve(false);
+  if (isStaticDeployment()) {
+    localStorage.setItem('famimuebles-static-state', JSON.stringify(state));
+    return Promise.resolve(true);
+  }
   return fetch('/api/state', { method: 'POST', headers: { ...authHeaders(), 'Content-Type': 'application/json', 'X-Tenant-ID': activeTenantId() }, body: JSON.stringify({ state, tenantId: activeTenantId() }) }).then(response => {
     if (!response.ok) throw new Error('No se pudo sincronizar el estado con PostgreSQL.');
     return true;
