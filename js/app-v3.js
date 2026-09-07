@@ -482,31 +482,36 @@ async function boot() {
 		return;
 	}
 	const authToken = localStorage.getItem('famimuebles-auth-token');
+	let auth;
 	try {
-		const auth = await api.get('/api/auth/status', { cache: 'no-store' });
+		auth = await api.get('/api/auth/status', { cache: 'no-store' });
 		if (!authToken) { authScreen(auth.configured); return; }
 	} catch (error) {
-		if (!authToken) { authScreen(true); return; }
+		localStorage.removeItem('famimuebles-auth-token');
+		localStorage.removeItem('famimuebles-user');
+		authScreen(true);
+		return;
 	}
-	startRouter(renderApp);
-	store.collection.demoMode = false;
-	renderApp();
-	loadTenants();
 	const normalized = await hydrateState();
-	if (normalized) {
-		store.state = normalized;
-		await hydrateCatalog(store.state);
-		await hydrateDomainCollections(store.state);
-		await hydrateUsers(store.state);
-		await hydrateCurrentUserPermissions();
-		store.save();
-		state.storeId = resolveActiveStore();
-		syncActiveStoreSelector();
-		syncCustomerBalances();
-		render();
-	} else {
-		console.warn('No se pudo cargar el estado remoto; se conserva el estado actual.');
+	if (!normalized) {
+		localStorage.removeItem('famimuebles-auth-token');
+		localStorage.removeItem('famimuebles-user');
+		authScreen(Boolean(auth?.configured));
+		return;
 	}
+	store.state = normalized;
+	store.collection.demoMode = false;
+	await hydrateCatalog(store.state);
+	await hydrateDomainCollections(store.state);
+	await hydrateUsers(store.state);
+	await hydrateCurrentUserPermissions();
+	store.save();
+	state.storeId = resolveActiveStore();
+	startRouter(renderApp);
+	loadTenants();
+	syncActiveStoreSelector();
+	syncCustomerBalances();
+	render();
 }
 document.addEventListener('click', async event => {
 	if (!event.target.closest('#sync-data')) return;
