@@ -59,6 +59,7 @@ body.dark { --ink:#e8f0f5; --muted:#aabac4; --line:#355163; --surface:#17384e; -
 	.bottom-nav { z-index:16; height:62px; }
 	.bottom-nav a, .bottom-nav .mobile-nav-menu { flex:1; min-width:0; padding:7px 4px; color:var(--muted); font-size:10px; }
 	.bottom-nav a > span, .bottom-nav .mobile-nav-menu > span:first-child { display:grid; place-items:center; width:24px; height:24px; }
+	.bottom-nav a > span:last-child, .bottom-nav .mobile-nav-menu > span:last-child { width:auto; height:auto; font-size:clamp(8px, 2.5vw, 10px); line-height:1.1; white-space:nowrap; }
 	.bottom-nav svg { display:block; width:20px; height:20px; }
 	.bottom-nav .mobile-nav-menu span:last-child { font-size:10px; }
 }
