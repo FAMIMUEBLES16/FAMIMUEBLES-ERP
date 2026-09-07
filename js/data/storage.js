@@ -1,7 +1,7 @@
 import { createAccountPayable } from '../services/accounts-payable-service.js?v=14';
 import { demoState } from './demo-data.js';
 import { api } from '../services/api-client.js';
-import { API_BASE_URL } from '../config.js';
+import { API_BASE_URL } from '../config.js?v=3';
 
 export const TENANT_STORAGE_KEY = 'famimuebles-tenant-id';
 export function activeTenantId() { return localStorage.getItem(TENANT_STORAGE_KEY) || 'tenant-default'; }
@@ -102,7 +102,7 @@ export function saveState(state) {
   return api.post('/api/state', { state, tenantId: activeTenantId() }, { headers: { 'X-Tenant-ID': activeTenantId() } }).then(() => true);
 }
 export async function hydrateState() {
-  if (window.location.protocol !== 'http:' && window.location.protocol !== 'https:') return null;
+  if (!API_BASE_URL) return null;
   try {
     const payload = await api.get('/api/state', { headers: { 'X-Tenant-ID': activeTenantId() }, cache: 'no-store' });
     if (!payload?.state || typeof payload.state !== 'object') return null;
@@ -123,7 +123,7 @@ export async function hydrateState() {
   }
 }
 export async function hydrateCatalog(state) {
-  if (window.location.protocol !== 'http:' && window.location.protocol !== 'https:') return state;
+  if (!API_BASE_URL) return state;
   try {
     const catalog = await api.get('/api/catalog', { headers: { 'X-Tenant-ID': activeTenantId() }, cache: 'no-store' });
     if (!Array.isArray(catalog.products) || !Array.isArray(catalog.stores)) return state;
