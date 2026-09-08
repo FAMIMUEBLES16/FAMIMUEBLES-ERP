@@ -695,7 +695,7 @@ def _shared_catalog(database: _PostgresConnection) -> dict:
         """
     ).fetchall()
     for row in rows:
-        sale = sales_by_id.setdefault(row["id"], {"id": row["id"], "storeId": row["local"], "customerId": row["cliente"], "invoiceNumber": row["factura"], "paymentMethod": row["metodo_pago"], "date": row["fecha"], "total": 0, "items": []})
+        sale = sales_by_id.setdefault(row["id"], {"id": row["id"], "storeId": row["local"], "customerId": row["cliente"], "invoiceNumber": row["factura"], "paymentMethod": row["metodo_pago"], "date": row["fecha"], "vendedor": row["vendedor"] or "", "total": 0, "items": []})
         sale["total"] += float(row["precio_total"] or 0)
         sale["items"].append({"productId": row["codigo"], "quantity": row["cantidad"], "unitPrice": row["precio_unitario"], "price": row["precio_unitario"], "name": row["descripcion"]})
     return {"stores": stores, "products": products, "inventory": inventory, "sales": list(sales_by_id.values())}
