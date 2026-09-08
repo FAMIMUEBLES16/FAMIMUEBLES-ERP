@@ -6,6 +6,7 @@ import csv
 import hashlib
 import io
 import secrets
+import sys
 import threading
 import zipfile
 from decimal import Decimal
@@ -16,6 +17,12 @@ from urllib.parse import urlparse, unquote, parse_qs
 from report_pdf import make_pdf
 
 ROOT = Path(__file__).resolve().parent
+
+if sys.stdout is None or sys.stderr is None:
+    (ROOT / "logs").mkdir(exist_ok=True)
+    headless_log = open(ROOT / "logs" / "server-headless.log", "a", encoding="utf-8", buffering=1)
+    sys.stdout = headless_log
+    sys.stderr = headless_log
 
 
 def _load_environment_file(path: Path) -> None:
