@@ -1,4 +1,4 @@
-import { loadState, saveState } from './storage.js?v=17';
+import { loadState, saveState } from './storage.js?v=18';
 import { notifyCreation, refreshFinancialNotifications } from '../services/notification-service.js?v=2';
 
 export const store = {

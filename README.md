@@ -4,7 +4,18 @@ Frontend empresarial de demostracion para ventas, facturacion, productos, invent
 
 ## Ejecutar
 
-Requiere Python 3.8 o superior y PostgreSQL 14 o superior. Ejecuta `$env:FAMIMUEBLES_PORT="8027"; .venv\Scripts\python.exe server.py` desde esta carpeta y abre `http://127.0.0.1:8027`. PostgreSQL es el unico backend soportado.
+Requiere Python 3.8 o superior y PostgreSQL 14 o superior. El frontend local usa `http://127.0.0.1:8024`; ejecuta `.venv\Scripts\python.exe server.py` desde esta carpeta. PostgreSQL es el unico backend soportado.
+
+Para registrar el arranque automatico al iniciar sesion en Windows, ejecuta una vez PowerShell como el usuario que usara el ERP:
+
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass
+.\install-erp-autostart.ps1
+```
+
+La tarea `FAMIMUEBLES ERP Server` reinicia el servidor si PostgreSQL aun no esta listo o si el proceso se detiene. El log queda en `logs\server-autostart.log`.
+
+El acceso publico usa `https://crouch-untitled-harness.ngrok-free.dev`. El dominio solo responde cuando ngrok esta instalado, autenticado con tu cuenta y ejecutando `start-erp-ngrok.cmd`; ese tunel publica el backend local en el puerto `8024`.
 
 ### PostgreSQL compartido con el bot
 
@@ -26,13 +37,15 @@ El backend PostgreSQL crea las tablas propias de autenticacion y modulos del ERP
 
 El servidor tambien expone colecciones transaccionales en `/api/domain/<coleccion>` para proveedores, cuentas por pagar, devoluciones, conteos, reservas, garantias, caja, bancos, cotizaciones, pedidos, entregas, notas credito y configuracion empresarial. `/api/report/<coleccion>.csv` exporta reportes CSV. El primer administrador se configura una sola vez mediante `/api/auth/setup` y luego inicia sesion en `/api/auth/login`. `/api/backup` genera un respaldo JSON y `/api/restore` lo restaura.
 
+La ruta `#paridad` agrega las funciones compartidas con el bot sin migrar ni borrar datos: abonos que actualizan `cuotas_credito`, mora idempotente, entrega de apartados con salida de inventario, sesiones de conteo físico con aplicación confirmada de ajustes, registro de Sistecrédito y previsualización/cierre de nómina. Los endpoints `/api/parity/*` reutilizan las tablas PostgreSQL existentes; no crean tablas nuevas.
+
 ### Cliente API local y produccion
 
 Las llamadas del frontend pasan por `js/services/api-client.js`. La URL se configura en un unico lugar, `js/config.js`: en `localhost` usa automaticamente `http://127.0.0.1:8024/api`; en GitHub Pages permanece en modo demo hasta definir una URL HTTPS real en `FAMIMUEBLES_API_BASE_URL`. No se deben poner credenciales en ese archivo.
 
 Para una API publicada, establece `FAMIMUEBLES_API_BASE_URL` antes de cargar `app-v3.js` o reemplaza el valor de configuracion por la URL HTTPS real del backend. En el servidor define `FAMIMUEBLES_ALLOWED_ORIGINS` con una lista separada por comas, por ejemplo `https://famimuebles16.github.io,http://127.0.0.1:8024`, y conserva `POSTGRES_PASSWORD` unicamente como secreto del entorno. PostgreSQL no debe exponerse a Internet: la API debe accederlo por red privada o mediante un tunel seguro.
 
-Los reportes de la pantalla Reportes se descargan como PDF mediante `/api/report-pdf/<coleccion>.pdf`. El generador usa ReportLab y el diseno de FAMIMUEBLES con encabezado, fecha, local, usuario, tarjetas de resumen, tabla con filas alternadas y pie de pagina. La dependencia esta fijada en `requirements.txt`.
+Los reportes de la pantalla Reportes se descargan como PDF mediante `/api/report-pdf/<coleccion>.pdf`. La ruta `#paridad` tambien consulta disponibilidad, inventario bajo, Sistecrédito, gastos, gasolina e historial por empleado mediante `/api/parity/report/<nombre>`. El generador usa ReportLab y el diseno de FAMIMUEBLES con encabezado, fecha, local, usuario, tarjetas de resumen, tabla con filas alternadas y pie de pagina. La dependencia esta fijada en `requirements.txt`.
 
 El Service Worker no intercepta rutas `/api/` y el frontend verifica la firma `%PDF` antes de descargar un reporte, evitando guardar `offline.html` con extension `.pdf`. Si existe un PDF anterior de 492 bytes, debe eliminarse y generarse nuevamente desde la version actual del servidor.
 

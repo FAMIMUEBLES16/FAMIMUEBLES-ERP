@@ -7,6 +7,7 @@ import hashlib
 import io
 import secrets
 import threading
+import zipfile
 from decimal import Decimal
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -544,6 +545,77 @@ def filter_report_items(items: list[dict], date_from: str = "", date_to: str = "
     return result
 
 
+def specialized_report_rows(database: _PostgresConnection, report_name: str, query_params: dict[str, list[str]]) -> tuple[list[str], list[list]]:
+    date_from = (query_params.get("from") or [""])[0]
+    date_to = (query_params.get("to") or [""])[0]
+    local = (query_params.get("local") or [""])[0]
+    vendedor = (query_params.get("vendedor") or [""])[0]
+    method = (query_params.get("metodo_pago") or [""])[0]
+    min_amount = (query_params.get("min_amount") or [""])[0]
+    max_amount = (query_params.get("max_amount") or [""])[0]
+    filters = []
+    params = []
+    if date_from:
+        filters.append("fecha::date >= %s")
+        params.append(date_from)
+    if date_to:
+        filters.append("fecha::date <= %s")
+        params.append(date_to)
+    if local:
+        filters.append("COALESCE(local, '') = %s")
+        params.append(local)
+    if vendedor:
+        filters.append("COALESCE(vendedor, '') ILIKE %s")
+        params.append(f"%{vendedor}%")
+    if method:
+        filters.append("COALESCE(metodo_pago, '') = %s")
+        params.append(method)
+    if min_amount:
+        filters.append("valor >= %s")
+        params.append(int(float(min_amount)))
+    if max_amount:
+        filters.append("valor <= %s")
+        params.append(int(float(max_amount)))
+    suffix = f" WHERE {' AND '.join(filters)}" if filters else ""
+    if report_name == "sistecredito":
+        rows = database.execute(f"SELECT fecha, vendedor, local, valor, metodo_pago FROM sistecredito{suffix} ORDER BY fecha DESC, id DESC", tuple(params)).fetchall()
+        return ["fecha", "vendedor", "local", "valor", "metodo_pago"], [[row[key] for key in ("fecha", "vendedor", "local", "valor", "metodo_pago")] for row in rows]
+    queries = {
+        "disponibilidad": ("SELECT local, codigo, nombre_producto AS producto, cantidad FROM inventarios JOIN productos USING (codigo) WHERE cantidad > 0 ORDER BY nombre_producto, local", ["local", "codigo", "producto", "cantidad"]),
+        "inventario-bajo": ("SELECT local, codigo, cantidad FROM inventarios WHERE cantidad <= 2 ORDER BY cantidad, local", ["local", "codigo", "cantidad"]),
+        "gastos": ("SELECT fecha, categoria, detalle, valor, usuario FROM gastos ORDER BY fecha DESC, id DESC", ["fecha", "categoria", "detalle", "valor", "usuario"]),
+        "gasolina": ("SELECT fecha, carro, conductor, valor FROM gasolina ORDER BY fecha DESC, id DESC", ["fecha", "carro", "conductor", "valor"]),
+        "historial-empleado": ("SELECT vendedor, tipo, local_origen AS local, factura, fecha, estado FROM movimientos WHERE NULLIF(BTRIM(COALESCE(vendedor, '')), '') IS NOT NULL ORDER BY fecha DESC, id DESC", ["vendedor", "tipo", "local", "factura", "fecha", "estado"]),
+    }
+    query, columns = queries.get(report_name, (None, None))
+    if not query:
+        raise ValueError("Reporte especializado no disponible")
+    rows = database.execute(query).fetchall()
+    return columns, [[row[column] for column in columns] for row in rows]
+
+
+def specialized_xlsx(columns: list[str], rows: list[list]) -> bytes:
+    def escape(value) -> str:
+        return (str(value if value is not None else "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;"))
+    cells = []
+    for row_number, row in enumerate([columns, *rows], 1):
+        values = "".join(f'<c r="{chr(65 + index)}{row_number}" t="inlineStr"><is><t>{escape(value)}</t></is></c>' for index, value in enumerate(row))
+        cells.append(f"<row r=\"{row_number}\">{values}</row>")
+    worksheet = f'<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>{"".join(cells)}</sheetData></worksheet>'
+    content_types = '<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>'
+    workbook = '<?xml version="1.0" encoding="UTF-8"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Reporte" sheetId="1" r:id="rId1"/></sheets></workbook>'
+    relationships = '<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>'
+    package_relationships = '<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>'
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("[Content_Types].xml", content_types)
+        archive.writestr("_rels/.rels", package_relationships)
+        archive.writestr("xl/workbook.xml", workbook)
+        archive.writestr("xl/_rels/workbook.xml.rels", relationships)
+        archive.writestr("xl/worksheets/sheet1.xml", worksheet)
+    return output.getvalue()
+
+
 def enforce_user_store(handler: "AppHandler", store_id: str) -> None:
     user = authenticated_user(handler)
     assigned_store = str(user["store_id"] or "") if user else ""
@@ -906,10 +978,109 @@ def _create_shared_sale(database: _PostgresConnection, payload: dict, user: dict
     return result
 
 
+def _create_shared_purchase_entry(database: _PostgresConnection, payload: dict, user: dict, handler: "AppHandler") -> dict:
+    """Recibe una compra web como entrada real visible para Telegram."""
+    _, cached = claim_idempotency(database, handler, payload, "/api/shared-purchase")
+    if cached is not None:
+        return cached
+    purchase = payload.get("purchase") if isinstance(payload.get("purchase"), dict) else payload
+    store_id = str(purchase.get("storeId") or purchase.get("local") or "").strip()
+    items = purchase.get("items")
+    if not store_id or not isinstance(items, list) or not items:
+        raise ValueError("La entrada requiere local y productos")
+    enforce_user_store_proxy(user, store_id)
+    if not database.execute("SELECT 1 FROM locales WHERE nombre = %s AND activo = TRUE", (store_id,)).fetchone():
+        raise ValueError("El local destino no existe o esta inactivo")
+    normalized = []
+    for item in items:
+        code = str(item.get("productId") or item.get("code") or "").strip()
+        quantity = int(float(item.get("quantity", 0) or 0))
+        unit_cost = int(float(item.get("unitCost", item.get("cost", 0)) or 0))
+        product = database.execute("SELECT nombre_producto FROM productos WHERE codigo = %s AND UPPER(COALESCE(activo, 'SI')) <> 'NO'", (code,)).fetchone()
+        if not product or quantity <= 0 or unit_cost < 0:
+            raise ValueError("Producto, cantidad y costo de entrada invalidos")
+        normalized.append((code, product["nombre_producto"], quantity, unit_cost))
+    invoice = str(purchase.get("supplierInvoice") or purchase.get("invoiceNumber") or purchase.get("id") or "").strip()
+    movement = database.execute(
+        "INSERT INTO movimientos (tipo, estado, local_origen, empleado, vendedor, factura, referencia, observacion, metodo_pago) VALUES ('ENTRADA', 'COMPLETADO', %s, %s, %s, %s, %s, %s, %s) RETURNING id",
+        (store_id, str(purchase.get("supplierName") or purchase.get("supplierId") or user.get("username") or "ERP"), str(user.get("username") or "ERP"), invoice, str(purchase.get("id") or ""), str(purchase.get("notes") or "Recepcion de compra ERP"), str(purchase.get("paymentMethod") or "Credito")),
+    ).fetchone()
+    total = 0
+    for code, description, quantity, unit_cost in normalized:
+        database.execute("INSERT INTO inventarios (local, codigo, descripcion, cantidad) VALUES (%s, %s, %s, %s) ON CONFLICT (local, codigo) DO UPDATE SET cantidad = inventarios.cantidad + EXCLUDED.cantidad, actualizado = CURRENT_TIMESTAMP", (store_id, code, description, quantity))
+        database.execute("INSERT INTO movimiento_productos (movimiento_id, codigo, descripcion, cantidad, precio_unitario, precio_total, entrada, salida) VALUES (%s, %s, %s, %s, %s, %s, %s, 0)", (movement[0], code, description, quantity, unit_cost, quantity * unit_cost, quantity))
+        total += quantity * unit_cost
+    result = {"ok": True, "id": movement[0], "purchaseId": str(purchase.get("id") or ""), "total": total}
+    complete_idempotency(database, handler, payload, "/api/shared-purchase", 201, result)
+    return result
+
+
 def enforce_user_store_proxy(user: dict, store_id: str) -> None:
     assigned_store = str(user["store_id"] or "")
     if assigned_store and user["role"] != "ADMINISTRADOR" and assigned_store != store_id:
         raise ValueError("El usuario no puede operar en este local")
+
+
+def _apply_credit_payment(database: _PostgresConnection, credit_id: int, amount: int, user: dict, method: str, receipt_number: str) -> dict:
+    credit = database.execute("SELECT * FROM creditos WHERE id = %s FOR UPDATE", (int(credit_id),)).fetchone()
+    if not credit:
+        raise ValueError("No se encontro el credito en PostgreSQL")
+    current_balance = max(0, int(credit.get("saldo_pendiente") or 0))
+    if amount <= 0 or amount > current_balance:
+        raise ValueError("El abono no es valido para el saldo pendiente")
+    next_balance = current_balance - amount
+    next_status = "PAGADO" if next_balance == 0 else "PENDIENTE"
+    database.execute(
+        "UPDATE creditos SET saldo_pendiente = %s, estado = %s WHERE id = %s",
+        (next_balance, next_status, int(credit_id)),
+    )
+    database.execute(
+        "INSERT INTO abonos_creditos (credito_id, usuario, vendedor, local, valor_abono, saldo_anterior, saldo_nuevo, metodo_pago, observacion, numero_recibo) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        (int(credit_id), str(user.get("username") or user.get("id") or "ERP"), str(credit.get("vendedor") or ""), str(credit.get("local") or ""), amount, current_balance, next_balance, method or "Efectivo", "Abono registrado desde ERP", receipt_number),
+    )
+    remaining = amount
+    quotas = database.execute(
+        "SELECT id, valor_programado, valor_pagado FROM cuotas_credito WHERE credito_id = %s AND valor_pagado < valor_programado ORDER BY numero_cuota FOR UPDATE",
+        (int(credit_id),),
+    ).fetchall()
+    for quota in quotas:
+        applied = min(remaining, int(quota["valor_programado"] or 0) - int(quota["valor_pagado"] or 0))
+        if applied <= 0:
+            continue
+        paid = int(quota["valor_pagado"] or 0) + applied
+        status = "PAGADA" if paid >= int(quota["valor_programado"] or 0) else "PARCIAL"
+        database.execute("UPDATE cuotas_credito SET valor_pagado = %s, estado = %s, actualizado_en = CURRENT_TIMESTAMP WHERE id = %s", (paid, status, quota["id"]))
+        remaining -= applied
+        if remaining == 0:
+            break
+    return {"ok": True, "id": int(credit_id), "balance": next_balance}
+
+
+def _liquidate_shared_apartado(database: _PostgresConnection, apartado_id: int, user: dict) -> dict:
+    apartado = database.execute("SELECT * FROM apartados WHERE id = %s FOR UPDATE", (int(apartado_id),)).fetchone()
+    if not apartado:
+        raise ValueError("No se encontro el apartado en PostgreSQL")
+    if str(apartado.get("estado") or "").upper() == "ENTREGADO":
+        return {"ok": True, "id": int(apartado_id), "alreadyDelivered": True}
+    if int(apartado.get("saldo_pendiente") or 0) != 0:
+        raise ValueError("El apartado aun tiene saldo pendiente")
+    details = database.execute("SELECT codigo, producto, cantidad, valor_unitario, subtotal FROM apartado_detalles WHERE apartado_id = %s", (int(apartado_id),)).fetchall()
+    if not details:
+        details = [{"codigo": apartado.get("codigo"), "producto": apartado.get("producto"), "cantidad": apartado.get("cantidad"), "valor_unitario": apartado.get("total"), "subtotal": apartado.get("total")}]
+    for detail in details:
+        stock = database.execute("SELECT cantidad FROM inventarios WHERE local = %s AND codigo = %s FOR UPDATE", (apartado.get("local"), detail["codigo"])).fetchone()
+        if not stock or int(stock["cantidad"] or 0) < int(detail["cantidad"] or 0):
+            raise ValueError(f"Stock insuficiente para entregar {detail['codigo']}")
+    movement = database.execute(
+        "INSERT INTO movimientos (tipo, estado, local_origen, empleado, vendedor, factura, cliente, metodo_pago, observacion) VALUES ('VENTA', 'COMPLETADO', %s, %s, %s, %s, %s, 'Apartado', %s) RETURNING id",
+        (apartado.get("local"), str(user.get("username") or "ERP"), apartado.get("vendedor") or user.get("username") or "ERP", str(apartado.get("numero_recibo") or apartado_id), apartado.get("cliente") or "", f"Entrega apartado {apartado_id}"),
+    ).fetchone()
+    for detail in details:
+        quantity = int(detail["cantidad"] or 0)
+        database.execute("UPDATE inventarios SET cantidad = cantidad - %s, actualizado = CURRENT_TIMESTAMP WHERE local = %s AND codigo = %s", (quantity, apartado.get("local"), detail["codigo"]))
+        database.execute("INSERT INTO movimiento_productos (movimiento_id, codigo, descripcion, cantidad, precio_unitario, precio_total, entrada, salida) VALUES (%s, %s, %s, %s, %s, %s, 0, %s)", (movement[0], detail["codigo"], detail["producto"], quantity, detail["valor_unitario"], detail["subtotal"], quantity))
+    database.execute("UPDATE apartados SET estado = 'ENTREGADO', fecha_entrega = CURRENT_TIMESTAMP, movimiento_id = %s WHERE id = %s", (movement[0], int(apartado_id)))
+    return {"ok": True, "id": int(apartado_id), "movementId": movement[0]}
 
 
 class AppHandler(SimpleHTTPRequestHandler):
@@ -934,7 +1105,13 @@ class AppHandler(SimpleHTTPRequestHandler):
 
     def _send_cors_headers(self) -> None:
         origin = self.headers.get("Origin", "").rstrip("/")
-        if origin in ALLOWED_ORIGINS:
+        parsed_origin = urlparse(origin) if origin and origin != "null" else None
+        local_origin = origin == "null" or (
+            parsed_origin is not None
+            and parsed_origin.scheme in {"http", "https"}
+            and parsed_origin.hostname in {"127.0.0.1", "localhost", "::1"}
+        )
+        if origin in ALLOWED_ORIGINS or local_origin:
             self.send_header("Access-Control-Allow-Origin", origin)
             self.send_header("Vary", "Origin")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
@@ -959,6 +1136,81 @@ class AppHandler(SimpleHTTPRequestHandler):
             return
         if path.startswith("/api/") and not can_access(self, path, "GET"):
             self.send_json(403, {"error": "Permiso insuficiente"})
+            return
+        if path == "/api/parity/sistecredito":
+            with connection() as database:
+                rows = database.execute("SELECT * FROM sistecredito ORDER BY fecha DESC, id DESC").fetchall()
+            self.send_json(200, {"items": [dict(row) for row in rows]})
+            return
+        if path == "/api/parity/conteos":
+            with connection() as database:
+                rows = database.execute("SELECT * FROM conteo_sesiones ORDER BY fecha_inicio DESC, id DESC").fetchall()
+            self.send_json(200, {"items": [dict(row) for row in rows]})
+            return
+        if path == "/api/parity/nomina":
+            with connection() as database:
+                rows = database.execute("SELECT * FROM nomina_periodos ORDER BY fecha_generacion DESC, id DESC").fetchall()
+            self.send_json(200, {"items": [dict(row) for row in rows]})
+            return
+        if path == "/api/parity/nomina/config":
+            with connection() as database:
+                config = database.execute("SELECT nombre_parametro, valor FROM config_nomina ORDER BY nombre_parametro").fetchall()
+                employees = database.execute("SELECT id_telegram, nombre, nombre_venta, salario_base, local, estado FROM empleados_nomina ORDER BY nombre").fetchall()
+                products = database.execute("SELECT codigo, producto, comision, comisionable, estado FROM comisiones_productos ORDER BY producto").fetchall()
+            self.send_json(200, {"config": [dict(row) for row in config], "employees": [dict(row) for row in employees], "products": [dict(row) for row in products]})
+            return
+        if path == "/api/parity/mora":
+            with connection() as database:
+                rows = database.execute("SELECT cc.id, cc.credito_id, cc.numero_cuota, cc.fecha_vencimiento, cc.valor_programado, cc.valor_pagado, c.cliente, c.local FROM cuotas_credito cc JOIN creditos c ON c.id = cc.credito_id WHERE cc.estado = 'VENCIDA' AND cc.valor_pagado < cc.valor_programado ORDER BY cc.fecha_vencimiento").fetchall()
+            self.send_json(200, {"items": [dict(row) for row in rows]})
+            return
+        if path.startswith("/api/parity/report/"):
+            report_name = unquote(path.removeprefix("/api/parity/report/")).strip("/")
+            report_format = "json"
+            if report_name.endswith(".csv"):
+                report_name, report_format = report_name[:-4], "csv"
+            elif report_name.endswith(".xlsx"):
+                report_name, report_format = report_name[:-5], "xlsx"
+            elif report_name.endswith(".pdf"):
+                report_name, report_format = report_name[:-4], "pdf"
+            with connection() as database:
+                try:
+                    columns, rows = specialized_report_rows(database, report_name, parse_qs(parsed_url.query))
+                except ValueError as error:
+                    self.send_json(404, {"error": str(error)})
+                    return
+            if report_format == "csv":
+                output = io.StringIO()
+                writer = csv.writer(output, delimiter=";", lineterminator="\r\n")
+                writer.writerow(columns)
+                writer.writerows(rows)
+                body = output.getvalue().encode("utf-8-sig")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/csv; charset=utf-8")
+                self.send_header("Content-Disposition", f'attachment; filename="famimuebles-{report_name}.csv"')
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if report_format == "xlsx":
+                body = specialized_xlsx(columns, rows)
+                self.send_response(200)
+                self.send_header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                self.send_header("Content-Disposition", f'attachment; filename="famimuebles-{report_name}.xlsx"')
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if report_format == "pdf":
+                body = make_pdf(f"Reporte especializado de {report_name}", columns, rows, usuario=authenticated_user(self)["username"])
+                self.send_response(200)
+                self.send_header("Content-Type", "application/pdf")
+                self.send_header("Content-Disposition", f'attachment; filename="famimuebles-{report_name}.pdf"')
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            self.send_json(200, {"items": [dict(zip(columns, row)) for row in rows], "report": report_name, "columns": columns})
             return
         if path == "/api/state":
             if _postgres_enabled():
@@ -1272,6 +1524,119 @@ class AppHandler(SimpleHTTPRequestHandler):
                         database.execute("INSERT INTO products (id, tenant_id, code, name, reference, barcode, category, cost, sale_price, tax_rate) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (identifier, current_tenant, code, name, str(payload.get("reference", "")), str(payload.get("barcode", "")), str(payload.get("category", "")), float(payload.get("cost", 0)), float(payload.get("salePrice", 0)), float(payload.get("taxRate", 0))))
                 self.send_json(201, {"ok": True, "id": identifier})
                 return
+            if path == "/api/parity/conteo":
+                action = str(payload.get("action") or "create").lower()
+                user = authenticated_user(self)
+                with connection() as database:
+                    if action == "create":
+                        local = str(payload.get("local") or "").strip()
+                        products = payload.get("products") if isinstance(payload.get("products"), list) else []
+                        if not local or not products:
+                            raise ValueError("El conteo requiere local y productos")
+                        row = database.execute("INSERT INTO conteo_sesiones (local, empleado, empleado_id, total_productos, productos_json, resultados_json, estado) VALUES (%s, %s, %s, %s, %s, %s, 'EN_PROCESO') RETURNING id", (local, user.get("username") or "ERP", str(user.get("id") or ""), len(products), json.dumps(products, ensure_ascii=False), "[]")).fetchone()
+                        response = {"ok": True, "id": row[0], "status": "EN_PROCESO"}
+                    elif action == "save":
+                        session_id = int(payload.get("sessionId"))
+                        results = payload.get("results") if isinstance(payload.get("results"), list) else []
+                        database.execute("UPDATE conteo_sesiones SET resultados_json = %s, indice_actual = %s, fecha_actualizacion = CURRENT_TIMESTAMP WHERE id = %s AND estado = 'EN_PROCESO'", (json.dumps(results, ensure_ascii=False), len(results), session_id))
+                        response = {"ok": True, "id": session_id, "saved": len(results)}
+                    elif action == "apply":
+                        session_id = int(payload.get("sessionId"))
+                        session = database.execute("SELECT * FROM conteo_sesiones WHERE id = %s FOR UPDATE", (session_id,)).fetchone()
+                        if not session:
+                            raise ValueError("La sesion de conteo no existe")
+                        results = payload.get("results") if isinstance(payload.get("results"), list) else json.loads(session.get("resultados_json") or "[]")
+                        for item in results:
+                            code = str(item.get("codigo") or item.get("code") or "").strip()
+                            physical = int(item.get("cantidad_fisica", item.get("physical", 0)) or 0)
+                            if not code or physical < 0:
+                                raise ValueError("Cada resultado requiere codigo y cantidad fisica valida")
+                            stock = database.execute("SELECT cantidad FROM inventarios WHERE local = %s AND codigo = %s FOR UPDATE", (session["local"], code)).fetchone()
+                            if not stock:
+                                raise ValueError(f"No existe inventario para {code} en {session['local']}")
+                            system = int(stock["cantidad"] or 0)
+                            database.execute("UPDATE inventarios SET cantidad = %s, actualizado = CURRENT_TIMESTAMP WHERE local = %s AND codigo = %s", (physical, session["local"], code))
+                            database.execute("INSERT INTO conteo_fisico (sesion_id, local, cod, descripcion, cantidad_sistema, cantidad_fisica, diferencia, empleado, estado, motivo_diferencia, observacion) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'APLICADO', %s, %s)", (session_id, session["local"], code, item.get("descripcion") or "", system, physical, physical - system, user.get("username") or "ERP", item.get("motivo") or "", item.get("observacion") or ""))
+                        database.execute("UPDATE conteo_sesiones SET resultados_json = %s, estado = 'CERRADO', fecha_cierre = CURRENT_TIMESTAMP, fecha_actualizacion = CURRENT_TIMESTAMP WHERE id = %s", (json.dumps(results, ensure_ascii=False), session_id))
+                        response = {"ok": True, "id": session_id, "applied": len(results), "status": "CERRADO"}
+                    else:
+                        raise ValueError("Accion de conteo no valida")
+                self.send_json(201, response)
+                return
+            if path == "/api/parity/sistecredito":
+                amount = int(float(payload.get("valor") or payload.get("amount") or 0))
+                if amount <= 0:
+                    raise ValueError("El valor de Sistecrédito debe ser mayor que cero")
+                with connection() as database:
+                    row = database.execute("INSERT INTO sistecredito (vendedor, local, valor, metodo_pago) VALUES (%s, %s, %s, %s) RETURNING id", (str(payload.get("vendedor") or authenticated_user(self).get("username") or "ERP"), str(payload.get("local") or ""), amount, str(payload.get("metodo_pago") or "Sistecrédito"))).fetchone()
+                self.send_json(201, {"ok": True, "id": row[0]})
+                return
+            if path == "/api/parity/nomina":
+                start = str(payload.get("fecha_inicio") or payload.get("start") or "").strip()
+                end = str(payload.get("fecha_fin") or payload.get("end") or "").strip()
+                local = str(payload.get("local") or "").strip()
+                rate = float(payload.get("porciento_comision") or payload.get("commissionRate") or 0)
+                action = str(payload.get("action") or "preview").lower()
+                if not start or not end or not local or rate < 0:
+                    raise ValueError("La nómina requiere fechas, local y comisión válida")
+                with connection() as database:
+                    sales = database.execute("SELECT vendedor, COALESCE(SUM(mp.precio_total), 0) AS sales FROM movimientos m LEFT JOIN movimiento_productos mp ON mp.movimiento_id = m.id WHERE UPPER(m.tipo) = 'VENTA' AND m.local_origen = %s AND m.fecha::date BETWEEN %s AND %s GROUP BY vendedor ORDER BY vendedor", (local, start, end)).fetchall()
+                    configured_employees = database.execute("SELECT nombre, nombre_venta, salario_base, local FROM empleados_nomina WHERE UPPER(COALESCE(estado, 'ACTIVO')) = 'ACTIVO' AND (COALESCE(local, '') = '' OR local = %s)", (local,)).fetchall()
+                    config = {str(item["nombre"] or item["nombre_venta"] or ""): {"salario_base": item["salario_base"]} for item in configured_employees}
+                    config.update({str(item.get("empleado") or item.get("name") or ""): item for item in (payload.get("employees") if isinstance(payload.get("employees"), list) else [])})
+                    if not rate:
+                        configured_rate = database.execute("SELECT valor FROM config_nomina WHERE UPPER(nombre_parametro) IN ('PORCENTAJE_COMISION', 'COMISION_GENERAL') ORDER BY id DESC LIMIT 1").fetchone()
+                        rate = float(configured_rate["valor"] or 0) if configured_rate else 0
+                    employees = []
+                    for sale in sales:
+                        item = config.get(str(sale["vendedor"] or ""), {})
+                        salary = int(item.get("salario_base") or item.get("salary") or 0)
+                        commission = int(float(sale["sales"] or 0) * rate)
+                        discount = int(item.get("descuentos") or item.get("discount") or 0)
+                        employees.append({"empleado": sale["vendedor"], "ventas_comisionables": int(sale["sales"] or 0), "salario_base": salary, "comision": commission, "descuentos": discount, "neto": max(0, salary + commission - discount)})
+                    total = sum(item["neto"] for item in employees)
+                    if action == "close":
+                        period = database.execute("INSERT INTO nomina_periodos (fecha_inicio, fecha_fin, local, porciento_comision, estado, total_nomina, generado_por) VALUES (%s, %s, %s, %s, 'CERRADA', %s, %s) ON CONFLICT (fecha_inicio, fecha_fin, local) DO NOTHING RETURNING id", (start, end, local, rate, total, authenticated_user(self).get("username") or "ERP")).fetchone()
+                        if not period:
+                            raise ValueError("Ya existe una nómina cerrada para ese período y local")
+                        for item in employees:
+                            database.execute("INSERT INTO nomina_empleados (nomina_periodo_id, empleado, nombre, salario_base, ventas_comisionables, comision, descuentos, neto) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)", (period[0], item["empleado"], item["empleado"], item["salario_base"], item["ventas_comisionables"], item["comision"], item["descuentos"], item["neto"]))
+                        response = {"ok": True, "id": period[0], "status": "CERRADA", "total": total, "employees": employees}
+                    else:
+                        response = {"ok": True, "status": "PREVISUALIZACION", "total": total, "employees": employees}
+                self.send_json(201, response)
+                return
+            if path == "/api/parity/nomina/config":
+                kind = str(payload.get("kind") or "").lower()
+                with connection() as database:
+                    if kind == "parameter":
+                        name = str(payload.get("name") or "").strip()
+                        value = str(payload.get("value") or "").strip()
+                        if not name:
+                            raise ValueError("El parámetro requiere nombre")
+                        database.execute("INSERT INTO config_nomina (nombre_parametro, valor) VALUES (%s, %s) ON CONFLICT (nombre_parametro) DO UPDATE SET valor = EXCLUDED.valor", (name, value))
+                    elif kind == "employee":
+                        employee_id = str(payload.get("id_telegram") or payload.get("id") or "").strip()
+                        name = str(payload.get("nombre") or payload.get("name") or "").strip()
+                        if not employee_id or not name:
+                            raise ValueError("El empleado requiere identificador y nombre")
+                        database.execute("INSERT INTO empleados_nomina (id_telegram, nombre, nombre_venta, salario_base, local, estado) VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (id_telegram) DO UPDATE SET nombre = EXCLUDED.nombre, nombre_venta = EXCLUDED.nombre_venta, salario_base = EXCLUDED.salario_base, local = EXCLUDED.local, estado = EXCLUDED.estado", (employee_id, name, str(payload.get("nombre_venta") or name), int(float(payload.get("salario_base") or 0)), str(payload.get("local") or ""), str(payload.get("estado") or "ACTIVO")))
+                    elif kind == "product":
+                        code = str(payload.get("codigo") or "").strip()
+                        if not code:
+                            raise ValueError("El producto comisionable requiere código")
+                        database.execute("INSERT INTO comisiones_productos (codigo, producto, comision, comisionable, estado) VALUES (%s, %s, %s, %s, %s) ON CONFLICT (codigo) DO UPDATE SET producto = EXCLUDED.producto, comision = EXCLUDED.comision, comisionable = EXCLUDED.comisionable, estado = EXCLUDED.estado", (code, str(payload.get("producto") or ""), float(payload.get("comision") or 0), str(payload.get("comisionable") or "SI"), str(payload.get("estado") or "ACTIVO")))
+                    else:
+                        raise ValueError("Tipo de configuración de nómina no válido")
+                self.send_json(201, {"ok": True, "kind": kind})
+                return
+            if path == "/api/shared-purchase":
+                if not _postgres_enabled():
+                    raise ValueError("La recepcion compartida requiere PostgreSQL")
+                with connection() as database:
+                    result = _create_shared_purchase_entry(database, payload, authenticated_user(self), self)
+                self.send_json(201, result)
+                return
             if path == "/api/catalog/inventory-movement":
                 if _postgres_enabled():
                     product_id = str(payload.get("productId", "")).strip()
@@ -1281,10 +1646,9 @@ class AppHandler(SimpleHTTPRequestHandler):
                         raise ValueError("La cantidad debe ser un numero entero finito")
                     quantity = int(raw_quantity)
                     movement_type = str(payload.get("movementType", "ENTRADA")).upper()
-                    if not product_id or not store_id or quantity <= 0:
+                    if not product_id or not store_id or (movement_type != "AJUSTE" and quantity <= 0):
                         raise ValueError("Producto, local y cantidad valida son obligatorios")
                     enforce_user_store_proxy(authenticated_user(self), store_id)
-                    signed = quantity if movement_type in {"ENTRADA", "COMPRA", "TRASLADO_ENTRADA", "DEVOLUCION_CLIENTE"} else -quantity
                     with connection() as database:
                         _, cached = claim_idempotency(database, self, payload, path)
                         if cached is not None:
@@ -1296,6 +1660,13 @@ class AppHandler(SimpleHTTPRequestHandler):
                             raise ValueError("El producto no existe o esta inactivo")
                         row = database.execute("SELECT cantidad FROM inventarios WHERE local = %s AND codigo = %s FOR UPDATE", (store_id, product_id)).fetchone()
                         current = int(row["cantidad"] or 0) if row else 0
+                        if movement_type == "AJUSTE":
+                            target = int(float(payload.get("targetQuantity", -1)))
+                            if target < 0:
+                                raise ValueError("La nueva cantidad debe ser un entero mayor o igual a cero")
+                            signed = target - current
+                        else:
+                            signed = quantity if movement_type in {"ENTRADA", "COMPRA", "TRASLADO_ENTRADA", "DEVOLUCION_CLIENTE"} else -quantity
                         if current + signed < 0:
                             raise ValueError("El stock no puede quedar negativo")
                         if row:
@@ -1304,7 +1675,8 @@ class AppHandler(SimpleHTTPRequestHandler):
                             database.execute("INSERT INTO inventarios (local, codigo, descripcion, cantidad) SELECT %s, codigo, nombre_producto, %s FROM productos WHERE codigo = %s", (store_id, signed, product_id))
                         cursor = database.execute("INSERT INTO movimientos (tipo, estado, local_origen, empleado, observacion) VALUES (%s, 'COMPLETADO', %s, %s, %s) RETURNING id", (movement_type, store_id, authenticated_user(self)["username"], str(payload.get("note", ""))))
                         movement_id = cursor.fetchone()[0]
-                        database.execute("INSERT INTO movimiento_productos (movimiento_id, codigo, cantidad, entrada, salida) VALUES (%s, %s, %s, %s, %s)", (movement_id, product_id, quantity, quantity if signed > 0 else 0, quantity if signed < 0 else 0))
+                        movement_quantity = abs(signed) if movement_type == "AJUSTE" else quantity
+                        database.execute("INSERT INTO movimiento_productos (movimiento_id, codigo, cantidad, entrada, salida) VALUES (%s, %s, %s, %s, %s)", (movement_id, product_id, movement_quantity, signed if signed > 0 else 0, abs(signed) if signed < 0 else 0))
                         response = {"ok": True, "id": movement_id, "quantity": current + signed}
                         complete_idempotency(database, self, payload, path, 201, response)
                     self.send_json(201, response)
@@ -1438,49 +1810,34 @@ class AppHandler(SimpleHTTPRequestHandler):
                 if not __import__("math").isfinite(amount):
                     raise ValueError("El monto del abono debe ser finito")
                 if kind == "credit":
-                    if not record_id_value or amount <= 0:
-                        raise ValueError("El abono requiere un credito y un monto valido")
+                    if not record_id_value or amount <= 0 or int(amount) != amount:
+                        raise ValueError("El abono requiere un credito y un monto entero valido")
                     with connection() as database:
                         _, cached = claim_idempotency(database, self, payload, path)
                         if cached is not None:
                             self.send_json(200, cached)
                             return
-                        credit = database.execute("SELECT * FROM creditos WHERE id = %s FOR UPDATE", (record_id_value,)).fetchone()
-                        if not credit:
-                            raise ValueError("No se encontro el credito en PostgreSQL")
-                        columns = {row[0] for row in database.execute("SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'creditos'").fetchall()}
-                        current_paid = float(credit.get("valor_pagado") or credit.get("pagado") or credit.get("abonos") or 0)
-                        explicit_balance = credit.get("saldo_pendiente")
-                        if explicit_balance is None:
-                            explicit_balance = credit.get("saldo")
-                        if explicit_balance is None:
-                            explicit_balance = credit.get("saldo_restante")
-                        if explicit_balance is None:
-                            total = float(credit.get("total") or credit.get("valor_total") or credit.get("monto") or 0)
-                            initial = float(credit.get("cuota_inicial") or credit.get("abono_inicial") or credit.get("inicial") or 0)
-                            explicit_balance = total - initial - current_paid
-                        current_balance = max(0, float(explicit_balance or 0))
-                        if amount > current_balance:
-                            raise ValueError("El abono no puede superar el saldo pendiente")
-                        next_balance = max(0, current_balance - amount)
-                        updates = []
-                        params = []
-                        if "valor_pagado" in columns:
-                            updates.append("valor_pagado = %s"); params.append(current_paid + amount)
-                        if "saldo_pendiente" in columns:
-                            updates.append("saldo_pendiente = %s"); params.append(next_balance)
-                        if "saldo" in columns:
-                            updates.append("saldo = %s"); params.append(next_balance)
-                        if "estado" in columns and next_balance == 0:
-                            updates.append("estado = %s"); params.append("PAGADO")
-                        if updates:
-                            params.append(record_id_value)
-                            database.execute(f"UPDATE creditos SET {', '.join(updates)} WHERE id = %s", tuple(params))
-                        database.execute("INSERT INTO abonos_creditos (credito_id, fecha, usuario, vendedor, local, valor_abono, saldo_anterior, saldo_nuevo, metodo_pago, observacion, numero_recibo) VALUES (%s, CURRENT_TIMESTAMP, %s, %s, %s, %s, %s, %s, %s, %s, %s)", (record_id_value, str(authenticated_user(self)["username"]), str(authenticated_user(self)["username"]), str(credit.get("local") or ""), amount, current_balance, next_balance, str(payload.get("method") or "Efectivo"), "Abono registrado desde ERP", str(payload.get("receiptNumber") or "")))
-                        response = {"ok": True, "id": record_id_value, "balance": next_balance}
+                        response = _apply_credit_payment(database, int(record_id_value), int(amount), authenticated_user(self), str(payload.get("method") or "Efectivo"), str(payload.get("receiptNumber") or ""))
                         complete_idempotency(database, self, payload, path, 201, response)
                     self.send_json(201, response)
                     return
+                if kind == "apartado" and not record_id_value:
+                    raise ValueError("El abono requiere un apartado y un monto valido")
+                if kind == "mora":
+                    with connection() as database:
+                        rows = database.execute(
+                            "SELECT cc.id, cc.credito_id, cc.numero_cuota, cc.fecha_vencimiento, cc.valor_programado, cc.valor_pagado, c.cliente, c.factura, c.local FROM cuotas_credito cc JOIN creditos c ON c.id = cc.credito_id WHERE cc.fecha_vencimiento < CURRENT_DATE AND cc.valor_pagado < cc.valor_programado AND UPPER(c.estado) = 'PENDIENTE' ORDER BY cc.fecha_vencimiento"
+                        ).fetchall()
+                        fresh = []
+                        for row in rows:
+                            database.execute("UPDATE cuotas_credito SET estado = 'VENCIDA', actualizado_en = CURRENT_TIMESTAMP WHERE id = %s", (row["id"],))
+                            inserted = database.execute("INSERT INTO notificaciones_mora (cuota_id) VALUES (%s) ON CONFLICT (cuota_id, fecha) DO NOTHING RETURNING id", (row["id"],)).fetchone()
+                            if inserted:
+                                fresh.append(dict(row))
+                    self.send_json(200, {"ok": True, "items": fresh})
+                    return
+                if kind != "apartado":
+                    raise ValueError("Tipo de operacion financiera no valido")
                 if kind != "apartado" or not record_id_value or amount <= 0:
                     raise ValueError("El abono requiere un apartado y un monto valido")
                 with connection() as database:
@@ -1497,10 +1854,11 @@ class AppHandler(SimpleHTTPRequestHandler):
                     previous_paid = float(apartado["valor_pagado"] or 0)
                     next_paid = previous_paid + amount
                     next_balance = max(0, balance - amount)
-                    database.execute("UPDATE apartados SET valor_pagado = %s, saldo_pendiente = %s, estado = %s, actualizado_en = CURRENT_TIMESTAMP WHERE id = %s", (next_paid, next_balance, "ENTREGADO" if next_balance == 0 else apartado["estado"], record_id_value))
+                    database.execute("UPDATE apartados SET valor_pagado = %s, saldo_pendiente = %s, estado = %s, actualizado_en = CURRENT_TIMESTAMP WHERE id = %s", (next_paid, next_balance, "PAGADO" if next_balance == 0 else apartado["estado"], record_id_value))
                     next_receipt = payload.get("receiptNumber") or apartado["numero_recibo"]
                     database.execute("INSERT INTO abonos_apartados (apartado_id, fecha, usuario, vendedor, local, valor_abono, saldo_anterior, saldo_nuevo, metodo_pago, observacion, numero_recibo) VALUES (%s, CURRENT_TIMESTAMP, %s, %s, %s, %s, %s, %s, %s, %s, %s)", (record_id_value, str(authenticated_user(self)["username"]), str(authenticated_user(self)["username"]), apartado["local"], amount, balance, next_balance, str(payload.get("method") or "Efectivo"), "Abono registrado desde ERP", next_receipt))
-                    response = {"ok": True, "id": record_id_value, "balance": next_balance}
+                    delivery = _liquidate_shared_apartado(database, int(record_id_value), authenticated_user(self)) if next_balance == 0 else None
+                    response = {"ok": True, "id": record_id_value, "balance": next_balance, "delivery": delivery}
                     complete_idempotency(database, self, payload, path, 201, response)
                 self.send_json(201, response)
                 return
@@ -1627,6 +1985,20 @@ class AppHandler(SimpleHTTPRequestHandler):
                 self.send_json(403, {"error": "Solo el administrador puede eliminar locales"})
                 return
             identifier = unquote(path.removeprefix("/api/catalog/store/")).strip()
+            if _postgres_enabled():
+                with connection() as database:
+                    existing = database.execute("SELECT codigo, nombre FROM locales WHERE codigo = %s OR nombre = %s", (identifier, identifier)).fetchone()
+                    if not existing:
+                        self.send_json(404, {"error": "Local no encontrado"})
+                        return
+                    linked = database.execute("SELECT 1 FROM inventarios WHERE local = %s LIMIT 1", (existing["nombre"],)).fetchone() or database.execute("SELECT 1 FROM movimientos WHERE local_origen = %s OR local_destino = %s LIMIT 1", (existing["nombre"], existing["nombre"])).fetchone()
+                    if linked:
+                        database.execute("UPDATE locales SET activo = 'NO' WHERE codigo = %s", (existing["codigo"],))
+                        self.send_json(200, {"ok": True, "deleted": False, "deactivated": True})
+                        return
+                    database.execute("DELETE FROM locales WHERE codigo = %s", (existing["codigo"],))
+                self.send_json(200, {"ok": True, "deleted": True})
+                return
             current_tenant = tenant_id(self)
             with connection() as database:
                 exists = database.execute("SELECT 1 FROM stores WHERE tenant_id = ? AND id = ?", (current_tenant, identifier)).fetchone()
@@ -1751,6 +2123,21 @@ class AppHandler(SimpleHTTPRequestHandler):
             if not identifier:
                 self.send_json(400, {"error": "Producto invalido"})
                 return
+            if _postgres_enabled():
+                with connection() as database:
+                    existing = database.execute("SELECT codigo FROM productos WHERE codigo = %s", (identifier,)).fetchone()
+                    if not existing:
+                        self.send_json(404, {"error": "Producto no encontrado"})
+                        return
+                    linked = database.execute("SELECT 1 FROM movimientos m JOIN movimiento_productos mp ON mp.movimiento_id = m.id WHERE mp.codigo = %s LIMIT 1", (identifier,)).fetchone()
+                    if linked:
+                        database.execute("UPDATE productos SET activo = 'NO' WHERE codigo = %s", (identifier,))
+                        self.send_json(200, {"ok": True, "deleted": False, "deactivated": True})
+                        return
+                    database.execute("DELETE FROM inventarios WHERE codigo = %s", (identifier,))
+                    database.execute("DELETE FROM productos WHERE codigo = %s", (identifier,))
+                self.send_json(200, {"ok": True, "deleted": True})
+                return
             with connection() as database:
                 existing = database.execute("SELECT id FROM products WHERE tenant_id = ? AND id = ?", (tenant_id(self), identifier)).fetchone()
                 if not existing:
@@ -1860,13 +2247,35 @@ class AppHandler(SimpleHTTPRequestHandler):
                     items = json.loads(items)
                 if _postgres_enabled():
                     with connection() as database:
-                        updated = database.execute(
-                            "UPDATE movimientos SET cliente = %s, metodo_pago = %s WHERE id = %s AND UPPER(COALESCE(tipo, '')) = 'VENTA'",
-                            (payload.get("customerId") or payload.get("cliente") or "", str(payload.get("paymentMethod") or payload.get("metodo_pago") or ""), identifier),
-                        ).rowcount
-                    if not updated:
-                        self.send_json(404, {"error": "Venta no encontrada"})
-                        return
+                        sale = database.execute("SELECT id, local_origen FROM movimientos WHERE id = %s AND UPPER(COALESCE(tipo, '')) = 'VENTA' FOR UPDATE", (identifier,)).fetchone()
+                        if not sale:
+                            self.send_json(404, {"error": "Venta no encontrada"})
+                            return
+                        store_id = str(sale["local_origen"] or "")
+                        enforce_user_store_proxy(current_user, store_id)
+                        old_items = database.execute("SELECT codigo, cantidad FROM movimiento_productos WHERE movimiento_id = %s FOR UPDATE", (identifier,)).fetchall()
+                        for old_item in old_items:
+                            database.execute("UPDATE inventarios SET cantidad = cantidad + %s, actualizado = CURRENT_TIMESTAMP WHERE local = %s AND codigo = %s", (int(old_item["cantidad"] or 0), store_id, old_item["codigo"]))
+                        if items:
+                            normalized = []
+                            for item in items:
+                                code = str(item.get("productId") or item.get("code") or "").strip()
+                                quantity = int(float(item.get("quantity", 0) or 0))
+                                price = int(float(item.get("unitPrice", item.get("price", 0)) or 0))
+                                product = database.execute("SELECT nombre_producto FROM productos WHERE codigo = %s AND UPPER(COALESCE(activo, 'SI')) <> 'NO'", (code,)).fetchone()
+                                stock = database.execute("SELECT cantidad FROM inventarios WHERE local = %s AND codigo = %s FOR UPDATE", (store_id, code)).fetchone()
+                                if not product or not stock or quantity <= 0 or price < 0 or int(stock["cantidad"] or 0) < quantity:
+                                    raise ValueError("Producto inexistente o stock insuficiente para la venta editada")
+                                normalized.append((code, product["nombre_producto"], quantity, price))
+                            database.execute("DELETE FROM movimiento_productos WHERE movimiento_id = %s", (identifier,))
+                            total = 0
+                            for code, description, quantity, price in normalized:
+                                database.execute("UPDATE inventarios SET cantidad = cantidad - %s, actualizado = CURRENT_TIMESTAMP WHERE local = %s AND codigo = %s", (quantity, store_id, code))
+                                database.execute("INSERT INTO movimiento_productos (movimiento_id, codigo, descripcion, cantidad, precio_unitario, precio_total, entrada, salida) VALUES (%s, %s, %s, %s, %s, %s, 0, %s)", (identifier, code, description, quantity, price, quantity * price, quantity))
+                                total += quantity * price
+                            database.execute("UPDATE movimientos SET cliente = %s, metodo_pago = %s, factura = %s WHERE id = %s", (payload.get("customerId") or payload.get("cliente") or "", str(payload.get("paymentMethod") or payload.get("metodo_pago") or ""), str(payload.get("invoiceNumber") or payload.get("factura") or ""), identifier))
+                        else:
+                            database.execute("UPDATE movimientos SET cliente = %s, metodo_pago = %s WHERE id = %s", (payload.get("customerId") or payload.get("cliente") or "", str(payload.get("paymentMethod") or payload.get("metodo_pago") or ""), identifier))
                     self.send_json(200, {"ok": True, "id": identifier})
                     return
                 with connection() as database:
@@ -1897,6 +2306,32 @@ class AppHandler(SimpleHTTPRequestHandler):
                         self.send_json(404, {"error": "Venta no encontrada"})
                         return
                     database.execute("INSERT INTO audit_events (user_id, action, collection, record_id, data_json) VALUES (?, ?, ?, ?, ?)", (current_user["id"], "UPDATE", "sales", identifier, json.dumps(payload, ensure_ascii=False)))
+                self.send_json(200, {"ok": True, "id": identifier})
+                return
+            if _postgres_enabled() and path in {"/api/catalog/product", "/api/catalog/store"}:
+                identifier = record_id(payload)
+                with connection() as database:
+                    if path.endswith("/product"):
+                        name = str(payload.get("name") or payload.get("nombre_producto") or "").strip()
+                        code = str(payload.get("code") or payload.get("codigo") or identifier).strip()
+                        if not name or not code:
+                            raise ValueError("El producto requiere codigo y nombre")
+                        if code != identifier and database.execute("SELECT 1 FROM productos WHERE codigo = %s", (code,)).fetchone():
+                            raise ValueError("El nuevo codigo ya existe")
+                        updated = database.execute("UPDATE productos SET codigo = %s, nombre_producto = %s, precio_compra = %s, activo = %s WHERE codigo = %s", (code, name, int(float(payload.get("cost", payload.get("precio_compra", 0)) or 0)), "NO" if payload.get("active") is False else "SI", identifier)).rowcount
+                        if updated and code != identifier:
+                            database.execute("UPDATE inventarios SET codigo = %s WHERE codigo = %s", (code, identifier))
+                            database.execute("UPDATE movimiento_productos SET codigo = %s WHERE codigo = %s", (code, identifier))
+                            database.execute("UPDATE comisiones_productos SET codigo = %s WHERE codigo = %s", (code, identifier))
+                    else:
+                        code = str(payload.get("code") or payload.get("codigo") or "").strip()
+                        name = str(payload.get("name") or payload.get("nombre") or "").strip()
+                        if not code or not name:
+                            raise ValueError("El local requiere codigo y nombre")
+                        updated = database.execute("UPDATE locales SET codigo = %s, nombre = %s, activo = %s WHERE codigo = %s OR nombre = %s", (code, name, "NO" if payload.get("active") is False else "SI", identifier, identifier)).rowcount
+                if not updated:
+                    self.send_json(404, {"error": "Registro compartido no encontrado"})
+                    return
                 self.send_json(200, {"ok": True, "id": identifier})
                 return
             if path not in {"/api/catalog/product", "/api/catalog/store"}:

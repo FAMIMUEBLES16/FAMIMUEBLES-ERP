@@ -1,6 +1,8 @@
+import io
 import unittest
+import zipfile
 
-from server import canonical_request_hash, password_hash, password_matches
+from server import canonical_request_hash, password_hash, password_matches, specialized_xlsx
 
 
 class BackendSafetyTests(unittest.TestCase):
@@ -21,6 +23,13 @@ class BackendSafetyTests(unittest.TestCase):
 
     def test_password_hash_uses_unique_salts(self):
         self.assertNotEqual(password_hash("ClaveSegura123"), password_hash("ClaveSegura123"))
+
+    def test_specialized_xlsx_is_a_valid_zip_package(self):
+        content = specialized_xlsx(["codigo", "descripcion"], [["001", "Mueble <demo>"]])
+        with zipfile.ZipFile(io.BytesIO(content)) as package:
+            self.assertIn("[Content_Types].xml", package.namelist())
+            self.assertIn("xl/worksheets/sheet1.xml", package.namelist())
+            self.assertIn("Mueble &lt;demo&gt;", package.read("xl/worksheets/sheet1.xml").decode("utf-8"))
 
 
 if __name__ == "__main__":
