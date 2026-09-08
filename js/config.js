@@ -9,7 +9,9 @@ const configuredApiBase = String(
 const hasDeprecatedApiBase = configuredApiBase.includes('artwork-charges-wiley-sort.trycloudflare.com');
 
 export const API_BASE_URL = configuredApiBase && !hasDeprecatedApiBase
-  ? configuredApiBase.replace(/\/+$/, '')
+  ? window.location.hostname.endsWith('github.io')
+    ? PUBLIC_API_URL
+    : configuredApiBase.replace(/\/+$/, '')
   : window.location.hostname.endsWith('github.io')
     ? PUBLIC_API_URL
     : LOCAL_API_URL;
