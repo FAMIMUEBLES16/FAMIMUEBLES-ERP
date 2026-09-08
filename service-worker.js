@@ -1,4 +1,4 @@
-const CACHE = 'famimuebles-erp-v30';
+const CACHE = 'famimuebles-erp-v31';
 const CORE = ['./', './index.html', './css/main.css?v=11', './js/app-v3.js?v=23', './js/modules/dashboard-v3.js?v=18', './js/modules/facturacion.js?v=23', './js/services/product-service.js?v=18', './js/data/storage.js?v=18', './js/data/store.js?v=18', './js/router.js?v=18', './js/modules/proveedores.js?v=18', './js/modules/compras.js?v=18', './js/services/purchase-service.js?v=18', './js/services/accounts-payable-service.js?v=18', './js/modules/cuentas-por-pagar.js?v=18', './js/modules/accounts-payable-detail.js?v=18', './js/data/demo-data.js?v=18', './manifest.json', './offline.html', './Logo Famimuebles.png'];
 self.addEventListener('install', event => {
   event.waitUntil(
