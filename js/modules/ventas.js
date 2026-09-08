@@ -14,6 +14,17 @@ function parseRemoteRow(item = {}) {
   return item;
 }
 
+function sellerKey(value) {
+  return String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+export function canonicalSellerName(value) {
+  const key = sellerKey(value);
+  if (key === 'maria isabel' || key === 'maria isabell cubillos') return 'Maria Isabel Cubillos';
+  if (key === 'michael diaz') return 'Michael Díaz';
+  return String(value || '').trim() || 'Sin vendedor';
+}
+
 export function normalizeSales(items = []) {
   return (Array.isArray(items) ? items : []).map(item => {
     const row = parseRemoteRow(item);

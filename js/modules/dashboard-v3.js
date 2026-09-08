@@ -1,7 +1,7 @@
 import { money, page } from '../components/tables.js';
 import { icons } from '../components/sidebar.js';
 import { formatDate } from '../utils/dates.js';
-import { normalizeSales } from './ventas.js';
+import { canonicalSellerName, normalizeSales } from './ventas.js';
 
 const CHART_COLORS = [
   '#2563EB', '#10B981', '#F59E0B', '#EF4444',
@@ -52,7 +52,7 @@ const saleDate = sale => sale.date || sale.fecha || sale.createdAt || '';
 const storeName = (data, id) => data.stores?.find(item => String(item.id) === String(id))?.name || 'Sin local';
 const productName = (data, id) => data.products?.find(item => String(item.id) === String(id))?.name || 'Producto';
 const sellerValue = sale => sale.seller || sale.vendedor || sale.empleado || sale.usuario || sale.userName || sale.user || sale.createdBy || sale.created_by || sale.userId || sale.usuario_id || '';
-const sellerName = (data, sale) => { const value = sellerValue(sale); const user = (data.users || []).find(item => String(item.id) === String(value) || String(item.username) === String(value)); return user?.name || user?.username || value || 'Sin vendedor'; };
+const sellerName = (data, sale) => { const value = sellerValue(sale); const user = (data.users || []).find(item => String(item.id) === String(value) || String(item.username) === String(value)); return canonicalSellerName(user?.name || user?.username || value); };
 const sellerRanking = data => { const ranking = new Map(); normalizeSales(data.sales || data.ventas || []).forEach(sale => { const name = sellerName(data, sale); const entry = ranking.get(name) || { name, count: 0, total: 0 }; entry.count += 1; entry.total += safeNumber(sale.total); ranking.set(name, entry); }); return [...ranking.values()].sort((left, right) => right.total - left.total || right.count - left.count || left.name.localeCompare(right.name)); };
 
 function generateCharts() {
