@@ -107,7 +107,7 @@ function initCharts(data) {
     const paymentLabels = Object.keys(paymentTotals);
     createChart('creditsChart', { type:'doughnut', data:{ labels:paymentLabels, datasets:[{data:Object.values(paymentTotals),backgroundColor:paymentLabels.map(getPaymentColor),borderColor:'#FFFFFF',borderWidth:2}]}, options:{responsive:true,maintainAspectRatio:true,plugins:{legend:{position:'bottom'}}} });
     const ranking = sellerRanking(data);
-    createChart('sellerChart', { type:'bar', data:{ labels:ranking.map(item => item.name), datasets:[{label:'Ventas ($)',data:ranking.map(item => item.total),backgroundColor:getDynamicColors(ranking.length),borderRadius:6}]}, options:{indexAxis:'y',responsive:true,maintainAspectRatio:true,plugins:{legend:{display:false}},scales:{x:{beginAtZero:true}},onClick:()=>window.dispatchEvent(new CustomEvent('open-seller-ranking'))} });
+    createChart('sellerChart', { type:'doughnut', data:{ labels:ranking.map(item => item.name), datasets:[{label:'Ventas ($)',data:ranking.map(item => item.total),backgroundColor:getDynamicColors(ranking.length),borderColor:'#FFFFFF',borderWidth:2}]}, options:{responsive:true,maintainAspectRatio:true,plugins:{legend:{position:'right'}},onClick:()=>window.dispatchEvent(new CustomEvent('open-seller-ranking'))} });
   }, 100);
 }
 

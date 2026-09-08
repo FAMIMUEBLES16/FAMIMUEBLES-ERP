@@ -738,7 +738,8 @@ function ensureRemoteHistoryCollections() {
 			total: pickRemoteNumber(row, ['total_venta', 'valor_total', 'monto', 'total', 'valor', 'amount']),
 			status: String(row.status ?? row.estado ?? 'Completada'),
 			items,
-			vendedor: String(row.vendedor ?? row.empleado ?? row.usuario ?? row.vendor ?? 'No informado'),
+			vendedor: String(row.vendedor ?? row.seller ?? row.empleado ?? row.usuario ?? row.vendor ?? row.createdBy ?? row.created_by ?? 'No informado'),
+			seller: String(row.vendedor ?? row.seller ?? row.empleado ?? row.usuario ?? row.vendor ?? row.createdBy ?? row.created_by ?? ''),
 			movimiento_id: row.movimiento_id ?? row.id ?? '',
 		};
 	});
