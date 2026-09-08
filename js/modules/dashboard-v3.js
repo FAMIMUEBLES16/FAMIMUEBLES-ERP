@@ -1,6 +1,7 @@
 import { money, page } from '../components/tables.js';
 import { icons } from '../components/sidebar.js';
 import { formatDate } from '../utils/dates.js';
+import { normalizeSales } from './ventas.js';
 
 const CHART_COLORS = [
   '#2563EB', '#10B981', '#F59E0B', '#EF4444',
@@ -50,12 +51,16 @@ const safeNumber = value => Number.isFinite(Number(value)) ? Number(value) : 0;
 const saleDate = sale => sale.date || sale.fecha || sale.createdAt || '';
 const storeName = (data, id) => data.stores?.find(item => String(item.id) === String(id))?.name || 'Sin local';
 const productName = (data, id) => data.products?.find(item => String(item.id) === String(id))?.name || 'Producto';
+const sellerValue = sale => sale.seller || sale.vendedor || sale.empleado || sale.usuario || sale.userName || sale.user || sale.createdBy || sale.created_by || sale.userId || sale.usuario_id || '';
+const sellerName = (data, sale) => { const value = sellerValue(sale); const user = (data.users || []).find(item => String(item.id) === String(value) || String(item.username) === String(value)); return user?.name || user?.username || value || 'Sin vendedor'; };
+const sellerRanking = data => { const ranking = new Map(); normalizeSales(data.sales || data.ventas || []).forEach(sale => { const name = sellerName(data, sale); const entry = ranking.get(name) || { name, count: 0, total: 0 }; entry.count += 1; entry.total += safeNumber(sale.total); ranking.set(name, entry); }); return [...ranking.values()].sort((left, right) => right.total - left.total || right.count - left.count || left.name.localeCompare(right.name)); };
 
 function generateCharts() {
   return `<div class="charts-grid dashboard-charts">
     <div class="chart-card"><h3>Ventas últimos 7 días</h3><canvas id="salesChart" style="max-height:250px"></canvas></div>
     <div class="chart-card"><h3>Ventas por local</h3><canvas id="inventoryChart" style="max-height:250px"></canvas></div>
     <div class="chart-card"><h3>Métodos de pago</h3><canvas id="creditsChart" style="max-height:250px"></canvas></div>
+    <div class="chart-card seller-chart-card"><div class="panel-head"><h3>Ventas por vendedor</h3><button class="outline" type="button" data-action="seller-ranking">Ver ranking</button></div><canvas id="sellerChart" style="max-height:280px"></canvas></div>
   </div>`;
 }
 
@@ -101,11 +106,13 @@ function initCharts(data) {
     data.sales.forEach(sale => { const method = sale.paymentMethod || sale.metodo_pago || 'Otros'; paymentTotals[method] = (paymentTotals[method] || 0) + safeNumber(sale.total); });
     const paymentLabels = Object.keys(paymentTotals);
     createChart('creditsChart', { type:'doughnut', data:{ labels:paymentLabels, datasets:[{data:Object.values(paymentTotals),backgroundColor:paymentLabels.map(getPaymentColor),borderColor:'#FFFFFF',borderWidth:2}]}, options:{responsive:true,maintainAspectRatio:true,plugins:{legend:{position:'bottom'}}} });
+    const ranking = sellerRanking(data);
+    createChart('sellerChart', { type:'bar', data:{ labels:ranking.map(item => item.name), datasets:[{label:'Ventas ($)',data:ranking.map(item => item.total),backgroundColor:getDynamicColors(ranking.length),borderRadius:6}]}, options:{indexAxis:'y',responsive:true,maintainAspectRatio:true,plugins:{legend:{display:false}},scales:{x:{beginAtZero:true}},onClick:()=>window.dispatchEvent(new CustomEvent('open-seller-ranking'))} });
   }, 100);
 }
 
 export function renderDashboard(data) {
-  const sales = data.sales || [];
+  const sales = normalizeSales(data.sales || data.ventas || []);
   const today = new Date().toISOString().slice(0, 10);
   const month = today.slice(0, 7);
   const todaySales = sales.filter(saleDateValue => saleDate(saleDateValue).startsWith(today));

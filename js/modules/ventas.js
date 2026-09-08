@@ -25,12 +25,14 @@ export function normalizeSales(items = []) {
     const date = row.date ?? row.fecha ?? row.fecha_venta ?? row.created_at ?? row.createdAt ?? '';
     const paymentMethod = row.paymentMethod ?? row.metodo_pago ?? row.forma_pago ?? row.payment ?? 'Sin dato';
     const customer = row.customer ?? row.cliente ?? row.cliente_nombre ?? row.customer_name ?? row.nombre_cliente ?? 'Cliente';
+    const seller = row.seller ?? row.vendedor ?? row.empleado ?? row.usuario ?? row.usuario_nombre ?? row.userName ?? row.user ?? row.createdBy ?? row.created_by ?? row.userId ?? row.usuario_id ?? '';
     const status = row.status ?? row.estado ?? 'Completada';
     return {
       ...row,
       id: String(row.id ?? row.factura ?? row.numero_factura ?? row.invoiceId ?? 'S/F'),
       storeId: String(row.storeId ?? row.local_id ?? row.localId ?? row.local ?? ''),
       customer: String(customer || 'Cliente'),
+      seller: String(seller || ''),
       date: String(date),
       paymentMethod: String(paymentMethod),
       total: Number.isFinite(total) ? total : 0,
