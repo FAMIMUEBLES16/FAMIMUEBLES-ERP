@@ -38,17 +38,6 @@ export function saleTimestamp(value) {
   return Date.UTC(year, month - 1, day, Number(hour), Number(minute), Number(secondValue));
 }
 
-export function saleDateKey(value) {
-  const text = String(value || '').trim();
-  const iso = text.match(/^(\d{4})-(\d{2})-(\d{2})/);
-  if (iso) return iso[0];
-  const local = text.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{2,4})/);
-  if (!local) return '';
-  const [, day, month, yearValue] = local;
-  const year = yearValue.length === 2 ? `20${yearValue}` : yearValue;
-  return `${year.padStart(4, '0')}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
-}
-
 export function canonicalSellerName(value) {
   const key = sellerKey(value);
   if (key === 'maria isabel' || key === 'maria isabell cubillos') return 'Maria Isabel Cubillos';
@@ -95,6 +84,6 @@ export function renderVentas(data) {
      'OPERACION',
      'Ventas',
      '<button class="primary" data-action="new-sale">＋ Nueva venta</button>',
-    `<div class="toolbar"><input class="field" data-filter="sales" placeholder="Buscar factura o cliente..."><select class="field" data-sales-store><option value="all">Todos los locales</option>${storeOptions}</select><select class="field" data-sales-payment><option value="all">Todos los medios</option></select><select class="field" data-sales-status><option value="all">Todos los estados</option></select><input class="field" type="date" data-sales-date><select class="field" data-sales-sort><option value="recent">Mas recientes</option><option value="oldest">Mas antiguas</option></select></div><div data-sales-table>${salesTable(data, sales)}</div>`
+    `<div class="toolbar"><input class="field" data-filter="sales" placeholder="Buscar factura o cliente..."><select class="field" data-sales-store><option value="all">Todos los locales</option>${storeOptions}</select><select class="field" data-sales-payment><option value="all">Todos los medios</option></select><select class="field" data-sales-status><option value="all">Todos los estados</option></select></div><div data-sales-table>${salesTable(data, sales)}</div>`
   );
 }
