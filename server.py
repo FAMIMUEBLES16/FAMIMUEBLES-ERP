@@ -1511,7 +1511,7 @@ class AppHandler(SimpleHTTPRequestHandler):
                             name = str(payload.get("name", "")).strip()
                             if not code or not name:
                                 raise ValueError("El local requiere codigo y nombre")
-                            database.execute("INSERT INTO locales (codigo, nombre, direccion, telefono, fecha_creacion, creado_por, activo) VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP, %s, %s) ON CONFLICT (codigo) DO UPDATE SET nombre = EXCLUDED.nombre, direccion = EXCLUDED.direccion, telefono = EXCLUDED.telefono, activo = EXCLUDED.activo", (code, name, str(payload.get("address", "")), str(payload.get("phone", "")), authenticated_user(self)["username"], "NO" if payload.get("active") is False else "SI"))
+                            database.execute("INSERT INTO locales (nombre, direccion, telefono, activo) VALUES (%s, %s, %s, %s) ON CONFLICT (nombre) DO UPDATE SET direccion = EXCLUDED.direccion, telefono = EXCLUDED.telefono, activo = EXCLUDED.activo", (name, str(payload.get("address", "")), str(payload.get("phone", "")), payload.get("active") is not False))
                         else:
                             code = str(payload.get("code") or identifier).strip()
                             name = str(payload.get("name", "")).strip()
@@ -2031,16 +2031,16 @@ class AppHandler(SimpleHTTPRequestHandler):
             identifier = unquote(path.removeprefix("/api/catalog/store/")).strip()
             if _postgres_enabled():
                 with connection() as database:
-                    existing = database.execute("SELECT codigo, nombre FROM locales WHERE codigo = %s OR nombre = %s", (identifier, identifier)).fetchone()
+                    existing = database.execute("SELECT id, nombre FROM locales WHERE nombre = %s", (identifier,)).fetchone()
                     if not existing:
                         self.send_json(404, {"error": "Local no encontrado"})
                         return
                     linked = database.execute("SELECT 1 FROM inventarios WHERE local = %s LIMIT 1", (existing["nombre"],)).fetchone() or database.execute("SELECT 1 FROM movimientos WHERE local_origen = %s OR local_destino = %s LIMIT 1", (existing["nombre"], existing["nombre"])).fetchone()
                     if linked:
-                        database.execute("UPDATE locales SET activo = 'NO' WHERE codigo = %s", (existing["codigo"],))
+                        database.execute("UPDATE locales SET activo = FALSE WHERE id = %s", (existing["id"],))
                         self.send_json(200, {"ok": True, "deleted": False, "deactivated": True})
                         return
-                    database.execute("DELETE FROM locales WHERE codigo = %s", (existing["codigo"],))
+                    database.execute("DELETE FROM locales WHERE id = %s", (existing["id"],))
                 self.send_json(200, {"ok": True, "deleted": True})
                 return
             current_tenant = tenant_id(self)
@@ -2372,7 +2372,7 @@ class AppHandler(SimpleHTTPRequestHandler):
                         name = str(payload.get("name") or payload.get("nombre") or "").strip()
                         if not code or not name:
                             raise ValueError("El local requiere codigo y nombre")
-                        updated = database.execute("UPDATE locales SET codigo = %s, nombre = %s, direccion = %s, telefono = %s, activo = %s WHERE codigo = %s OR nombre = %s", (code, name, str(payload.get("address", "")), str(payload.get("phone", "")), "NO" if payload.get("active") is False else "SI", identifier, identifier)).rowcount
+                        updated = database.execute("UPDATE locales SET nombre = %s, direccion = %s, telefono = %s, activo = %s WHERE nombre = %s", (name, str(payload.get("address", "")), str(payload.get("phone", "")), payload.get("active") is not False, identifier)).rowcount
                 if not updated:
                     self.send_json(404, {"error": "Registro compartido no encontrado"})
                     return
