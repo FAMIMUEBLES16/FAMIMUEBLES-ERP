@@ -281,7 +281,15 @@ html, body { background: var(--fm-background); color: var(--fm-text); }
 .metric-alert { border-top-color: #f04438; }
 .charts-grid { gap: 14px; margin: 0 0 16px; }
 .chart-card, .panel { border-radius: 14px; border-color: var(--fm-border); box-shadow: var(--shadow-sm); }
-.chart-card { min-height: 250px; padding: 16px; }
+.chart-card { min-height: 220px; padding: 16px; overflow:hidden; }
+.dashboard-charts { grid-template-columns: repeat(4, minmax(0, 1fr)); align-items:stretch; }
+.dashboard-charts .chart-card-main { grid-column: 1 / -1; min-height: 360px; }
+.dashboard-charts .chart-card-main canvas { height: 285px !important; }
+.dashboard-charts .chart-card-small { min-height: 245px; }
+.dashboard-charts .chart-card-small canvas { height: 175px !important; }
+.chart-card-heading { display:flex; align-items:start; justify-content:space-between; gap:12px; }
+.chart-kicker { display:block; color:var(--fm-primary); font-size:9px; font-weight:800; letter-spacing:1.4px; }
+.chart-unit { color:var(--fm-text-muted); font-size:10px; font-weight:800; letter-spacing:1px; }
 .chart-card h3, .panel h3 { color: var(--fm-text); }
 .chart-card canvas { margin-top: 14px; }
 .dashboard-lower-grid { gap: 14px; margin-bottom: 16px; }
@@ -294,6 +302,7 @@ html, body { background: var(--fm-background); color: var(--fm-text); }
 .seller-chart-card .panel-head { align-items: center; margin-bottom: 8px; }
 .seller-chart-card .panel-head h3 { margin: 0; }
 .seller-chart-card .outline { padding: 7px 10px; font-size: 11px; }
+.seller-chart-card canvas { margin-top: 8px; }
 .seller-ranking-highlight { display: grid; gap: 4px; margin: 14px 0 18px; padding: 16px; border: 1px solid var(--fm-border); border-radius: 12px; background: var(--fm-primary-soft); }
 .seller-ranking-highlight span { color: var(--fm-text-secondary); font-size: 10px; font-weight: 700; letter-spacing: 1.2px; }
 .seller-ranking-highlight strong { font: 600 20px 'Space Grotesk'; }
@@ -303,4 +312,8 @@ html, body { background: var(--fm-background); color: var(--fm-text); }
 	.sidebar { width: 270px; flex-basis: 270px; }
 	.topbar { padding: 0 16px; }
 	.content { padding: 20px 16px 84px; }
+	.dashboard-charts { grid-template-columns: 1fr; }
+	.dashboard-charts .chart-card-main { grid-column: auto; min-height: 300px; }
+	.dashboard-charts .chart-card-main canvas { height: 230px !important; }
+	.dashboard-charts .chart-card-small { min-height: 230px; }
 }
