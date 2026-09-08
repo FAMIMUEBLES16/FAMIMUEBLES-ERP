@@ -18,6 +18,37 @@ function sellerKey(value) {
   return String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
 }
 
+export function saleTimestamp(value) {
+  const text = String(value || '').trim();
+  if (!text) return 0;
+  const localMatch = text.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{2,4})(?:[ T](\d{1,2}):?(\d{2})?(?::?(\d{2}))?)?/);
+  if (localMatch && !/^\d{4}-\d{2}-\d{2}/.test(text)) {
+    const [, day, month, yearValue, hour = '0', minute = '0', second = '0'] = localMatch;
+    const year = Number(yearValue.length === 2 ? `20${yearValue}` : yearValue);
+    return Date.UTC(year, Number(month) - 1, Number(day), Number(hour), Number(minute), Number(second));
+  }
+  const isoTimestamp = Date.parse(text);
+  if (Number.isFinite(isoTimestamp)) return isoTimestamp;
+  const match = localMatch;
+  if (!match) return 0;
+  const [, first, second, yearValue, hour = '0', minute = '0', secondValue = '0'] = match;
+  const year = Number(yearValue.length === 2 ? `20${yearValue}` : yearValue);
+  const day = Number(first);
+  const month = Number(second);
+  return Date.UTC(year, month - 1, day, Number(hour), Number(minute), Number(secondValue));
+}
+
+export function saleDateKey(value) {
+  const text = String(value || '').trim();
+  const iso = text.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) return iso[0];
+  const local = text.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{2,4})/);
+  if (!local) return '';
+  const [, day, month, yearValue] = local;
+  const year = yearValue.length === 2 ? `20${yearValue}` : yearValue;
+  return `${year.padStart(4, '0')}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+}
+
 export function canonicalSellerName(value) {
   const key = sellerKey(value);
   if (key === 'maria isabel' || key === 'maria isabell cubillos') return 'Maria Isabel Cubillos';

@@ -12,7 +12,7 @@ import { showToast } from './components/toast.js';
 import { table } from './components/tables.js';
 import { renderNotifications } from './components/notifications.js';
 import { renderDashboard } from './modules/dashboard-v3.js?v=22';
-import { canonicalSellerName, renderVentas, salesTable, normalizeSales } from './modules/ventas.js?v=21';
+import { canonicalSellerName, renderVentas, salesTable, normalizeSales, saleTimestamp, saleDateKey } from './modules/ventas.js?v=22';
 import { renderFacturacion, cartTotal, productResults, customerResults } from './modules/facturacion.js?v=23';
 import { renderProductos, productTable, productMatches } from './modules/productos.js?v=20';
 import { renderInventario, inventoryContent } from './modules/inventario.js?v=19';
@@ -338,11 +338,11 @@ function applySalesFilters(){
 	const query=salesViewState.query.toLocaleLowerCase();
 	const sales=normalizeSales(store.collection.sales||store.collection.ventas||[]).filter(sale=>{
 		const haystack=Object.values(sale).join(' ').toLocaleLowerCase();
-		const date=String(sale.date||'').slice(0,10);
+		const date=saleDateKey(sale.date);
 		return (!query||haystack.includes(query)) && (salesViewState.store==='all'||sale.storeId===salesViewState.store) && (salesViewState.payment==='all'||sale.paymentMethod===salesViewState.payment) && (salesViewState.status==='all'||sale.status===salesViewState.status) && (!salesViewState.date||date===salesViewState.date);
 	}).sort((left,right)=>{
-		const leftTime=Date.parse(left.date)||0;
-		const rightTime=Date.parse(right.date)||0;
+		const leftTime=saleTimestamp(left.date);
+		const rightTime=saleTimestamp(right.date);
 		return salesViewState.sort==='oldest' ? leftTime-rightTime : rightTime-leftTime;
 	});
 	const paymentValues=[...new Set(normalizeSales(store.collection.sales||[]).map(sale=>sale.paymentMethod).filter(Boolean))].sort();
