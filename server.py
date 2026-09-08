@@ -346,6 +346,8 @@ def _initialize_postgres_schema() -> _PostgresConnection:
     ]
     for statement in statements:
         database.execute(statement)
+    database.execute("ALTER TABLE locales ADD COLUMN IF NOT EXISTS direccion TEXT NOT NULL DEFAULT ''")
+    database.execute("ALTER TABLE locales ADD COLUMN IF NOT EXISTS telefono TEXT NOT NULL DEFAULT ''")
     database.execute("""
         CREATE OR REPLACE FUNCTION protect_audit_events() RETURNS trigger AS $$
         BEGIN
@@ -475,10 +477,10 @@ def has_user_permission(handler: "AppHandler", resource: str, action: str = "vie
     user = authenticated_user(handler)
     if not user:
         return True
+    if user["role"] == "ADMINISTRADOR":
+        return True
     with connection() as database:
         configured = database.execute("SELECT COUNT(*) FROM user_permissions WHERE tenant_id = ? AND user_id = ?", (user["tenant_id"], user["id"])).fetchone()[0] > 0
-        if not configured:
-            return True
         if not configured:
             return True
         row = database.execute("SELECT allowed FROM user_permissions WHERE tenant_id = ? AND user_id = ? AND resource = ? AND action = ?", (user["tenant_id"], user["id"], resource, action)).fetchone()
@@ -487,6 +489,10 @@ def has_user_permission(handler: "AppHandler", resource: str, action: str = "vie
 
 def permission_target(path: str, method: str) -> tuple[str, str] | None:
     action = {"GET": "view", "POST": "create", "PUT": "edit", "DELETE": "delete"}.get(method, "view")
+    if path.startswith("/api/parity/nomina"):
+        return "Nomina", action
+    if path.startswith("/api/parity/conteo"):
+        return "Inventario", action
     if "/catalog/sale" in path:
         return "Ventas", action
     if "/catalog/product" in path:
@@ -655,8 +661,8 @@ def sync_catalog_state(database: sqlite3.Connection, tenant: str, state: dict) -
 def _shared_catalog(database: _PostgresConnection) -> dict:
     """Lee catalogo, existencias y ventas desde el esquema operativo del bot."""
     stores = [
-        {"id": row["nombre"], "code": str(row["id"]), "name": row["nombre"], "address": "", "phone": "", "active": bool(row["activo"])}
-        for row in database.execute("SELECT id, nombre, activo FROM locales ORDER BY nombre").fetchall()
+        {"id": row["nombre"], "code": str(row["id"]), "name": row["nombre"], "address": row["direccion"] or "", "phone": row["telefono"] or "", "active": str(row["activo"] or "SI").upper() != "NO"}
+        for row in database.execute("SELECT id, nombre, activo, direccion, telefono FROM locales ORDER BY nombre").fetchall()
     ]
     products = [
         {"id": str(row["codigo"]).strip(), "code": str(row["codigo"]).strip(), "name": row["nombre_producto"], "reference": "", "barcode": "", "category": product_category(row["nombre_producto"]), "categoryName": product_category(row["nombre_producto"]), "cost": row["precio_compra"] or 0, "salePrice": 0, "taxRate": 0, "active": str(row["activo"] or "SI").upper() != "NO"}
@@ -1505,7 +1511,7 @@ class AppHandler(SimpleHTTPRequestHandler):
                             name = str(payload.get("name", "")).strip()
                             if not code or not name:
                                 raise ValueError("El local requiere codigo y nombre")
-                            database.execute("INSERT INTO locales (codigo, nombre, fecha_creacion, creado_por, activo) VALUES (%s, %s, CURRENT_TIMESTAMP, %s, %s) ON CONFLICT (codigo) DO UPDATE SET nombre = EXCLUDED.nombre, activo = EXCLUDED.activo", (code, name, authenticated_user(self)["username"], "NO" if payload.get("active") is False else "SI"))
+                            database.execute("INSERT INTO locales (codigo, nombre, direccion, telefono, fecha_creacion, creado_por, activo) VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP, %s, %s) ON CONFLICT (codigo) DO UPDATE SET nombre = EXCLUDED.nombre, direccion = EXCLUDED.direccion, telefono = EXCLUDED.telefono, activo = EXCLUDED.activo", (code, name, str(payload.get("address", "")), str(payload.get("phone", "")), authenticated_user(self)["username"], "NO" if payload.get("active") is False else "SI"))
                         else:
                             code = str(payload.get("code") or identifier).strip()
                             name = str(payload.get("name", "")).strip()
@@ -1560,9 +1566,15 @@ class AppHandler(SimpleHTTPRequestHandler):
                                 raise ValueError("Cada resultado requiere codigo y cantidad fisica valida")
                             stock = database.execute("SELECT cantidad FROM inventarios WHERE local = %s AND codigo = %s FOR UPDATE", (session["local"], code)).fetchone()
                             if not stock:
-                                raise ValueError(f"No existe inventario para {code} en {session['local']}")
-                            system = int(stock["cantidad"] or 0)
-                            database.execute("UPDATE inventarios SET cantidad = %s, actualizado = CURRENT_TIMESTAMP WHERE local = %s AND codigo = %s", (physical, session["local"], code))
+                                product_name = str(item.get("descripcion") or item.get("name") or "").strip()
+                                if not product_name:
+                                    raise ValueError(f"El producto nuevo {code} requiere descripcion")
+                                database.execute("INSERT INTO productos (codigo, nombre_producto, precio_compra, activo) VALUES (%s, %s, 0, 'SI') ON CONFLICT (codigo) DO NOTHING", (code, product_name))
+                                database.execute("INSERT INTO inventarios (local, codigo, descripcion, cantidad) VALUES (%s, %s, %s, %s) ON CONFLICT (local, codigo) DO UPDATE SET cantidad = EXCLUDED.cantidad, actualizado = CURRENT_TIMESTAMP", (session["local"], code, product_name, physical))
+                                system = 0
+                            else:
+                                system = int(stock["cantidad"] or 0)
+                                database.execute("UPDATE inventarios SET cantidad = %s, actualizado = CURRENT_TIMESTAMP WHERE local = %s AND codigo = %s", (physical, session["local"], code))
                             database.execute("INSERT INTO conteo_fisico (sesion_id, local, cod, descripcion, cantidad_sistema, cantidad_fisica, diferencia, empleado, estado, motivo_diferencia, observacion) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'APLICADO', %s, %s)", (session_id, session["local"], code, item.get("descripcion") or "", system, physical, physical - system, user.get("username") or "ERP", item.get("motivo") or "", item.get("observacion") or ""))
                         database.execute("UPDATE conteo_sesiones SET resultados_json = %s, estado = 'CERRADO', fecha_cierre = CURRENT_TIMESTAMP, fecha_actualizacion = CURRENT_TIMESTAMP WHERE id = %s", (json.dumps(results, ensure_ascii=False), session_id))
                         response = {"ok": True, "id": session_id, "applied": len(results), "status": "CERRADO"}
@@ -1587,22 +1599,47 @@ class AppHandler(SimpleHTTPRequestHandler):
                 if not start or not end or not local or rate < 0:
                     raise ValueError("La nómina requiere fechas, local y comisión válida")
                 with connection() as database:
-                    sales = database.execute("SELECT vendedor, COALESCE(SUM(mp.precio_total), 0) AS sales FROM movimientos m LEFT JOIN movimiento_productos mp ON mp.movimiento_id = m.id WHERE UPPER(m.tipo) = 'VENTA' AND m.local_origen = %s AND m.fecha::date BETWEEN %s AND %s GROUP BY vendedor ORDER BY vendedor", (local, start, end)).fetchall()
-                    configured_employees = database.execute("SELECT nombre, nombre_venta, salario_base, local FROM empleados_nomina WHERE UPPER(COALESCE(estado, 'ACTIVO')) = 'ACTIVO' AND (COALESCE(local, '') = '' OR local = %s)", (local,)).fetchall()
-                    config = {str(item["nombre"] or item["nombre_venta"] or ""): {"salario_base": item["salario_base"]} for item in configured_employees}
-                    config.update({str(item.get("empleado") or item.get("name") or ""): item for item in (payload.get("employees") if isinstance(payload.get("employees"), list) else [])})
                     if not rate:
                         configured_rate = database.execute("SELECT valor FROM config_nomina WHERE UPPER(nombre_parametro) IN ('PORCENTAJE_COMISION', 'COMISION_GENERAL') ORDER BY id DESC LIMIT 1").fetchone()
                         rate = float(configured_rate["valor"] or 0) if configured_rate else 0
+                    if rate > 1:
+                        rate /= 100
+                    sales = database.execute("""
+                        SELECT m.vendedor,
+                               COALESCE(SUM(mp.precio_total), 0) AS sales,
+                               COALESCE(SUM(CASE WHEN UPPER(COALESCE(cp.comisionable, 'NO')) = 'SI' AND UPPER(COALESCE(cp.estado, 'ACTIVO')) <> 'INACTIVO' THEN mp.precio_total ELSE 0 END), 0) AS commissionable_sales
+                        FROM movimientos m
+                        JOIN movimiento_productos mp ON mp.movimiento_id = m.id
+                        LEFT JOIN comisiones_productos cp ON cp.codigo = mp.codigo
+                        WHERE UPPER(m.tipo) = 'VENTA' AND m.local_origen = %s AND m.fecha::date BETWEEN %s AND %s
+                        GROUP BY m.vendedor ORDER BY m.vendedor
+                    """, (local, start, end)).fetchall()
+                    configured_employees = database.execute("SELECT nombre, nombre_venta, salario_base, local FROM empleados_nomina WHERE UPPER(COALESCE(estado, 'ACTIVO')) = 'ACTIVO' AND (COALESCE(local, '') = '' OR local = %s)", (local,)).fetchall()
+                    config = {}
+                    for item in configured_employees:
+                        for name in (item["nombre"], item["nombre_venta"]):
+                            if name:
+                                config[str(name).strip().casefold()] = {"salario_base": item["salario_base"]}
+                    config.update({str(item.get("empleado") or item.get("name") or ""): item for item in (payload.get("employees") if isinstance(payload.get("employees"), list) else [])})
+                    configured_by_key = {str(key).casefold(): value for key, value in config.items()}
                     employees = []
                     for sale in sales:
-                        item = config.get(str(sale["vendedor"] or ""), {})
+                        seller = str(sale["vendedor"] or "").strip()
+                        item = configured_by_key.get(seller.casefold(), {})
                         salary = int(item.get("salario_base") or item.get("salary") or 0)
-                        commission = int(float(sale["sales"] or 0) * rate)
+                        commissionable_sales = int(sale["commissionable_sales"] or 0)
+                        commission = int(commissionable_sales * rate)
                         discount = int(item.get("descuentos") or item.get("discount") or 0)
-                        employees.append({"empleado": sale["vendedor"], "ventas_comisionables": int(sale["sales"] or 0), "salario_base": salary, "comision": commission, "descuentos": discount, "neto": max(0, salary + commission - discount)})
+                        employees.append({"empleado": seller, "ventas_totales": int(sale["sales"] or 0), "ventas_comisionables": commissionable_sales, "salario_base": salary, "comision": commission, "descuentos": discount, "neto": max(0, salary + commission - discount), "estado": "OK" if item else "SIN_CONFIGURAR"})
+                    for name, item in configured_by_key.items():
+                        if not any(str(employee["empleado"]).strip().casefold() == name for employee in employees):
+                            salary = int(item.get("salario_base") or item.get("salary") or 0)
+                            employees.append({"empleado": name, "ventas_totales": 0, "ventas_comisionables": 0, "salario_base": salary, "comision": 0, "descuentos": int(item.get("descuentos") or item.get("discount") or 0), "neto": salary, "estado": "SIN_VENTAS"})
                     total = sum(item["neto"] for item in employees)
                     if action == "close":
+                        pending = [item["empleado"] for item in employees if item["estado"] == "SIN_CONFIGURAR"]
+                        if pending:
+                            raise ValueError("Configura el salario de: " + ", ".join(pending))
                         period = database.execute("INSERT INTO nomina_periodos (fecha_inicio, fecha_fin, local, porciento_comision, estado, total_nomina, generado_por) VALUES (%s, %s, %s, %s, 'CERRADA', %s, %s) ON CONFLICT (fecha_inicio, fecha_fin, local) DO NOTHING RETURNING id", (start, end, local, rate, total, authenticated_user(self).get("username") or "ERP")).fetchone()
                         if not period:
                             raise ValueError("Ya existe una nómina cerrada para ese período y local")
@@ -2335,7 +2372,7 @@ class AppHandler(SimpleHTTPRequestHandler):
                         name = str(payload.get("name") or payload.get("nombre") or "").strip()
                         if not code or not name:
                             raise ValueError("El local requiere codigo y nombre")
-                        updated = database.execute("UPDATE locales SET codigo = %s, nombre = %s, activo = %s WHERE codigo = %s OR nombre = %s", (code, name, "NO" if payload.get("active") is False else "SI", identifier, identifier)).rowcount
+                        updated = database.execute("UPDATE locales SET codigo = %s, nombre = %s, direccion = %s, telefono = %s, activo = %s WHERE codigo = %s OR nombre = %s", (code, name, str(payload.get("address", "")), str(payload.get("phone", "")), "NO" if payload.get("active") is False else "SI", identifier, identifier)).rowcount
                 if not updated:
                     self.send_json(404, {"error": "Registro compartido no encontrado"})
                     return

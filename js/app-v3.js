@@ -68,7 +68,8 @@ const actionPermissionMap = {
 	'view-credit':['Creditos','view'],'edit-credit':['Creditos','edit'],'delete-credit':['Creditos','delete'],'credit-payment':['Creditos','edit'],'new-credit':['Creditos','create'],
 	'view-apartado':['Apartados','view'],'edit-apartado':['Apartados','edit'],'delete-apartado':['Apartados','delete'],
 	'view-expense':['Gastos','view'],'edit-expense':['Gastos','edit'],'delete-expense':['Gastos','delete'],'new-expense':['Gastos','create'],
-	'adjust-inventory':['Inventario','edit'],'delete-inventory':['Inventario','delete'],'report':['Reportes','view']
+	'adjust-inventory':['Inventario','edit'],'delete-inventory':['Inventario','delete'],'report':['Reportes','view'],
+	'parity-count':['Inventario','edit'],'parity-sistecredito':['Creditos','create']
 };
 const $ = selector => document.querySelector(selector);
 const views = { dashboard:()=>renderDashboard(store.collection), ventas:()=>renderVentas(store.collection), facturacion:()=>renderFacturacion(store.collection,state.cart,state.payment,state.customerId,state.transport,state.transportDestination,state.transportNote,state.storeId), productos:()=>renderProductos(store.collection), inventario:()=>renderInventario(store.collection,state.storeId), traslados:()=>renderTraslados(store.collection), proveedores:()=>renderProveedores(store.collection), compras:()=>renderCompras(store.collection), 'cuentas-por-pagar':()=>renderCuentasPorPagar(store.collection), clientes:()=>renderClientes(store.collection), creditos:()=>renderCreditos(store.collection), cartera:()=>renderCartera(store.collection), apartados:()=>renderApartados(store.collection), locales:()=>renderLocales(store.collection), operaciones:()=>renderOperaciones(store.collection), paridad:()=>renderParidad(store.collection), gastos:()=>renderGastos(store.collection), gasolina:()=>renderGasolina(store.collection), auditoria:()=>renderAuditoria(store.collection), usuarios:()=>renderUsuarios(store.collection), reportes:()=>renderReportes(store.collection), configuracion:renderConfiguracion };
@@ -486,6 +487,18 @@ document.addEventListener('submit',async event=>{if(event.target.id!=='advanced-
 async function parityPost(path, payload) { return api.post(path, {...payload, tenantId:activeTenantId()}, {headers:{'X-Tenant-ID':activeTenantId()}}); }
 document.addEventListener('click', async event=>{
 	const action=event.target.closest('[data-action]')?.dataset.action;
+	if(action==='parity-count-add-product'){
+		const form=event.target.closest('#parity-count-form');
+		const code=form?.querySelector('[data-count-add-code]')?.value.trim();
+		const name=form?.querySelector('[data-count-add-name]')?.value.trim();
+		const physical=form?.querySelector('[data-count-add-physical]')?.value;
+		if(!form||!code||!name||physical===''||Number(physical)<0){showToast('Ingresa código, descripción y cantidad física válida.','error');return;}
+		const row=document.createElement('div'); row.className='count-row'; row.dataset.countProduct=code; row.dataset.countDescription=name;
+		row.innerHTML=`<span>${name}</span><small>${code} · Producto nuevo</small><input class="field" data-count-physical type="number" min="0" value="${Number(physical)}" aria-label="Cantidad física"><input class="field" data-count-reason placeholder="Motivo">`;
+		form.querySelector('.count-add-product')?.before(row);
+		form.querySelector('[data-count-add-code]').value=''; form.querySelector('[data-count-add-name]').value=''; form.querySelector('[data-count-add-physical]').value='';
+		return;
+	}
 	if(action==='parity-payroll'){$('#modal-root').innerHTML=payrollModal(store.collection);$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';}
 	if(action==='parity-payroll-config'){$('#modal-root').innerHTML=payrollConfigModal();$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';}
 	if(action==='parity-count'){$('#modal-root').innerHTML=countModal(store.collection);$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';}

@@ -31,7 +31,7 @@ $env:POSTGRES_PASSWORD="la-misma-clave-del-bot"
 .venv\Scripts\python.exe server.py
 ```
 
-El servidor carga automaticamente `.env` del ERP o, si no existe, el `.env` del proyecto vecino `FAMIMUEBLES APP` del bot. Si falta `POSTGRES_PASSWORD`, el servidor no inicia. Comprueba el modo efectivo en `http://127.0.0.1:8027/api/health` antes de usar la aplicacion.
+El servidor carga automaticamente `.env` del ERP o, si no existe, el `.env` del proyecto vecino `FAMIMUEBLES APP` del bot. Si falta `POSTGRES_PASSWORD`, el servidor no inicia. Comprueba el modo efectivo en `http://127.0.0.1:8024/api/health` antes de usar la aplicacion.
 
 El backend PostgreSQL crea las tablas propias de autenticacion y modulos del ERP dentro de la misma base, usando conexiones independientes por solicitud. El estado de la SPA, el catalogo, el inventario, las ventas y las colecciones operativas se leen de las tablas compartidas del bot (`productos`, `locales`, `inventarios`, `movimientos`, `movimiento_productos`, creditos, apartados, gastos, gasolina y demas tablas disponibles). Las ventas creadas desde el ERP se escriben en esas mismas tablas. `famimuebles.sqlite3` ya no participa en la aplicacion web.
 
@@ -41,7 +41,7 @@ La ruta `#paridad` agrega las funciones compartidas con el bot sin migrar ni bor
 
 ### Cliente API local y produccion
 
-Las llamadas del frontend pasan por `js/services/api-client.js`. La URL se configura en un unico lugar, `js/config.js`: en `localhost` usa automaticamente `http://127.0.0.1:8024/api`; en GitHub Pages permanece en modo demo hasta definir una URL HTTPS real en `FAMIMUEBLES_API_BASE_URL`. No se deben poner credenciales en ese archivo.
+Las llamadas del frontend pasan por `js/services/api-client.js`. La URL se configura en un unico lugar, `js/config.js`: usa automaticamente `http://127.0.0.1:8024/api` para que la interfaz local y la publicada puedan conectarse al backend que corre en este equipo. Una URL HTTPS publica debe definirse explicitamente mediante `FAMIMUEBLES_API_BASE_URL`; no se deben poner credenciales en ese archivo.
 
 Para una API publicada, establece `FAMIMUEBLES_API_BASE_URL` antes de cargar `app-v3.js` o reemplaza el valor de configuracion por la URL HTTPS real del backend. En el servidor define `FAMIMUEBLES_ALLOWED_ORIGINS` con una lista separada por comas, por ejemplo `https://famimuebles16.github.io,http://127.0.0.1:8024`, y conserva `POSTGRES_PASSWORD` unicamente como secreto del entorno. PostgreSQL no debe exponerse a Internet: la API debe accederlo por red privada o mediante un tunel seguro.
 
