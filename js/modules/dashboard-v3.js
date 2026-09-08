@@ -61,10 +61,6 @@ function generateCharts() {
     <div class="chart-card chart-card-small"><h3>Ventas por local</h3><canvas id="storeChart"></canvas></div>
     <div class="chart-card chart-card-small"><h3>Métodos de pago</h3><canvas id="creditsChart"></canvas></div>
     <div class="chart-card chart-card-small seller-chart-card"><div class="panel-head"><h3>Ventas por vendedor</h3><button class="outline" type="button" data-action="seller-ranking">Ver ranking</button></div><canvas id="sellerChart"></canvas></div>
-    <div class="chart-card chart-card-small"><h3>Ventas por categoría</h3><canvas id="categoryChart"></canvas></div>
-    <div class="chart-card chart-card-small"><h3>Estado del inventario</h3><canvas id="inventoryStatusChart"></canvas></div>
-    <div class="chart-card chart-card-small"><h3>Cartera por estado</h3><canvas id="portfolioChart"></canvas></div>
-    <div class="chart-card chart-card-small"><h3>Flujo del periodo</h3><canvas id="cashflowChart"></canvas></div>
   </div>`;
 }
 
@@ -110,23 +106,6 @@ function initCharts(data) {
     const ranking = sellerRanking(data);
     createChart('sellerChart', { type:'bar', data:{ labels:ranking.slice(0,6).map(item => item.name), datasets:[{label:'Ventas',data:ranking.slice(0,6).map(item => item.total),backgroundColor:'#1769ff',borderRadius:6,barPercentage:.65}]}, options:{...baseOptions,indexAxis:'y',scales:{x:{beginAtZero:true,ticks:{callback:value => money(value, true)}},y:{grid:{display:false}}},plugins:{...baseOptions.plugins,legend:{display:false}},onClick:()=>window.dispatchEvent(new CustomEvent('open-seller-ranking'))} });
 
-    const categoryTotals = {};
-    data.sales.forEach(sale => (sale.items || []).forEach(item => { const product = data.products.find(entry => String(entry.id) === String(item.productId || item.producto_id)); const category = product?.category || product?.categoryName || item.category || 'Sin categoría'; const lineTotal = item.subtotal ?? item.total ?? (safeNumber(item.priceVenta ?? item.price) * safeNumber(item.quantity || 1)); categoryTotals[category] = (categoryTotals[category] || 0) + safeNumber(lineTotal); }));
-    const categoryLabels = Object.keys(categoryTotals).sort((a,b) => categoryTotals[b] - categoryTotals[a]).slice(0,7);
-    createChart('categoryChart', { type:'bar', data:{labels:categoryLabels,datasets:[{label:'Ventas',data:categoryLabels.map(label => categoryTotals[label]),backgroundColor:'#f2b01e',borderRadius:6}]}, options:{...baseOptions,indexAxis:'y',scales:{x:{beginAtZero:true,ticks:{callback:value => money(value, true)}},y:{grid:{display:false}}},plugins:{...baseOptions.plugins,legend:{display:false}}} });
-
-    const inventoryTotals = { Disponible:0, 'Stock bajo':0, Agotado:0 };
-    (data.inventoryByStore || []).forEach(row => { const quantity = safeNumber(row.quantity); const minimum = safeNumber(row.minimumStock ?? row.minimum); if (quantity === 0) inventoryTotals.Agotado += 1; else if (quantity <= minimum) inventoryTotals['Stock bajo'] += 1; else inventoryTotals.Disponible += 1; });
-    createChart('inventoryStatusChart', { type:'doughnut', data:{labels:Object.keys(inventoryTotals),datasets:[{data:Object.values(inventoryTotals),backgroundColor:['#16a34a','#f59e0b','#dc2626'],borderColor:'#fff',borderWidth:3,hoverOffset:7}]}, options:{...baseOptions,cutout:'62%',plugins:{...baseOptions.plugins,legend:{position:'bottom'}}} });
-
-    const portfolio = { Vigente:0, Vencida:0 };
-    (data.credits || []).forEach(item => { const outstanding = Math.max(0, safeNumber(item.saldo_pendiente ?? safeNumber(item.total) - safeNumber(item.initial) - safeNumber(item.paid))); const overdue = String(item.status || '').toLowerCase().includes('venc'); portfolio[overdue ? 'Vencida' : 'Vigente'] += outstanding; });
-    createChart('portfolioChart', { type:'doughnut', data:{labels:Object.keys(portfolio),datasets:[{data:Object.values(portfolio),backgroundColor:['#1769ff','#dc2626'],borderColor:'#fff',borderWidth:3,hoverOffset:7}]}, options:{...baseOptions,cutout:'62%',plugins:{...baseOptions.plugins,legend:{position:'bottom'}}} });
-
-    const income = data.sales.reduce((sum,sale) => sum + safeNumber(sale.total), 0);
-    const expenses = (data.expenses || []).reduce((sum,item) => sum + safeNumber(item.amount ?? item.valor), 0);
-    const purchases = (data.purchases || []).reduce((sum,item) => sum + safeNumber(item.total ?? item.amount ?? item.valor), 0);
-    createChart('cashflowChart', { type:'bar', data:{labels:['Ingresos','Gastos','Compras'],datasets:[{label:'Valor',data:[income,expenses,purchases],backgroundColor:['#16a34a','#dc2626','#f59e0b'],borderRadius:6,barPercentage:.55}]}, options:{...baseOptions,scales:{x:{grid:{display:false}},y:{beginAtZero:true,ticks:{callback:value => money(value, true)}}},plugins:{...baseOptions.plugins,legend:{display:false}}} });
   }, 100);
 }
 
