@@ -522,10 +522,8 @@ def can_access(handler: "AppHandler", path: str, method: str = "GET") -> bool:
         return False
     if user["role"] == "ADMINISTRADOR":
         return True
-    if "/catalog/sale" in path:
-        return False
     if path == "/api/tenants":
-        return False
+        return True
     if "/report/" in path or path == "/api/state":
         return user["role"] in {"GERENTE", "CONTADOR", "SUPERVISOR"}
     if "/domain/" in path:
@@ -827,6 +825,21 @@ def _shared_domain_items(database: _PostgresConnection, collection: str) -> list
         return None
     try:
         items = [_with_frontend_aliases(dict(row)) for row in database.execute(query).fetchall()]
+        if collection == "credits":
+            stored = database.execute(
+                "SELECT data_json FROM domain_records WHERE tenant_id = %s AND collection = %s ORDER BY created_at",
+                (DEFAULT_TENANT, collection),
+            ).fetchall()
+            existing_ids = {str(item.get("id") or "") for item in items if item.get("id") is not None}
+            for row in stored:
+                payload = row[0] if isinstance(row, (tuple, list)) else row.get("data_json")
+                if not payload:
+                    continue
+                item = json.loads(payload)
+                item_id = str(item.get("id") or "")
+                if not item_id or item_id in existing_ids:
+                    continue
+                items.append(_with_frontend_aliases(item))
         if collection == "customers":
             credit_columns = {
                 row["column_name"]
@@ -950,6 +963,43 @@ def _shared_state(database: _PostgresConnection) -> dict:
     return state
 
 
+def _ensure_app_modules_available() -> None:
+    app_root = ROOT.parent / "FAMIMUEBLES APP"
+    if app_root.exists():
+        app_root_str = str(app_root)
+        if app_root_str not in sys.path:
+            sys.path.insert(0, app_root_str)
+
+
+def _create_shared_credit_record(database: _PostgresConnection, payload: dict, movement_id: int, user: dict, store_id: str, invoice_number: str, total_amount: int) -> dict | None:
+    payment_method = str(payload.get("paymentMethod", "") or "").strip().lower()
+    if "credito" not in payment_method and "crédito" not in payment_method and "credit" not in payment_method:
+        return None
+
+    initial_amount = int(float(payload.get("creditInitial", 0) or 0))
+    if initial_amount < 0 or total_amount < 0:
+        raise ValueError("La cuota inicial y el total deben ser valores validos")
+    if initial_amount > total_amount:
+        raise ValueError("La cuota inicial no puede superar el total")
+
+    _ensure_app_modules_available()
+    from credit_service import crear_credito
+
+    credit_id = crear_credito(
+        movimiento_id=int(movement_id),
+        cliente=str(payload.get("customer") or payload.get("customerId") or "Cliente contado").strip() or "Cliente contado",
+        vendedor=str(user.get("username") or user.get("id") or "ERP").strip() or "ERP",
+        total=total_amount,
+        abono_inicial=initial_amount,
+        creado_por=str(user.get("id") or user.get("username") or "ERP").strip() or "ERP",
+        local=store_id,
+        factura=invoice_number,
+        documento=str(payload.get("document") or "").strip(),
+        telefono=str(payload.get("phone") or "").strip(),
+    )
+    return {"id": int(credit_id), "total": total_amount, "initial": initial_amount}
+
+
 def _create_shared_sale(database: _PostgresConnection, payload: dict, user: dict, handler: "AppHandler") -> dict:
     """Registra una venta del ERP como movimiento del esquema del bot."""
     _, cached = claim_idempotency(database, handler, payload, "/api/catalog/sale")
@@ -986,7 +1036,10 @@ def _create_shared_sale(database: _PostgresConnection, payload: dict, user: dict
     for code, description, quantity, price in normalized:
         database.execute("UPDATE inventarios SET cantidad = cantidad - %s, actualizado = CURRENT_TIMESTAMP WHERE local = %s AND codigo = %s", (quantity, store_id, code))
         database.execute("INSERT INTO movimiento_productos (movimiento_id, codigo, descripcion, cantidad, precio_unitario, precio_total, entrada, salida) VALUES (%s, %s, %s, %s, %s, %s, 0, %s)", (movement_id, code, description, quantity, price, quantity * price, quantity))
+    credit_record = _create_shared_credit_record(database, payload, movement_id, user, store_id, invoice_number, total)
     result = {"id": movement_id, "total": total}
+    if credit_record:
+        result["creditId"] = credit_record["id"]
     complete_idempotency(database, handler, payload, "/api/catalog/sale", 201, {"ok": True, **result})
     return result
 

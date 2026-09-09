@@ -53,7 +53,20 @@ const storeName = (data, id) => data.stores?.find(item => String(item.id) === St
 const productName = (data, id) => data.products?.find(item => String(item.id) === String(id))?.name || 'Producto';
 const sellerValue = sale => sale.seller || sale.vendedor || sale.empleado || sale.usuario || sale.userName || sale.user || sale.createdBy || sale.created_by || sale.userId || sale.usuario_id || '';
 const sellerName = (data, sale) => { const value = sellerValue(sale); const user = (data.users || []).find(item => String(item.id) === String(value) || String(item.username) === String(value)); return canonicalSellerName(user?.name || user?.username || value); };
-const sellerRanking = data => { const ranking = new Map(); normalizeSales(data.sales || data.ventas || []).forEach(sale => { const name = sellerName(data, sale); const entry = ranking.get(name) || { name, count: 0, total: 0 }; entry.count += 1; entry.total += safeNumber(sale.total); ranking.set(name, entry); }); return [...ranking.values()].sort((left, right) => right.total - left.total || right.count - left.count || left.name.localeCompare(right.name)); };
+const sellerRanking = data => {
+  const ranking = new Map();
+  const currentMonth = new Date().toISOString().slice(0, 7);
+  normalizeSales(data.sales || data.ventas || [])
+    .filter(sale => (saleDate(sale) || '').startsWith(currentMonth))
+    .forEach(sale => {
+      const name = sellerName(data, sale);
+      const entry = ranking.get(name) || { name, count: 0, total: 0 };
+      entry.count += 1;
+      entry.total += safeNumber(sale.total);
+      ranking.set(name, entry);
+    });
+  return [...ranking.values()].sort((left, right) => right.total - left.total || right.count - left.count || left.name.localeCompare(right.name));
+};
 
 function generateCharts() {
   return `<div class="charts-grid dashboard-charts">

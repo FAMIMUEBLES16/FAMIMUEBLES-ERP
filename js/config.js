@@ -7,13 +7,12 @@ const configuredApiBase = String(
   ''
 ).trim();
 const hasDeprecatedApiBase = configuredApiBase.includes('artwork-charges-wiley-sort.trycloudflare.com');
+const isLocalHostname = ['localhost', '127.0.0.1', '::1'].includes(window.location.hostname);
 
 export const API_BASE_URL = configuredApiBase && !hasDeprecatedApiBase
-  ? window.location.hostname.endsWith('github.io')
-    ? PUBLIC_API_URL
-    : configuredApiBase.replace(/\/+$/, '')
-  : window.location.hostname.endsWith('github.io')
-    ? PUBLIC_API_URL
-    : LOCAL_API_URL;
+  ? configuredApiBase.replace(/\/+$/, '')
+  : isLocalHostname
+    ? LOCAL_API_URL
+    : PUBLIC_API_URL;
 
 export const API_MODE = API_BASE_URL ? 'api' : 'static';
