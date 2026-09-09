@@ -2451,7 +2451,7 @@ class AppHandler(SimpleHTTPRequestHandler):
                                 update_values.append(edited_date)
                             update_values.append(identifier)
                             database.execute(f"UPDATE movimientos SET {update_fields} WHERE id = %s", tuple(update_values))
-                    saved = database.execute("SELECT fecha FROM movimientos WHERE id = %s", (identifier,)).fetchone()
+                        saved = database.execute("SELECT fecha FROM movimientos WHERE id = %s", (identifier,)).fetchone()
                     self.send_json(200, {"ok": True, "id": identifier, "date": saved["fecha"] if saved else edited_date})
                     return
                 with connection() as database:
