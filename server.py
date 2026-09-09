@@ -9,6 +9,7 @@ import secrets
 import sys
 import threading
 import zipfile
+from datetime import date as calendar_date
 from decimal import Decimal
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -447,6 +448,18 @@ def record_id(payload: dict) -> str:
     value = str(payload.get("id", "")).strip()
     if not value:
         raise ValueError("El registro requiere un id")
+    return value
+
+
+def sale_date(payload: dict) -> str | None:
+    raw_value = payload.get("date", payload.get("fecha"))
+    if raw_value in (None, ""):
+        return None
+    value = str(raw_value).strip()
+    try:
+        calendar_date.fromisoformat(value)
+    except ValueError as error:
+        raise ValueError("La fecha de la venta debe tener el formato AAAA-MM-DD y ser valida") from error
     return value
 
 
@@ -1162,6 +1175,42 @@ def _liquidate_shared_apartado(database: _PostgresConnection, apartado_id: int, 
         database.execute("INSERT INTO movimiento_productos (movimiento_id, codigo, descripcion, cantidad, precio_unitario, precio_total, entrada, salida) VALUES (%s, %s, %s, %s, %s, %s, 0, %s)", (movement[0], detail["codigo"], detail["producto"], quantity, detail["valor_unitario"], detail["subtotal"], quantity))
     database.execute("UPDATE apartados SET estado = 'ENTREGADO', fecha_entrega = CURRENT_TIMESTAMP, movimiento_id = %s WHERE id = %s", (movement[0], int(apartado_id)))
     return {"ok": True, "id": int(apartado_id), "movementId": movement[0]}
+
+
+def _apply_shared_domain_inventory_effect(database: _PostgresConnection, collection: str, payload: dict, identifier: str, user: dict) -> None:
+    """Aplica devoluciones y bajas sobre las tablas operativas compartidas."""
+    product_id = str(payload.get("productId") or payload.get("code") or "").strip()
+    store_id = str(payload.get("storeId") or payload.get("local") or "").strip()
+    quantity = float(payload.get("quantity", 0) or 0)
+    if not product_id or not store_id or quantity <= 0 or not __import__("math").isfinite(quantity) or quantity != int(quantity):
+        raise ValueError("La operacion requiere producto, local y cantidad entera valida")
+    product = database.execute(
+        "SELECT nombre_producto FROM productos WHERE BTRIM(codigo) = %s AND UPPER(COALESCE(activo, 'SI')) <> 'NO'",
+        (product_id,),
+    ).fetchone()
+    if not product:
+        raise ValueError("El producto no existe o esta inactivo")
+    if not database.execute("SELECT 1 FROM locales WHERE nombre = %s AND activo = TRUE", (store_id,)).fetchone():
+        raise ValueError("El local no existe o esta inactivo")
+    stock = database.execute("SELECT cantidad FROM inventarios WHERE local = %s AND codigo = %s FOR UPDATE", (store_id, product_id)).fetchone()
+    current = int(stock["cantidad"] or 0) if stock else 0
+    signed_quantity = int(quantity) if collection == "returns" else -int(quantity)
+    next_quantity = current + signed_quantity
+    if next_quantity < 0:
+        raise ValueError("El stock no puede quedar negativo")
+    if stock:
+        database.execute("UPDATE inventarios SET cantidad = %s, actualizado = CURRENT_TIMESTAMP WHERE local = %s AND codigo = %s", (next_quantity, store_id, product_id))
+    else:
+        database.execute("INSERT INTO inventarios (local, codigo, descripcion, cantidad) VALUES (%s, %s, %s, %s)", (store_id, product_id, product["nombre_producto"], next_quantity))
+    movement_type = "DEVOLUCION_CLIENTE" if collection == "returns" else "DEVOLUCION_PROVEEDOR" if collection == "supplierReturns" else "MERCANCIA_DANADA"
+    movement = database.execute(
+        "INSERT INTO movimientos (tipo, estado, local_origen, empleado, referencia, observacion) VALUES (%s, 'COMPLETADO', %s, %s, %s, %s) RETURNING id",
+        (movement_type, store_id, str(user.get("username") or user.get("id") or "ERP"), identifier, str(payload.get("description") or payload.get("notes") or "")),
+    ).fetchone()
+    database.execute(
+        "INSERT INTO movimiento_productos (movimiento_id, codigo, descripcion, cantidad, entrada, salida) VALUES (%s, %s, %s, %s, %s, %s)",
+        (movement[0], product_id, product["nombre_producto"], int(quantity), int(quantity) if signed_quantity > 0 else 0, int(quantity) if signed_quantity < 0 else 0),
+    )
 
 
 class AppHandler(SimpleHTTPRequestHandler):
@@ -2008,7 +2057,9 @@ class AppHandler(SimpleHTTPRequestHandler):
                     store_id = str(payload.get("storeId", "")).strip()
                     quantity = float(payload.get("quantity", 0) or 0)
                     processed_statuses = {"PROCESADA", "RECIBIDA", "APROBADA"}
-                    if collection in {"returns", "supplierReturns", "damaged-stock"} and status in processed_statuses and previous_status not in processed_statuses:
+                    if collection in {"returns", "supplierReturns", "damaged-stock"} and status in processed_statuses and previous_status not in processed_statuses and _postgres_enabled():
+                        _apply_shared_domain_inventory_effect(database, collection, payload, identifier, authenticated_user(self))
+                    if collection in {"returns", "supplierReturns", "damaged-stock"} and status in processed_statuses and previous_status not in processed_statuses and not _postgres_enabled():
                         if not product_id or not store_id or quantity <= 0 or not __import__("math").isfinite(quantity):
                             raise ValueError("La operacion requiere producto, local y cantidad valida")
                         if not database.execute("SELECT 1 FROM products WHERE id = ? AND tenant_id = ?", (product_id, current_tenant)).fetchone() or not database.execute("SELECT 1 FROM stores WHERE id = ? AND tenant_id = ?", (store_id, current_tenant)).fetchone():
@@ -2353,6 +2404,7 @@ class AppHandler(SimpleHTTPRequestHandler):
                     self.send_json(403, {"error": "Solo el administrador puede editar ventas"})
                     return
                 identifier = record_id(payload)
+                edited_date = sale_date(payload)
                 items = payload.get("items", [])
                 if isinstance(items, str):
                     items = json.loads(items)
@@ -2384,9 +2436,21 @@ class AppHandler(SimpleHTTPRequestHandler):
                                 database.execute("UPDATE inventarios SET cantidad = cantidad - %s, actualizado = CURRENT_TIMESTAMP WHERE local = %s AND codigo = %s", (quantity, store_id, code))
                                 database.execute("INSERT INTO movimiento_productos (movimiento_id, codigo, descripcion, cantidad, precio_unitario, precio_total, entrada, salida) VALUES (%s, %s, %s, %s, %s, %s, 0, %s)", (identifier, code, description, quantity, price, quantity * price, quantity))
                                 total += quantity * price
-                            database.execute("UPDATE movimientos SET cliente = %s, metodo_pago = %s, factura = %s WHERE id = %s", (payload.get("customerId") or payload.get("cliente") or "", str(payload.get("paymentMethod") or payload.get("metodo_pago") or ""), str(payload.get("invoiceNumber") or payload.get("factura") or ""), identifier))
+                            update_fields = "cliente = %s, metodo_pago = %s, factura = %s"
+                            update_values = [payload.get("customerId") or payload.get("cliente") or "", str(payload.get("paymentMethod") or payload.get("metodo_pago") or ""), str(payload.get("invoiceNumber") or payload.get("factura") or "")]
+                            if edited_date:
+                                update_fields += ", fecha = %s"
+                                update_values.append(edited_date)
+                            update_values.append(identifier)
+                            database.execute(f"UPDATE movimientos SET {update_fields} WHERE id = %s", tuple(update_values))
                         else:
-                            database.execute("UPDATE movimientos SET cliente = %s, metodo_pago = %s WHERE id = %s", (payload.get("customerId") or payload.get("cliente") or "", str(payload.get("paymentMethod") or payload.get("metodo_pago") or ""), identifier))
+                            update_fields = "cliente = %s, metodo_pago = %s"
+                            update_values = [payload.get("customerId") or payload.get("cliente") or "", str(payload.get("paymentMethod") or payload.get("metodo_pago") or "")]
+                            if edited_date:
+                                update_fields += ", fecha = %s"
+                                update_values.append(edited_date)
+                            update_values.append(identifier)
+                            database.execute(f"UPDATE movimientos SET {update_fields} WHERE id = %s", tuple(update_values))
                     self.send_json(200, {"ok": True, "id": identifier})
                     return
                 with connection() as database:
@@ -2410,9 +2474,21 @@ class AppHandler(SimpleHTTPRequestHandler):
                             database.execute("INSERT INTO sale_items (sale_id, product_id, quantity, unit_price, tax_rate) VALUES (?, ?, ?, ?, ?)", (identifier, product_id, quantity, price, float(item.get("taxRate", 0))))
                             database.execute("UPDATE inventory SET quantity = quantity - ? WHERE tenant_id = ? AND product_id = ? AND store_id = ?", (quantity, tenant_id(self, payload), product_id, sale[0]))
                             total += quantity * price
-                        updated = database.execute("UPDATE sales SET customer_id = ?, invoice_number = ?, payment_method = ?, total = ? WHERE id = ? AND tenant_id = ?", (payload.get("customerId"), str(payload.get("invoiceNumber", "")), str(payload.get("paymentMethod", "")), total, identifier, tenant_id(self, payload))).rowcount
+                        update_fields = "customer_id = ?, invoice_number = ?, payment_method = ?, total = ?"
+                        update_values = [payload.get("customerId"), str(payload.get("invoiceNumber", "")), str(payload.get("paymentMethod", "")), total]
+                        if edited_date:
+                            update_fields += ", created_at = ?"
+                            update_values.append(edited_date)
+                        update_values.extend([identifier, tenant_id(self, payload)])
+                        updated = database.execute(f"UPDATE sales SET {update_fields} WHERE id = ? AND tenant_id = ?", tuple(update_values)).rowcount
                     else:
-                        updated = database.execute("UPDATE sales SET customer_id = ?, invoice_number = ?, payment_method = ? WHERE id = ? AND tenant_id = ?", (payload.get("customerId"), str(payload.get("invoiceNumber", "")), str(payload.get("paymentMethod", "")), identifier, tenant_id(self, payload))).rowcount
+                        update_fields = "customer_id = ?, invoice_number = ?, payment_method = ?"
+                        update_values = [payload.get("customerId"), str(payload.get("invoiceNumber", "")), str(payload.get("paymentMethod", ""))]
+                        if edited_date:
+                            update_fields += ", created_at = ?"
+                            update_values.append(edited_date)
+                        update_values.extend([identifier, tenant_id(self, payload)])
+                        updated = database.execute(f"UPDATE sales SET {update_fields} WHERE id = ? AND tenant_id = ?", tuple(update_values)).rowcount
                     if not updated:
                         self.send_json(404, {"error": "Venta no encontrada"})
                         return
