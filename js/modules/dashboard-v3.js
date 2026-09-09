@@ -118,7 +118,7 @@ function initCharts(data) {
     createChart('creditsChart', { type:'doughnut', data:{ labels:paymentLabels, datasets:[{data:Object.values(paymentTotals),backgroundColor:paymentLabels.map(getPaymentColor),borderColor:'#FFFFFF',borderWidth:3,hoverOffset:7}]}, options:{...baseOptions,cutout:'64%',plugins:{...baseOptions.plugins,legend:{position:'bottom'}}} });
     const ranking = sellerRanking(data);
     const topSellers = ranking.slice(0,6);
-    createChart('sellerChart', { type:'doughnut', data:{ labels:topSellers.map(item => item.name), datasets:[{label:'Ventas por vendedor',data:topSellers.map(item => item.total),backgroundColor:getDynamicColors(topSellers.length),borderColor:'#FFFFFF',borderWidth:3,hoverOffset:8}]}, options:{...baseOptions,cutout:'58%',plugins:{...baseOptions.plugins,legend:{position:'bottom'}}},onClick:()=>window.dispatchEvent(new CustomEvent('open-seller-ranking'))} });
+    createChart('sellerChart', { type:'doughnut', data:{ labels:topSellers.map(item => item.name), datasets:[{label:'Ventas por vendedor',data:topSellers.map(item => item.total),backgroundColor:getDynamicColors(topSellers.length),borderColor:'#FFFFFF',borderWidth:3,hoverOffset:8}]}, options:{...baseOptions,cutout:'58%',plugins:{...baseOptions.plugins,legend:{position:'bottom'}}},onClick:()=>window.dispatchEvent(new CustomEvent('open-seller-ranking')) });
 
   }, 100);
 }

@@ -11,7 +11,7 @@ import { navItems, navGroups } from './components/sidebar.js?v=21';
 import { showToast } from './components/toast.js';
 import { table } from './components/tables.js';
 import { renderNotifications } from './components/notifications.js';
-import { renderDashboard } from './modules/dashboard-v3.js?v=24';
+import { renderDashboard } from './modules/dashboard-v3.js?v=25';
 import { canonicalSellerName, renderVentas, salesTable, normalizeSales, saleTimestamp } from './modules/ventas.js?v=23';
 import { renderFacturacion, cartTotal, productResults, customerResults } from './modules/facturacion.js?v=23';
 import { renderProductos, productTable, productMatches } from './modules/productos.js?v=20';
