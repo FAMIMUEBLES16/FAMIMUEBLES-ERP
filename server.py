@@ -2439,7 +2439,7 @@ class AppHandler(SimpleHTTPRequestHandler):
                             update_fields = "cliente = %s, metodo_pago = %s, factura = %s"
                             update_values = [payload.get("customerId") or payload.get("cliente") or "", str(payload.get("paymentMethod") or payload.get("metodo_pago") or ""), str(payload.get("invoiceNumber") or payload.get("factura") or "")]
                             if edited_date:
-                                update_fields += ", fecha = %s"
+                                update_fields += ", fecha = %s::date"
                                 update_values.append(edited_date)
                             update_values.append(identifier)
                             database.execute(f"UPDATE movimientos SET {update_fields} WHERE id = %s", tuple(update_values))
@@ -2447,11 +2447,12 @@ class AppHandler(SimpleHTTPRequestHandler):
                             update_fields = "cliente = %s, metodo_pago = %s"
                             update_values = [payload.get("customerId") or payload.get("cliente") or "", str(payload.get("paymentMethod") or payload.get("metodo_pago") or "")]
                             if edited_date:
-                                update_fields += ", fecha = %s"
+                                update_fields += ", fecha = %s::date"
                                 update_values.append(edited_date)
                             update_values.append(identifier)
                             database.execute(f"UPDATE movimientos SET {update_fields} WHERE id = %s", tuple(update_values))
-                    self.send_json(200, {"ok": True, "id": identifier})
+                    saved = database.execute("SELECT fecha FROM movimientos WHERE id = %s", (identifier,)).fetchone()
+                    self.send_json(200, {"ok": True, "id": identifier, "date": saved["fecha"] if saved else edited_date})
                     return
                 with connection() as database:
                     sale = database.execute("SELECT store_id, total FROM sales WHERE id = ? AND tenant_id = ?", (identifier, tenant_id(self, payload))).fetchone()
