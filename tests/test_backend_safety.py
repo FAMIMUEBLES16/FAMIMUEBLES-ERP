@@ -113,6 +113,78 @@ class BackendSafetyTests(unittest.TestCase):
             self.assertTrue(server.can_access(FakeHandler(), "/api/catalog/sale", "POST"))
             self.assertTrue(server.can_access(FakeHandler(), "/api/tenants", "GET"))
 
+    def test_non_admin_user_can_access_action_specific_domain_permission(self):
+        class FakeHandler:
+            headers = {"X-Tenant-ID": "tenant-default"}
+
+        fake_user = {"id": "USR-1", "role": "CAJERO", "tenant_id": "tenant-default"}
+
+        def fake_has_permission(handler, resource, action="view"):
+            return resource == "Compras" and action == "create"
+
+        with patch("server.authenticated_user", return_value=fake_user), \
+             patch("server.has_user_permission", side_effect=fake_has_permission):
+            self.assertTrue(server.can_access(FakeHandler(), "/api/domain/purchases", "POST"))
+
+    def test_non_admin_user_can_access_own_permissions_endpoint(self):
+        class FakeHandler:
+            headers = {"X-Tenant-ID": "tenant-default"}
+
+        fake_user = {"id": "USR-1", "role": "VENDEDOR", "tenant_id": "tenant-default"}
+
+        with patch("server.authenticated_user", return_value=fake_user):
+            self.assertTrue(server.can_access(FakeHandler(), "/api/users/USR-1/permissions", "GET"))
+            self.assertFalse(server.can_access(FakeHandler(), "/api/users/USR-2/permissions", "GET"))
+
+    def test_non_default_tenant_cannot_access_shared_operational_routes(self):
+        class FakeHandler:
+            headers = {"X-Tenant-ID": "tenant-other"}
+
+        fake_user = {"id": "USR-1", "role": "ADMINISTRADOR", "tenant_id": "tenant-default"}
+
+        with patch("server.authenticated_user", return_value=fake_user), \
+             patch("server._postgres_enabled", return_value=True):
+            self.assertFalse(server.can_access(FakeHandler(), "/api/catalog", "GET"))
+            self.assertFalse(server.can_access(FakeHandler(), "/api/parity/nomina", "GET"))
+            self.assertFalse(server.can_access(FakeHandler(), "/api/report-pdf/sales.pdf", "GET"))
+
+    def test_default_tenant_can_access_shared_operational_routes(self):
+        class FakeHandler:
+            headers = {"X-Tenant-ID": "tenant-default"}
+
+        fake_user = {"id": "USR-1", "role": "ADMINISTRADOR", "tenant_id": "tenant-default"}
+
+        with patch("server.authenticated_user", return_value=fake_user), \
+             patch("server._postgres_enabled", return_value=True):
+            self.assertTrue(server.can_access(FakeHandler(), "/api/catalog", "GET"))
+            self.assertTrue(server.can_access(FakeHandler(), "/api/parity/nomina", "GET"))
+
+    def test_non_admin_user_without_permission_rows_is_denied(self):
+        fake_user = {"id": "USR-1", "role": "VENDEDOR", "tenant_id": "tenant-default"}
+
+        class FakeCursor:
+            def __init__(self, value):
+                self.value = value
+
+            def fetchone(self):
+                return (self.value,)
+
+        class FakeDatabase:
+            def execute(self, query, params=()):
+                if "SELECT COUNT(*) FROM user_permissions" in query:
+                    return FakeCursor(0)
+                raise AssertionError(f"Unexpected query: {query}")
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc_val, exc_tb):
+                return False
+
+        with patch("server.authenticated_user", return_value=fake_user), \
+             patch("server.connection", return_value=FakeDatabase()):
+            self.assertFalse(server.has_user_permission(object(), "Compras", "create"))
+
 
 if __name__ == "__main__":
     unittest.main()

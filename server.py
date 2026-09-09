@@ -476,13 +476,13 @@ def authenticated_user(handler: "AppHandler") -> sqlite3.Row | None:
 def has_user_permission(handler: "AppHandler", resource: str, action: str = "view") -> bool:
     user = authenticated_user(handler)
     if not user:
-        return True
+        return False
     if user["role"] == "ADMINISTRADOR":
         return True
     with connection() as database:
         configured = database.execute("SELECT COUNT(*) FROM user_permissions WHERE tenant_id = ? AND user_id = ?", (user["tenant_id"], user["id"])).fetchone()[0] > 0
         if not configured:
-            return True
+            return False
         row = database.execute("SELECT allowed FROM user_permissions WHERE tenant_id = ? AND user_id = ? AND resource = ? AND action = ?", (user["tenant_id"], user["id"], resource, action)).fetchone()
     return bool(row and row[0])
 
@@ -515,6 +515,17 @@ def can_access(handler: "AppHandler", path: str, method: str = "GET") -> bool:
     user = authenticated_user(handler)
     if not user:
         return False
+    if _postgres_enabled() and tenant_id(handler) != DEFAULT_TENANT and (
+        path == "/api/state"
+        or path == "/api/catalog"
+        or path.startswith("/api/parity/")
+        or path.startswith("/api/report")
+    ):
+        return False
+    if path.startswith("/api/users/") and path.endswith("/permissions"):
+        requested_user_id = unquote(path.removeprefix("/api/users/").removesuffix("/permissions")).strip("/")
+        if requested_user_id == user["id"]:
+            return True
     if path.startswith("/api/users") and user["role"] != "ADMINISTRADOR":
         return False
     target = permission_target(path, method)
@@ -528,10 +539,6 @@ def can_access(handler: "AppHandler", path: str, method: str = "GET") -> bool:
         return user["role"] in {"GERENTE", "CONTADOR", "SUPERVISOR"}
     if "/domain/" in path:
         collection = path.split("/domain/", 1)[1].split("/", 1)[0]
-        resource_names = {"customers":"Clientes", "suppliers":"Proveedores", "purchases":"Compras", "credits":"Creditos", "apartados":"Apartados", "expenses":"Gastos", "returns":"Devoluciones", "supplierReturns":"Devoluciones", "stockCounts":"Inventario", "reservations":"Inventario", "warranties":"Inventario", "damagedStock":"Inventario"}
-        resource = resource_names.get(collection)
-        if resource and not has_user_permission(handler, resource):
-            return False
         finance = {"accounts-payable", "supplier-payments", "customer-accounts", "cash-sessions", "cash-movements", "bank-accounts"}
         inventory = {"returns", "supplier-returns", "stock-counts", "reservations", "warranties", "damaged-stock"}
         if collection in finance:
@@ -962,6 +969,14 @@ def _shared_state(database: _PostgresConnection) -> dict:
             state["notifications"] = saved["notifications"]
     return state
 
+def report_domain_items(database: _PostgresConnection, collection: str, current_tenant: str) -> list[dict]:
+    if _postgres_enabled() and current_tenant == DEFAULT_TENANT:
+        shared_items = _shared_domain_items(database, collection)
+        if shared_items is not None:
+            return shared_items
+    rows = database.execute("SELECT data_json FROM domain_records WHERE tenant_id = ? AND collection = ? ORDER BY created_at", (current_tenant, collection)).fetchall()
+    return [json.loads(row[0]) for row in rows]
+
 
 def _ensure_app_modules_available() -> None:
     app_root = ROOT.parent / "FAMIMUEBLES APP"
@@ -1352,8 +1367,8 @@ class AppHandler(SimpleHTTPRequestHandler):
                 self.send_json(404, {"error": "Reporte no disponible"})
                 return
             with connection() as database:
-                rows = database.execute("SELECT data_json FROM domain_records WHERE tenant_id = ? AND collection = ? ORDER BY created_at", (tenant_id(self), collection)).fetchall()
-            items = filter_report_items([json.loads(row[0]) for row in rows], (parse_qs(parsed_url.query).get("from") or [""])[0], (parse_qs(parsed_url.query).get("to") or [""])[0], (parse_qs(parsed_url.query).get("storeId") or [""])[0])
+                items = report_domain_items(database, collection, tenant_id(self))
+            items = filter_report_items(items, (parse_qs(parsed_url.query).get("from") or [""])[0], (parse_qs(parsed_url.query).get("to") or [""])[0], (parse_qs(parsed_url.query).get("storeId") or [""])[0])
             columns = sorted({key for item in items for key in item})
             output = io.StringIO()
             writer = csv.DictWriter(output, fieldnames=columns or ["id"])
@@ -1381,7 +1396,7 @@ class AppHandler(SimpleHTTPRequestHandler):
             store_filter = (filters.get("storeId") or [""])[0]
             if collection in DOMAIN_COLLECTIONS:
                 with connection() as database:
-                    items = filter_report_items([json.loads(row[0]) for row in database.execute("SELECT data_json FROM domain_records WHERE tenant_id = ? AND collection = ? ORDER BY created_at", (current_tenant, collection)).fetchall()], date_from, date_to, store_filter)
+                    items = filter_report_items(report_domain_items(database, collection, current_tenant), date_from, date_to, store_filter)
             elif collection == "sales":
                 query = "SELECT id, store_id AS storeId, customer_id AS customerId, total, payment_method AS paymentMethod, created_at AS date FROM sales WHERE tenant_id = ?"
                 params = [current_tenant]
@@ -1428,8 +1443,7 @@ class AppHandler(SimpleHTTPRequestHandler):
                 self.send_json(404, {"error": "Reporte no disponible"})
                 return
             with connection() as database:
-                rows = database.execute("SELECT data_json FROM domain_records WHERE tenant_id = ? AND collection = ? ORDER BY created_at", (tenant_id(self), collection)).fetchall()
-            items = [json.loads(row[0]) for row in rows]
+                items = report_domain_items(database, collection, tenant_id(self))
             columns = sorted({key for item in items for key in item}) or ["id"]
             body = """<!doctype html><meta charset='utf-8'><title>Reporte FAMIMUEBLES</title><style>body{font:14px Arial;color:#172b3a}h1{font-size:22px}table{border-collapse:collapse;width:100%}th,td{border:1px solid #ccd6dc;padding:7px;text-align:left}th{background:#e9f1f4}@media print{button{display:none}}</style><button onclick='print()'>Imprimir / Guardar PDF</button>"""
             body += f"<h1>FAMIMUEBLES - Reporte de {collection}</h1><table><thead><tr>{''.join(f'<th>{key}</th>' for key in columns)}</tr></thead><tbody>"
