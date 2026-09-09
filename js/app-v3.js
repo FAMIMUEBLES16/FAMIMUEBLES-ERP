@@ -11,7 +11,7 @@ import { navItems, navGroups } from './components/sidebar.js?v=21';
 import { showToast } from './components/toast.js';
 import { table } from './components/tables.js';
 import { renderNotifications } from './components/notifications.js';
-import { renderDashboard } from './modules/dashboard-v3.js?v=23';
+import { renderDashboard } from './modules/dashboard-v3.js?v=24';
 import { canonicalSellerName, renderVentas, salesTable, normalizeSales, saleTimestamp } from './modules/ventas.js?v=23';
 import { renderFacturacion, cartTotal, productResults, customerResults } from './modules/facturacion.js?v=23';
 import { renderProductos, productTable, productMatches } from './modules/productos.js?v=20';
@@ -386,9 +386,15 @@ document.addEventListener('click',async event=>{
 		try{
 			const handlers={ 'order-purchase':orderPurchase,'receive-purchase':receivePurchase,'cancel-purchase':cancelPurchase };
 			const purchase=(store.collection.purchases||[]).find(item=>String(item.id)===String(purchaseId));
-			if(action==='receive-purchase' && purchase) await persistCatalogRecord('/api/shared-purchase',{purchase,tenantId:activeTenantId()});
-			handlers[action](store.collection,purchaseId);
-			if(purchase) await persistDomainRecord('purchases',purchase);
+			if(!purchase)throw new Error('Compra no encontrada.');
+			if(action==='receive-purchase'){
+				await persistCatalogRecord('/api/shared-purchase',{purchase,tenantId:activeTenantId()});
+				purchase.status='RECIBIDA';
+				purchase.receivedAt=purchase.receivedAt||new Date().toISOString();
+			}else{
+				handlers[action](store.collection,purchaseId);
+				await persistDomainRecord('purchases',purchase);
+			}
 			store.save();
 			render();
 			showToast(action==='receive-purchase'?'Compra recibida e inventario actualizado.':action==='order-purchase'?'Compra ordenada.':'Compra cancelada.');
