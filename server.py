@@ -512,7 +512,7 @@ def permission_target(path: str, method: str) -> tuple[str, str] | None:
         return "Productos", action
     if "/catalog/store" in path:
         return "Locales", action
-    if "/catalog/inventory" in path:
+    if "/catalog/inventory" in path or "/catalog/transfer" in path:
         return "Inventario", action
     if "/report" in path:
         return "Reportes", "view"
@@ -531,6 +531,7 @@ def can_access(handler: "AppHandler", path: str, method: str = "GET") -> bool:
     if _postgres_enabled() and tenant_id(handler) != DEFAULT_TENANT and (
         path == "/api/state"
         or path == "/api/catalog"
+        or path.startswith("/api/catalog/")
         or path.startswith("/api/parity/")
     ):
         return False
@@ -1096,6 +1097,57 @@ def _create_shared_sale(database: _PostgresConnection, payload: dict, user: dict
     if credit_record:
         result["creditId"] = credit_record["id"]
     complete_idempotency(database, handler, payload, "/api/catalog/sale", 201, {"ok": True, **result})
+    return result
+
+
+def _create_shared_transfer(database: _PostgresConnection, payload: dict, user: dict, handler: "AppHandler") -> dict:
+    """Aplica un traslado web completo en una sola transaccion PostgreSQL."""
+    _, cached = claim_idempotency(database, handler, payload, "/api/catalog/transfer")
+    if cached is not None:
+        return cached
+    origin = str(payload.get("originStoreId") or payload.get("originStore") or "").strip()
+    destination = str(payload.get("destinationStoreId") or payload.get("destinationStore") or "").strip()
+    items = payload.get("items")
+    if not origin or not destination or origin == destination or not isinstance(items, list) or not items:
+        raise ValueError("El traslado requiere origen, destino y productos diferentes")
+    enforce_user_store_proxy(user, origin)
+    origin_row = database.execute("SELECT nombre FROM locales WHERE nombre = %s AND activo = TRUE", (origin,)).fetchone()
+    destination_row = database.execute("SELECT nombre FROM locales WHERE nombre = %s AND activo = TRUE", (destination,)).fetchone()
+    if not origin_row or not destination_row:
+        raise ValueError("El local de origen o destino no existe o esta inactivo")
+    origin_name = str(origin_row["nombre"])
+    destination_name = str(destination_row["nombre"])
+    quantities = {}
+    for item in items:
+        code = str(item.get("productCode") or item.get("code") or item.get("productId") or "").strip()
+        quantity = float(item.get("quantity", 0) or 0)
+        if not code or quantity <= 0 or quantity != int(quantity):
+            raise ValueError("Cada producto debe tener un codigo y una cantidad entera positiva")
+        product = database.execute("SELECT codigo, nombre_producto FROM productos WHERE codigo = %s AND UPPER(COALESCE(activo, 'SI')) <> 'NO'", (code,)).fetchone()
+        if not product:
+            raise ValueError(f"El producto {code} no existe o esta inactivo")
+        canonical_code = str(product["codigo"])
+        entry = quantities.setdefault(canonical_code, {"description": product["nombre_producto"], "quantity": 0})
+        entry["quantity"] += int(quantity)
+    for code, item in quantities.items():
+        stock = database.execute("SELECT cantidad FROM inventarios WHERE local = %s AND codigo = %s FOR UPDATE", (origin_name, code)).fetchone()
+        if not stock or int(stock["cantidad"] or 0) < item["quantity"]:
+            available = int(stock["cantidad"] or 0) if stock else 0
+            raise ValueError(f"Stock insuficiente para {code}: disponible {available}, solicitado {item['quantity']}")
+    movement = database.execute(
+        "INSERT INTO movimientos (tipo, estado, local_origen, local_destino, empleado, vendedor, referencia, observacion) VALUES ('TRASLADO', 'COMPLETADO', %s, %s, %s, %s, %s, %s) RETURNING id",
+        (origin_name, destination_name, str(user.get("username") or user.get("id") or "ERP"), str(user.get("username") or "ERP"), str(payload.get("transferId") or ""), "TRASLADO | Registrado desde ERP"),
+    ).fetchone()
+    if not movement:
+        raise RuntimeError("No se pudo crear el movimiento de traslado")
+    movement_id = movement[0]
+    for code, item in quantities.items():
+        quantity = item["quantity"]
+        database.execute("UPDATE inventarios SET cantidad = cantidad - %s, actualizado = CURRENT_TIMESTAMP WHERE local = %s AND codigo = %s", (quantity, origin_name, code))
+        database.execute("INSERT INTO inventarios (local, codigo, descripcion, cantidad) VALUES (%s, %s, %s, %s) ON CONFLICT (local, codigo) DO UPDATE SET cantidad = inventarios.cantidad + EXCLUDED.cantidad, actualizado = CURRENT_TIMESTAMP", (destination_name, code, item["description"], quantity))
+        database.execute("INSERT INTO movimiento_productos (movimiento_id, codigo, descripcion, cantidad, entrada, salida) VALUES (%s, %s, %s, %s, %s, %s)", (movement_id, code, item["description"], quantity, quantity, quantity))
+    result = {"ok": True, "id": movement_id, "status": "RECIBIDO", "items": [{"productCode": code, "quantity": item["quantity"]} for code, item in quantities.items()]}
+    complete_idempotency(database, handler, payload, "/api/catalog/transfer", 201, result)
     return result
 
 
@@ -1810,6 +1862,13 @@ class AppHandler(SimpleHTTPRequestHandler):
                     result = _create_shared_purchase_entry(database, payload, authenticated_user(self), self)
                 self.send_json(201, result)
                 return
+            if path == "/api/catalog/transfer":
+                if not _postgres_enabled():
+                    raise ValueError("El traslado compartido requiere PostgreSQL")
+                with connection() as database:
+                    result = _create_shared_transfer(database, payload, authenticated_user(self), self)
+                self.send_json(201, result)
+                return
             if path == "/api/catalog/inventory-movement":
                 if _postgres_enabled():
                     product_id = str(payload.get("productId", "")).strip()
@@ -2263,11 +2322,14 @@ class AppHandler(SimpleHTTPRequestHandler):
                 for line in lines:
                     stock = database.execute("SELECT cantidad FROM inventarios WHERE local = %s AND codigo = %s FOR UPDATE", (movement["local_origen"], line["codigo"])).fetchone()
                     if not stock or float(stock["cantidad"] or 0) < float(line["cantidad"] or 0):
-                        raise ValueError("No se puede eliminar la entrada porque el stock actual es menor que la cantidad registrada")
+                        available = float(stock["cantidad"] or 0) if stock else 0
+                        self.send_json(409, {"error": f"No se puede eliminar la compra {identifier}: el stock de {line['codigo']} es {available} y se necesitan {line['cantidad']}. Primero revise ventas o traslados relacionados."})
+                        return
                 for line in lines:
                     database.execute("UPDATE inventarios SET cantidad = cantidad - %s, actualizado = CURRENT_TIMESTAMP WHERE local = %s AND codigo = %s", (line["cantidad"], movement["local_origen"], line["codigo"]))
                 database.execute("DELETE FROM movimiento_productos WHERE movimiento_id = %s", (identifier,))
                 database.execute("DELETE FROM movimientos WHERE id = %s", (identifier,))
+                database.execute("INSERT INTO audit_events (action, collection, record_id, data_json) VALUES (%s, %s, %s, %s)", ("DELETE", "entries", identifier, "{}"))
             self.send_json(200, {"ok": True, "deleted": True})
             return
         if path.startswith("/api/catalog/store/"):
@@ -2401,13 +2463,59 @@ class AppHandler(SimpleHTTPRequestHandler):
                     self.send_json(200, {"ok": True, "id": identifier, "updated": True})
                     return
                 with connection() as database:
-                    movement = database.execute("SELECT id, tipo FROM movimientos WHERE id = %s FOR UPDATE", (identifier,)).fetchone()
+                    movement = database.execute("SELECT id, tipo, local_origen FROM movimientos WHERE id = %s FOR UPDATE", (identifier,)).fetchone()
                     if not movement or str(movement["tipo"] or "").upper() != "ENTRADA":
                         self.send_json(404, {"error": "Entrada no encontrada"})
                         return
+                    old_lines = database.execute("SELECT codigo, descripcion, cantidad, precio_unitario, precio_total FROM movimiento_productos WHERE movimiento_id = %s FOR UPDATE", (identifier,)).fetchall()
+                    raw_items = payload.get("items")
+                    if isinstance(raw_items, str):
+                        raw_items = json.loads(raw_items)
+                    if not isinstance(raw_items, list) or not raw_items:
+                        raise ValueError("La entrada debe conservar al menos un producto")
+                    target_local = str(payload.get("local") or payload.get("local_origen") or payload.get("storeId") or movement["local_origen"] or "").strip()
+                    local = database.execute("SELECT nombre FROM locales WHERE (nombre = %s OR codigo = %s) AND activo = TRUE", (target_local, target_local)).fetchone()
+                    if not local:
+                        raise ValueError("El local seleccionado no existe o esta inactivo")
+                    target_local = str(local["nombre"])
+                    old_effects = {}
+                    for line in old_lines:
+                        key = (str(movement["local_origen"]), str(line["codigo"]))
+                        old_effects[key] = old_effects.get(key, 0) - int(line["cantidad"] or 0)
+                    normalized = {}
+                    for item in raw_items:
+                        code = str(item.get("productId") or item.get("codigo") or item.get("code") or "").strip()
+                        quantity = int(float(item.get("quantity") or item.get("cantidad") or 0))
+                        unit_cost = int(float(item.get("unitCost") or item.get("precio_unitario") or item.get("price") or 0))
+                        product = database.execute("SELECT codigo, nombre_producto FROM productos WHERE codigo = %s AND UPPER(COALESCE(activo, 'SI')) <> 'NO'", (code,)).fetchone()
+                        if not product or quantity <= 0 or unit_cost < 0:
+                            raise ValueError("Producto, cantidad y costo de entrada invalidos")
+                        key = (target_local, str(product["codigo"]))
+                        entry = normalized.setdefault(key, {"description": product["nombre_producto"], "quantity": 0, "unitCost": unit_cost})
+                        entry["quantity"] += quantity
+                    for (local_name, code), effect in old_effects.items():
+                        old_effects[(local_name, code)] = effect
+                    for key, item in normalized.items():
+                        old_effects[key] = old_effects.get(key, 0) + item["quantity"]
+                    for (local_name, code), effect in old_effects.items():
+                        stock = database.execute("SELECT cantidad FROM inventarios WHERE local = %s AND codigo = %s FOR UPDATE", (local_name, code)).fetchone()
+                        current = int(stock["cantidad"] or 0) if stock else 0
+                        if current + effect < 0:
+                            raise ValueError(f"Stock insuficiente para actualizar {code} en {local_name}")
+                    for (local_name, code), effect in old_effects.items():
+                        if effect == 0:
+                            continue
+                        item = normalized.get((local_name, code))
+                        if item and effect > 0:
+                            database.execute("INSERT INTO inventarios (local, codigo, descripcion, cantidad) VALUES (%s, %s, %s, %s) ON CONFLICT (local, codigo) DO UPDATE SET cantidad = inventarios.cantidad + EXCLUDED.cantidad, actualizado = CURRENT_TIMESTAMP", (local_name, code, item["description"], effect))
+                        else:
+                            database.execute("UPDATE inventarios SET cantidad = cantidad + %s, actualizado = CURRENT_TIMESTAMP WHERE local = %s AND codigo = %s", (effect, local_name, code))
+                    database.execute("DELETE FROM movimiento_productos WHERE movimiento_id = %s", (identifier,))
+                    for (local_name, code), item in normalized.items():
+                        database.execute("INSERT INTO movimiento_productos (movimiento_id, codigo, descripcion, cantidad, precio_unitario, precio_total, entrada, salida) VALUES (%s, %s, %s, %s, %s, %s, %s, 0)", (identifier, code, item["description"], item["quantity"], item["unitCost"], item["quantity"] * item["unitCost"], item["quantity"]))
                     updated = database.execute(
                         "UPDATE movimientos SET estado = %s, local_origen = %s, empleado = %s, vendedor = %s, factura = %s, referencia = %s, observacion = %s WHERE id = %s",
-                        (str(payload.get("estado") or payload.get("status") or "COMPLETADO"), str(payload.get("local") or payload.get("local_origen") or ""), str(payload.get("supplier_name") or payload.get("supplierName") or payload.get("empleado") or ""), str(payload.get("vendedor") or ""), str(payload.get("factura") or payload.get("supplierInvoice") or ""), str(payload.get("referencia") or ""), str(payload.get("observacion") or payload.get("notes") or ""), identifier),
+                        (str(payload.get("estado") or payload.get("status") or "COMPLETADO"), target_local, str(payload.get("supplier_name") or payload.get("supplierName") or payload.get("empleado") or ""), str(payload.get("vendedor") or ""), str(payload.get("factura") or payload.get("supplierInvoice") or ""), str(payload.get("referencia") or ""), str(payload.get("observacion") or payload.get("notes") or ""), identifier),
                     ).rowcount
                 self.send_json(200, {"ok": True, "id": identifier, "updated": bool(updated)})
                 return
