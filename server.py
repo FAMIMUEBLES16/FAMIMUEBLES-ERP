@@ -621,7 +621,35 @@ def specialized_report_rows(database: _PostgresConnection, report_name: str, que
     query, columns = queries.get(report_name, (None, None))
     if not query:
         raise ValueError("Reporte especializado no disponible")
-    rows = database.execute(query).fetchall()
+    report_filters = []
+    report_params = []
+    if date_from and report_name in {"gastos", "gasolina", "historial-empleado"}:
+        report_filters.append("fecha::date >= %s")
+        report_params.append(date_from)
+    if date_to and report_name in {"gastos", "gasolina", "historial-empleado"}:
+        report_filters.append("fecha::date <= %s")
+        report_params.append(date_to)
+    if local and report_name == "historial-empleado":
+        report_filters.append("COALESCE(local_origen, '') = %s")
+        report_params.append(local)
+    if vendedor and report_name == "gastos":
+        report_filters.append("COALESCE(usuario, '') ILIKE %s")
+        report_params.append(f"%{vendedor}%")
+    elif vendedor and report_name == "gasolina":
+        report_filters.append("COALESCE(conductor, '') ILIKE %s")
+        report_params.append(f"%{vendedor}%")
+    elif vendedor and report_name == "historial-empleado":
+        report_filters.append("COALESCE(vendedor, '') ILIKE %s")
+        report_params.append(f"%{vendedor}%")
+    if report_filters:
+        where_clause = ' AND '.join(report_filters)
+        order_marker = ' ORDER BY '
+        if order_marker in query:
+            base_query, order_clause = query.split(order_marker, 1)
+            query = f"{base_query} WHERE {where_clause} ORDER BY {order_clause}"
+        else:
+            query = f"{query} WHERE {where_clause}"
+    rows = database.execute(query, tuple(report_params)).fetchall()
     return columns, [[row[column] for column in columns] for row in rows]
 
 

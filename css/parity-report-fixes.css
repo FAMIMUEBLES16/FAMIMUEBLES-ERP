@@ -1,0 +1,17 @@
+/* Ajustes de paridad y reportes: los filtros se mantienen en una fila amplia y se adaptan en pantallas estrechas. */
+.parity-filters, .report-filter-row { display:grid; grid-template-columns:repeat(5, minmax(130px, 1fr)); align-items:end; gap:10px; }
+.report-filter-row { grid-template-columns:repeat(3, minmax(160px, 1fr)); }
+.parity-filters .input-label, .report-filter-row .input-label { min-width:0; margin:0; }
+.parity-report-actions { display:flex; flex-wrap:wrap; gap:8px; margin:18px 0 0; }
+.parity-report-actions .outline { text-transform:capitalize; }
+.parity-report-result { min-height:64px; margin-top:18px; padding-top:16px; border-top:1px solid var(--fm-border, #e4ebf5); overflow:auto; }
+.parity-report-result .panel-head { align-items:center; gap:12px; }
+.parity-report-result .quick-actions { display:flex; flex-wrap:wrap; gap:6px; margin:0 0 0 auto; }
+@media (max-width: 900px) {
+  .parity-filters, .report-filter-row { grid-template-columns:repeat(2, minmax(140px, 1fr)); }
+}
+@media (max-width: 600px) {
+  .parity-filters, .report-filter-row { grid-template-columns:1fr; }
+  .parity-report-result .panel-head { align-items:flex-start; flex-direction:column; }
+  .parity-report-result .quick-actions { margin:0; }
+}

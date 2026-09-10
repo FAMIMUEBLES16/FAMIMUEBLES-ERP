@@ -2,6 +2,9 @@ import { page, table, badge, money } from '../components/tables.js';
 
 export function renderParidad(data = {}) {
   const stores = (data.stores || []).map(item => `<option value="${item.name || item.id}">${item.name || item.id}</option>`).join('');
+  const sellers = sellerOptions(data.users || [], data.sales || []);
+  const paymentMethods = ['Efectivo', 'Transferencia', 'Tarjeta', 'Sistecrédito', 'Crédito interno FAMIMUEBLES', 'Apartado'];
+  const methodOptions = paymentMethods.map(method => `<option value="${method}">${method}</option>`).join('');
   return page('PARIDAD OPERATIVA', 'Funciones del bot', '', `
     <p class="date-line">Operaciones compartidas con PostgreSQL para nómina, conteos, cartera y Sistecrédito.</p>
     <div class="report-grid">
@@ -9,9 +12,9 @@ export function renderParidad(data = {}) {
       <article class="report-card"><span class="report-icon">▦</span><h3>Conteo físico</h3><p>Registra diferencias y aplica ajustes confirmados.</p><button class="primary" data-action="parity-count">Abrir</button></article>
       <article class="report-card"><span class="report-icon">◉</span><h3>Sistecrédito</h3><p>Registra operaciones y consulta su historial.</p><button class="primary" data-action="parity-sistecredito">Abrir</button></article>
     </div>
-    <section class="panel"><div class="panel-head"><h3>Reportes especializados</h3></div><div class="filter-row"><label class="input-label">Desde<input class="field" id="parity-from" type="date"></label><label class="input-label">Hasta<input class="field" id="parity-to" type="date"></label><label class="input-label">Local<select class="field" id="parity-local"><option value="">Todos</option>${stores}</select></label><label class="input-label">Vendedor<input class="field" id="parity-vendedor"></label><label class="input-label">Método de pago<input class="field" id="parity-method"></label></div><div class="quick-actions">
+    <section class="panel"><div class="panel-head"><h3>Reportes especializados</h3></div><div class="filter-row parity-filters"><label class="input-label">Desde<input class="field" id="parity-from" type="date"></label><label class="input-label">Hasta<input class="field" id="parity-to" type="date"></label><label class="input-label">Local<select class="field" id="parity-local"><option value="">Todos</option>${stores}</select></label><label class="input-label">Vendedor<select class="field" id="parity-vendedor"><option value="">Todos</option>${sellers}</select></label><label class="input-label">Método de pago<select class="field" id="parity-method"><option value="">Todos</option>${methodOptions}</select></label></div><div class="quick-actions parity-report-actions">
       ${['disponibilidad','inventario-bajo','sistecredito','gastos','gasolina','historial-empleado'].map(report => `<button class="outline" data-action="parity-report" data-report="${report}">${report.replaceAll('-', ' ')}</button>`).join('')}
-    </div></section>
+    </div><div id="parity-report-result" class="parity-report-result"><p class="muted">Selecciona un reporte para ver la información aquí.</p></div></section>
     <template id="parity-stores">${stores}</template>`);
 }
 
@@ -34,7 +37,18 @@ export function countModal(data = {}) {
 
 export function sistecreditoModal(data = {}) {
   const stores = (data.stores || []).map(item => `<option value="${item.name || item.id}">${item.name || item.id}</option>`).join('');
-  return `<div class="modal-backdrop"><form class="modal" id="parity-sistecredito-form"><button type="button" class="modal-close">x</button><p class="eyebrow">SISTECREDITO</p><h2>Registrar operación</h2><label class="input-label">Vendedor<input class="field" name="vendedor" required></label><label class="input-label">Local<select class="field" name="local">${stores}</select></label><label class="input-label">Valor<input class="field" name="amount" type="number" min="1" required></label><button class="primary wide">Guardar</button><div data-parity-result></div></form></div>`;
+  const sellers = sellerOptions(data.users || [], data.sales || []);
+  const methods = ['Efectivo', 'Transferencia', 'Tarjeta', 'Sistecrédito', 'Crédito interno FAMIMUEBLES', 'Apartado'].map(method => `<option value="${method}">${method}</option>`).join('');
+  return `<div class="modal-backdrop"><form class="modal" id="parity-sistecredito-form"><button type="button" class="modal-close">×</button><p class="eyebrow">SISTECREDITO</p><h2>Registrar operación</h2><label class="input-label">Vendedor<select class="field" name="vendedor" required><option value="">Selecciona un vendedor</option>${sellers}</select></label><label class="input-label">Local<select class="field" name="local">${stores}</select></label><label class="input-label">Método de pago<select class="field" name="metodo_pago" required>${methods}</select></label><label class="input-label">Valor<input class="field" name="amount" type="number" min="1" required></label><button class="primary wide">Guardar</button><div data-parity-result></div></form></div>`;
+}
+
+function sellerOptions(users = [], sales = []) {
+  const names = new Set();
+  [...users, ...sales].forEach(item => {
+    const name = item.name || item.username || item.nombre || item.vendedor || item.seller || item.empleado;
+    if (String(name || '').trim()) names.add(String(name).trim());
+  });
+  return [...names].sort((left, right) => left.localeCompare(right, 'es')).map(name => `<option value="${name}">${name}</option>`).join('');
 }
 
 export function payrollConfigModal() {
