@@ -28,7 +28,7 @@ function StartNgrok {
         }
     }
 
-    Start-Process -FilePath $ngrok -ArgumentList 'http --domain=crouch-untitled-harness.ngrok-free.dev 8024 --log "C:\Users\mijad\OneDrive\Documentos\FAMIMUEBLES ERP\logs\ngrok-autostart.log"' -WorkingDirectory (Split-Path -Parent $ngrok) -WindowStyle Hidden | Out-Null
+    Start-Process -FilePath $ngrok -ArgumentList 'http --domain=crouch-untitled-harness.ngrok-free.dev 127.0.0.1:8024 --log "C:\Users\mijad\OneDrive\Documentos\FAMIMUEBLES ERP\logs\ngrok-autostart.log"' -WorkingDirectory (Split-Path -Parent $ngrok) -WindowStyle Hidden | Out-Null
     Start-Sleep -Seconds 5
 }
 
