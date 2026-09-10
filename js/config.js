@@ -15,7 +15,7 @@ export const API_BASE_URL = configuredApiBase && !hasDeprecatedApiBase
   : isLocalHostname
     ? LOCAL_API_URL
     : isGithubPages
-      ? ''
+      ? PUBLIC_API_URL
       : PUBLIC_API_URL;
 
 export const API_MODE = API_BASE_URL ? 'api' : 'static';
