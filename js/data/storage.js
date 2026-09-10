@@ -1,7 +1,7 @@
 import { createAccountPayable } from '../services/accounts-payable-service.js?v=14';
 import { demoState } from './demo-data.js';
 import { api } from '../services/api-client.js';
-import { API_BASE_URL } from '../config.js?v=5';
+import { API_BASE_URL } from '../config.js?v=6';
 
 export const TENANT_STORAGE_KEY = 'famimuebles-tenant-id';
 export function activeTenantId() { return localStorage.getItem(TENANT_STORAGE_KEY) || 'tenant-default'; }
@@ -91,7 +91,13 @@ function nextId(collection,prefix) { const max=collection.reduce((value,item)=>M
 export function loadState() {
   if (!isStaticDeployment()) return normalizeState(createEmptyState());
   const saved = localStorage.getItem('famimuebles-static-state');
-  return normalizeState(saved ? JSON.parse(saved) : structuredClone(demoState));
+  if (!saved) return normalizeState(structuredClone(demoState));
+  try {
+    return normalizeState(JSON.parse(saved));
+  } catch (error) {
+    localStorage.removeItem('famimuebles-static-state');
+    return normalizeState(structuredClone(demoState));
+  }
 }
 export function saveState(state) {
   if (!state || typeof state !== 'object') return Promise.resolve(false);
