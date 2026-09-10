@@ -40,7 +40,7 @@ export async function apiRequest(path, options = {}) {
   const timeout = setTimeout(() => controller.abort(), options.timeout || REQUEST_TIMEOUT_MS);
   const headers = { Accept: 'application/json', 'ngrok-skip-browser-warning': 'true', ...authHeaders(), ...(options.headers || {}) };
   try {
-    const response = await fetch(buildUrl(path), { ...options, headers, signal: controller.signal });
+    const response = await fetch(buildUrl(path), { ...options, headers, cache: 'no-store', signal: controller.signal });
     return await parseResponse(response);
   } catch (error) {
     if (error.name === 'AbortError') throw new ApiError('El servidor FAMIMUEBLES tardo demasiado en responder.', 0, 'TIMEOUT');
@@ -56,7 +56,7 @@ export async function downloadRequest(path, options = {}) {
   const timeout = setTimeout(() => controller.abort(), options.timeout || REQUEST_TIMEOUT_MS);
   const headers = { 'ngrok-skip-browser-warning': 'true', ...authHeaders(), ...(options.headers || {}) };
   try {
-    const response = await fetch(buildUrl(path), { ...options, headers, signal: controller.signal });
+    const response = await fetch(buildUrl(path), { ...options, headers, cache: 'no-store', signal: controller.signal });
     if (!response.ok) {
       let message = `La API respondio con un error (${response.status}).`;
       try { message = (await response.json()).error || message; } catch (error) { /* respuesta no JSON */ }
