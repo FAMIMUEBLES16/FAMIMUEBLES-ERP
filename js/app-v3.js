@@ -45,7 +45,7 @@ import { accountsPayableDetail } from './modules/accounts-payable-detail.js?v=14
 import { calculateBalance, registerPayment as registerSupplierPayment, updateAccountPayableStatus } from './services/accounts-payable-service.js?v=14';
 import { renderOperaciones, advancedModal, nextAdvancedId } from './modules/operaciones.js?v=2';
 import { renderParidad, payrollModal, payrollConfigModal, countModal, sistecreditoModal, formatParityResult } from './modules/paridad.js?v=1';
-import { api } from './services/api-client.js?v=7';
+import { api } from './services/api-client.js?v=9';
 
 const state = { cart:[], payment:'Efectivo', customerId:'CLI-00001', storeId:store.collection.stores[0]?.id || '', transport:0, transportDestination:'', transportNote:'' };
 let sharedRefreshInFlight = false;
