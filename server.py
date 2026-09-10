@@ -841,6 +841,21 @@ def _shared_domain_items(database: _PostgresConnection, collection: str) -> list
         query = "SELECT id_abono AS id, credito_id, fecha, usuario, vendedor, local, valor_abono, saldo_anterior, saldo_nuevo, metodo_pago, observacion, numero_recibo FROM abonos_creditos ORDER BY fecha DESC"
     elif collection == "paymentMethods":
         query = "SELECT DISTINCT metodo_pago AS name FROM movimientos WHERE NULLIF(BTRIM(COALESCE(metodo_pago, '')), '') IS NOT NULL ORDER BY name"
+    elif collection == "transfers":
+        query = """
+            SELECT m.id, m.fecha AS created_at, m.estado, m.local_origen, m.local_destino,
+                   m.empleado, m.vendedor, m.referencia, m.observacion,
+                   COALESCE(json_agg(json_build_object(
+                       'productId', mp.codigo, 'name', mp.descripcion,
+                       'quantity', mp.cantidad, 'entrada', mp.entrada, 'salida', mp.salida
+                   ) ORDER BY mp.codigo) FILTER (WHERE mp.codigo IS NOT NULL), '[]'::json) AS items
+            FROM movimientos m
+            LEFT JOIN movimiento_productos mp ON mp.movimiento_id = m.id
+            WHERE UPPER(COALESCE(m.tipo, '')) = 'TRASLADO'
+            GROUP BY m.id, m.fecha, m.estado, m.local_origen, m.local_destino,
+                     m.empleado, m.vendedor, m.referencia, m.observacion
+            ORDER BY m.fecha DESC, m.id DESC
+        """
     elif collection == "credits":
         credit_columns = {
             row["column_name"]
@@ -909,10 +924,7 @@ def _shared_domain_items(database: _PostgresConnection, collection: str) -> list
                 for item in items:
                     item["balance"] = balances.get(str(item.get("name") or item.get("customer") or "").strip().lower(), 0)
         if collection == "transfers":
-            stored = database.execute(
-                "SELECT data_json FROM domain_records WHERE tenant_id = %s AND collection = %s ORDER BY created_at",
-                (DEFAULT_TENANT, collection),
-            ).fetchall()
+            stored = database.execute("SELECT data_json FROM domain_records WHERE tenant_id = %s AND collection = %s ORDER BY created_at", (DEFAULT_TENANT, collection)).fetchall()
             existing_ids = {str(item.get("id")) for item in items}
             items.extend(
                 json.loads(row[0])
@@ -2396,6 +2408,28 @@ class AppHandler(SimpleHTTPRequestHandler):
         identifier = unquote(parts[1]) if len(parts) == 2 else ""
         if collection not in DOMAIN_COLLECTIONS or not identifier:
             self.send_json(400, {"error": "Coleccion o id invalido"})
+            return
+        if collection == "transfers" and _postgres_enabled():
+            with connection() as database:
+                movement = database.execute("SELECT id, tipo, local_origen, local_destino FROM movimientos WHERE id = %s FOR UPDATE", (identifier,)).fetchone()
+                if movement and str(movement["tipo"] or "").upper() == "TRASLADO":
+                    lines = database.execute("SELECT codigo, cantidad FROM movimiento_productos WHERE movimiento_id = %s FOR UPDATE", (identifier,)).fetchall()
+                    for line in lines:
+                        stock = database.execute("SELECT cantidad FROM inventarios WHERE local = %s AND codigo = %s FOR UPDATE", (movement["local_destino"], line["codigo"])).fetchone()
+                        if not stock or float(stock["cantidad"] or 0) < float(line["cantidad"] or 0):
+                            available = float(stock["cantidad"] or 0) if stock else 0
+                            self.send_json(409, {"error": f"No se puede eliminar el traslado: el destino tiene {available} de {line['codigo']} y se necesitan {line['cantidad']}."})
+                            return
+                    for line in lines:
+                        database.execute("UPDATE inventarios SET cantidad = cantidad - %s, actualizado = CURRENT_TIMESTAMP WHERE local = %s AND codigo = %s", (line["cantidad"], movement["local_destino"], line["codigo"]))
+                        database.execute("UPDATE inventarios SET cantidad = cantidad + %s, actualizado = CURRENT_TIMESTAMP WHERE local = %s AND codigo = %s", (line["cantidad"], movement["local_origen"], line["codigo"]))
+                    database.execute("DELETE FROM movimiento_productos WHERE movimiento_id = %s", (identifier,))
+                    database.execute("DELETE FROM movimientos WHERE id = %s", (identifier,))
+                    database.execute("INSERT INTO audit_events(action, collection, record_id, data_json) VALUES(%s, %s, %s, %s)", ("DELETE", "transfers", identifier, "{}"))
+                    self.send_json(200, {"ok": True, "deleted": True, "reverted": True})
+                    return
+                deleted = database.execute("DELETE FROM domain_records WHERE tenant_id = %s AND collection = %s AND id = %s", (tenant_id(self), collection, identifier)).rowcount
+            self.send_json(200, {"ok": True, "deleted": bool(deleted), "reverted": False})
             return
         with connection() as database:
             deleted = database.execute("DELETE FROM domain_records WHERE tenant_id = ? AND collection = ? AND id = ?", (tenant_id(self), collection, identifier)).rowcount
