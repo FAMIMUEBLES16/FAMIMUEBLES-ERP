@@ -94,7 +94,7 @@ function createChart(canvasId, config) {
 function initCharts(data) {
   setTimeout(() => {
     if (!window.Chart) return;
-    const baseOptions = { responsive:true, maintainAspectRatio:false, animation:{duration:550}, interaction:{mode:'index',intersect:false}, plugins:{legend:{labels:{usePointStyle:true,boxWidth:8,padding:14,font:{size:10}}}, tooltip:{mode:'index',intersect:false,callbacks:{title:items => items[0]?.label || '',label:context => `${context.dataset.label || context.label || ''}: ${money(context.parsed.y ?? context.parsed ?? 0)}`}}} };
+    const baseOptions = { responsive:true, maintainAspectRatio:false, animation:{duration:550}, interaction:{mode:'index',intersect:false}, plugins:{legend:{labels:{usePointStyle:true,boxWidth:8,padding:14,font:{size:10}}}, tooltip:{mode:'index',intersect:false,callbacks:{title:items => items[0]?.label || '',label:context => `${context.dataset.label || context.label || ''}: ${context.dataset.yAxisID === 'transactions' ? `${context.parsed.y} transacciones` : money(context.parsed.y ?? context.parsed ?? 0)}`}}} };
     const last7Days = Array.from({length:7}, (_,i) => {
       const d = new Date();
       d.setDate(d.getDate() - (6-i));
@@ -103,7 +103,23 @@ function initCharts(data) {
     const salesByDay = last7Days.map(day => {
       return data.sales.filter(s => saleDate(s).startsWith(day)).reduce((sum,s) => sum + safeNumber(s.total), 0);
     });
-    createChart('salesChart', { type:'line', data:{ labels:last7Days.map(d => d.slice(5).replace('-', '/')), datasets:[{label:'Ventas',data:salesByDay,borderColor:SALES_COLOR,backgroundColor:'rgba(37, 99, 235, 0.12)',pointBackgroundColor:SALES_COLOR,pointBorderColor:'#FFFFFF',pointBorderWidth:2,pointRadius:4,fill:true,tension:0.35}]}, options:{...baseOptions, scales:{x:{grid:{display:false}},y:{beginAtZero:true,ticks:{callback:value => money(value, true)}}}} });
+    const salesCountByDay = last7Days.map(day => data.sales.filter(sale => saleDate(sale).startsWith(day)).length);
+    const previous7Days = last7Days.map(day => {
+      const date = new Date(`${day}T00:00:00`);
+      date.setDate(date.getDate() - 7);
+      return date.toISOString().slice(0, 10);
+    });
+    const previousSalesByDay = previous7Days.map(day => data.sales.filter(sale => saleDate(sale).startsWith(day)).reduce((sum,sale) => sum + safeNumber(sale.total), 0));
+    const movingAverage = salesByDay.map((value,index) => {
+      const window = salesByDay.slice(Math.max(0,index - 2), index + 1);
+      return window.reduce((sum,item) => sum + item, 0) / window.length;
+    });
+    createChart('salesChart', { type:'line', data:{ labels:last7Days.map(d => d.slice(5).replace('-', '/')), datasets:[
+      {label:'Ventas actuales',data:salesByDay,borderColor:SALES_COLOR,backgroundColor:'rgba(37, 99, 235, 0.12)',pointBackgroundColor:SALES_COLOR,pointBorderColor:'#FFFFFF',pointBorderWidth:2,pointRadius:4,fill:true,tension:0.35},
+      {label:'Promedio móvil',data:movingAverage,borderColor:'#F59E0B',backgroundColor:'transparent',pointBackgroundColor:'#F59E0B',pointRadius:3,borderWidth:2,borderDash:[6,4],fill:false,tension:0.35},
+      {label:'Periodo anterior',data:previousSalesByDay,borderColor:'#10B981',backgroundColor:'transparent',pointBackgroundColor:'#10B981',pointRadius:3,borderWidth:2,fill:false,tension:0.35},
+      {label:'Transacciones',data:salesCountByDay,yAxisID:'transactions',borderColor:'#06B6D4',backgroundColor:'transparent',pointBackgroundColor:'#06B6D4',pointRadius:3,borderWidth:2,fill:false,tension:0.35}
+    ]}, options:{...baseOptions, scales:{x:{grid:{display:false}},y:{beginAtZero:true,ticks:{callback:value => money(value, true)}},transactions:{position:'right',beginAtZero:true,grid:{drawOnChartArea:false},ticks:{precision:0}}}} });
     
     const storeSales = data.stores.map(store => {
       const total = data.sales.filter(sale => String(sale.storeId) === String(store.id)).reduce((sum, sale) => sum + safeNumber(sale.total), 0);
