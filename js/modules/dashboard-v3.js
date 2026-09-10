@@ -1,6 +1,6 @@
 import { money, page } from '../components/tables.js';
 import { icons } from '../components/sidebar.js';
-import { formatDate } from '../utils/dates.js';
+import { calendarDate, formatDate, shiftCalendarDate } from '../utils/dates.js';
 import { canonicalSellerName, normalizeSales } from './ventas.js';
 
 const CHART_COLORS = [
@@ -55,9 +55,9 @@ const sellerValue = sale => sale.seller || sale.vendedor || sale.empleado || sal
 const sellerName = (data, sale) => { const value = sellerValue(sale); const user = (data.users || []).find(item => String(item.id) === String(value) || String(item.username) === String(value)); return canonicalSellerName(user?.name || user?.username || value); };
 const sellerRanking = data => {
   const ranking = new Map();
-  const currentMonth = new Date().toISOString().slice(0, 7);
+  const currentMonth = calendarDate().slice(0, 7);
   normalizeSales(data.sales || data.ventas || [])
-    .filter(sale => (saleDate(sale) || '').startsWith(currentMonth))
+    .filter(sale => calendarDate(saleDate(sale)).startsWith(currentMonth))
     .forEach(sale => {
       const name = sellerName(data, sale);
       const entry = ranking.get(name) || { name, count: 0, total: 0 };
@@ -95,21 +95,14 @@ function initCharts(data) {
   setTimeout(() => {
     if (!window.Chart) return;
     const baseOptions = { responsive:true, maintainAspectRatio:false, animation:{duration:550}, interaction:{mode:'index',intersect:false}, plugins:{legend:{labels:{usePointStyle:true,boxWidth:8,padding:14,font:{size:10}}}, tooltip:{mode:'index',intersect:false,callbacks:{title:items => items[0]?.label || '',label:context => `${context.dataset.label || context.label || ''}: ${context.dataset.yAxisID === 'transactions' ? `${context.parsed.y} transacciones` : money(context.parsed.y ?? context.parsed ?? 0)}`}}} };
-    const last7Days = Array.from({length:7}, (_,i) => {
-      const d = new Date();
-      d.setDate(d.getDate() - (6-i));
-      return d.toISOString().slice(0,10);
-    });
+    const today = calendarDate();
+    const last7Days = Array.from({length:7}, (_, i) => shiftCalendarDate(today, i - 6));
     const salesByDay = last7Days.map(day => {
-      return data.sales.filter(s => saleDate(s).startsWith(day)).reduce((sum,s) => sum + safeNumber(s.total), 0);
+      return data.sales.filter(s => calendarDate(saleDate(s)) === day).reduce((sum,s) => sum + safeNumber(s.total), 0);
     });
-    const salesCountByDay = last7Days.map(day => data.sales.filter(sale => saleDate(sale).startsWith(day)).length);
-    const previous7Days = last7Days.map(day => {
-      const date = new Date(`${day}T00:00:00`);
-      date.setDate(date.getDate() - 7);
-      return date.toISOString().slice(0, 10);
-    });
-    const previousSalesByDay = previous7Days.map(day => data.sales.filter(sale => saleDate(sale).startsWith(day)).reduce((sum,sale) => sum + safeNumber(sale.total), 0));
+    const salesCountByDay = last7Days.map(day => data.sales.filter(sale => calendarDate(saleDate(sale)) === day).length);
+    const previous7Days = last7Days.map(day => shiftCalendarDate(day, -7));
+    const previousSalesByDay = previous7Days.map(day => data.sales.filter(sale => calendarDate(saleDate(sale)) === day).reduce((sum,sale) => sum + safeNumber(sale.total), 0));
     const movingAverage = salesByDay.map((value,index) => {
       const window = salesByDay.slice(Math.max(0,index - 2), index + 1);
       return window.reduce((sum,item) => sum + item, 0) / window.length;
@@ -141,10 +134,10 @@ function initCharts(data) {
 
 export function renderDashboard(data) {
   const sales = normalizeSales(data.sales || data.ventas || []);
-  const today = new Date().toISOString().slice(0, 10);
+  const today = calendarDate();
   const month = today.slice(0, 7);
-  const todaySales = sales.filter(saleDateValue => saleDate(saleDateValue).startsWith(today));
-  const monthSales = sales.filter(saleDateValue => saleDate(saleDateValue).startsWith(month));
+  const todaySales = sales.filter(sale => calendarDate(saleDate(sale)) === today);
+  const monthSales = sales.filter(sale => calendarDate(saleDate(sale)).startsWith(month));
   const salesTotal = monthSales.reduce((sum, sale) => sum + safeNumber(sale.total), 0);
   const todayTotal = todaySales.reduce((sum, sale) => sum + safeNumber(sale.total), 0);
   const balance = (data.credits || []).reduce((sum, item) => sum + safeNumber(item.saldo_pendiente ?? Math.max(0, safeNumber(item.total) - safeNumber(item.initial) - safeNumber(item.paid))), 0);
