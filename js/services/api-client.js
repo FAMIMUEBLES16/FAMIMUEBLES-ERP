@@ -1,4 +1,4 @@
-import { API_BASE_URL } from '../config.js?v=8';
+import { API_BASE_URL } from '../config.js?v=9';
 
 const REQUEST_TIMEOUT_MS = 15000;
 
@@ -64,9 +64,10 @@ export async function downloadRequest(path, options = {}) {
     }
     return response;
   } catch (error) {
-    if (error.name === 'AbortError') throw new ApiError('El servidor FAMIMUEBLES tardo demasiado en responder.', 0, 'TIMEOUT');
+    if (error.name === 'AbortError') throw new ApiError(`El servidor FAMIMUEBLES tardo demasiado en responder al descargar ${path}.`, 0, 'TIMEOUT');
     if (error instanceof ApiError) throw error;
-    throw new ApiError('Servidor FAMIMUEBLES no disponible. Verifica la conexion e intenta nuevamente.', 0, 'NETWORK_ERROR');
+    const detail = error instanceof TypeError ? ' Revisa la URL del API y la conexion CORS.' : '';
+    throw new ApiError(`No se pudo conectar al servidor FAMIMUEBLES.${detail}`, 0, 'NETWORK_ERROR');
   } finally {
     clearTimeout(timeout);
   }
