@@ -31,7 +31,10 @@ def money(value: Any) -> str:
 
 
 def clean(value: Any) -> str:
-    return str(value if value is not None else "").replace("<", "&lt;").replace(">", "&gt;")
+    return (str(value if value is not None else "")
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;"))
 
 
 def make_pdf(informe: str, columns: list[str], rows: list[list[Any]], *, local: str = "Todos los locales", usuario: str = "Administrador", resumen: list[tuple[str, Any]] | None = None) -> bytes:

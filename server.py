@@ -532,7 +532,6 @@ def can_access(handler: "AppHandler", path: str, method: str = "GET") -> bool:
         path == "/api/state"
         or path == "/api/catalog"
         or path.startswith("/api/parity/")
-        or path.startswith("/api/report")
     ):
         return False
     if path.startswith("/api/users/") and path.endswith("/permissions"):
@@ -1475,29 +1474,15 @@ class AppHandler(SimpleHTTPRequestHandler):
                 with connection() as database:
                     items = filter_report_items(report_domain_items(database, collection, current_tenant), date_from, date_to, store_filter)
             elif collection == "sales":
-                query = "SELECT id, store_id AS storeId, customer_id AS customerId, total, payment_method AS paymentMethod, created_at AS date FROM sales WHERE tenant_id = ?"
-                params = [current_tenant]
-                if date_from:
-                    query += " AND date(created_at) >= date(?)"
-                    params.append(date_from)
-                if date_to:
-                    query += " AND date(created_at) <= date(?)"
-                    params.append(date_to)
-                if store_filter:
-                    query += " AND store_id = ?"
-                    params.append(store_filter)
-                query += " ORDER BY created_at"
                 with connection() as database:
-                    items = [dict(row) for row in database.execute(query, params).fetchall()]
+                    items = filter_report_items(_shared_catalog(database)["sales"], date_from, date_to, store_filter)
             elif collection in {"inventory", "inventoryByStore"}:
-                query = "SELECT product_id AS productId, store_id AS storeId, quantity, reserved_quantity AS reservedQuantity, minimum_quantity AS minimumQuantity FROM inventory WHERE tenant_id = ?"
-                params = [current_tenant]
-                if store_filter:
-                    query += " AND store_id = ?"
-                    params.append(store_filter)
-                query += " ORDER BY store_id, product_id"
                 with connection() as database:
-                    items = [dict(row) for row in database.execute(query, params).fetchall()]
+                    items = filter_report_items(_shared_catalog(database)["inventory"], date_from, date_to, store_filter)
+            elif collection in {"stores", "products"} and _postgres_enabled() and current_tenant == DEFAULT_TENANT:
+                with connection() as database:
+                    catalog = _shared_catalog(database)
+                    items = catalog[collection]
             else:
                 with connection() as database:
                     state_row = database.execute("SELECT state_json FROM tenant_states WHERE tenant_id = ?", (current_tenant,)).fetchone()
