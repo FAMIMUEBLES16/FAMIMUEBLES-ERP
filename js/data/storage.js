@@ -1,7 +1,7 @@
 import { createAccountPayable } from '../services/accounts-payable-service.js?v=14';
 import { demoState } from './demo-data.js';
 import { api } from '../services/api-client.js';
-import { API_BASE_URL } from '../config.js?v=7';
+import { API_BASE_URL } from '../config.js?v=8';
 
 export const TENANT_STORAGE_KEY = 'famimuebles-tenant-id';
 export function activeTenantId() { return localStorage.getItem(TENANT_STORAGE_KEY) || 'tenant-default'; }
