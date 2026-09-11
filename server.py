@@ -328,7 +328,7 @@ def _initialize_postgres_schema() -> _PostgresConnection:
     statements = [
         "CREATE TABLE IF NOT EXISTS app_state (id INTEGER PRIMARY KEY, state_json TEXT NOT NULL, updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)",
         "CREATE TABLE IF NOT EXISTS domain_records (tenant_id TEXT NOT NULL, collection TEXT NOT NULL, id TEXT NOT NULL, data_json TEXT NOT NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (tenant_id, collection, id))",
-        "CREATE TABLE IF NOT EXISTS auth_users (id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL, role TEXT NOT NULL, store_id TEXT, active INTEGER NOT NULL DEFAULT 1, tenant_id TEXT NOT NULL DEFAULT 'tenant-default', email TEXT NOT NULL DEFAULT '', phone TEXT NOT NULL DEFAULT '', created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)",
+        "CREATE TABLE IF NOT EXISTS auth_users (id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL, role TEXT NOT NULL, store_id TEXT, active INTEGER NOT NULL DEFAULT 1, tenant_id TEXT NOT NULL DEFAULT 'tenant-default', email TEXT NOT NULL DEFAULT '', phone TEXT NOT NULL DEFAULT '', document TEXT NOT NULL DEFAULT '', created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)",
         "CREATE TABLE IF NOT EXISTS auth_tokens (token TEXT PRIMARY KEY, user_id TEXT NOT NULL, expires_at TIMESTAMP NOT NULL)",
         "CREATE TABLE IF NOT EXISTS user_permissions (tenant_id TEXT NOT NULL, user_id TEXT NOT NULL, resource TEXT NOT NULL, action TEXT NOT NULL, allowed INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (tenant_id, user_id, resource, action))",
         "CREATE TABLE IF NOT EXISTS audit_events (id BIGSERIAL PRIMARY KEY, user_id TEXT, action TEXT NOT NULL, collection TEXT, record_id TEXT, data_json TEXT NOT NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)",
@@ -347,6 +347,7 @@ def _initialize_postgres_schema() -> _PostgresConnection:
     ]
     for statement in statements:
         database.execute(statement)
+    database.execute("ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS document TEXT NOT NULL DEFAULT ''")
     database.execute("ALTER TABLE locales ADD COLUMN IF NOT EXISTS direccion TEXT NOT NULL DEFAULT ''")
     database.execute("ALTER TABLE locales ADD COLUMN IF NOT EXISTS telefono TEXT NOT NULL DEFAULT ''")
     database.execute("""
@@ -533,6 +534,7 @@ def can_access(handler: "AppHandler", path: str, method: str = "GET") -> bool:
         or path == "/api/catalog"
         or path.startswith("/api/catalog/")
         or path.startswith("/api/parity/")
+        or path.startswith("/api/report-pdf/")
     ):
         return False
     if path.startswith("/api/users/") and path.endswith("/permissions"):
@@ -770,6 +772,31 @@ def _with_frontend_aliases(row: dict) -> dict:
     return result
 
 
+def resolve_transfer_movement_for_delete(database, transfer_identifier: str) -> dict | None:
+    """Resuelve el movimiento real de un traslado desde el id visible del dominio o la referencia del movimiento.
+
+    El ERP guarda el traslado de la UI con id tipo TRA-00360 en domain_records, pero la
+    fuente de verdad del inventario sigue siendo la fila numérica de movimientos. El
+    borrado debe buscar primero por id entero, y luego caer a la referencia textual
+    registrada en movimientos.referencia = 'TRA-00360'.
+    """
+    identifier = str(transfer_identifier or "").strip()
+    if not identifier:
+        return None
+    try:
+        numeric_id = int(identifier)
+    except Exception:
+        numeric_id = None
+    if numeric_id is not None:
+        row = database.execute("SELECT id, tipo, local_origen, local_destino FROM movimientos WHERE id = %s FOR UPDATE", (numeric_id,)).fetchone()
+        if row:
+            return dict(row) if isinstance(row, dict) else {"id": row[0], "tipo": row[1], "local_origen": row[2], "local_destino": row[3]}
+    row = database.execute("SELECT id, tipo, local_origen, local_destino FROM movimientos WHERE referencia = %s AND UPPER(COALESCE(tipo, '')) = 'TRASLADO' ORDER BY id DESC LIMIT 1 FOR UPDATE", (identifier,)).fetchone()
+    if row:
+        return dict(row) if isinstance(row, dict) else {"id": row[0], "tipo": row[1], "local_origen": row[2], "local_destino": row[3]}
+    return None
+
+
 def _shared_domain_items(database: _PostgresConnection, collection: str) -> list[dict] | None:
     """Convierte tablas operativas del bot al contrato de colecciones del ERP."""
     table_map = {
@@ -926,11 +953,22 @@ def _shared_domain_items(database: _PostgresConnection, collection: str) -> list
         if collection == "transfers":
             stored = database.execute("SELECT data_json FROM domain_records WHERE tenant_id = %s AND collection = %s ORDER BY created_at", (DEFAULT_TENANT, collection)).fetchall()
             existing_ids = {str(item.get("id")) for item in items}
-            items.extend(
-                json.loads(row[0])
-                for row in stored
-                if str(json.loads(row[0]).get("id")) not in existing_ids
-            )
+            for row in stored:
+                item = json.loads(row[0])
+                status = str(item.get("status") or item.get("estado") or "").upper()
+                if status not in {"BORRADOR", "PENDIENTE"} or str(item.get("id")) in existing_ids:
+                    continue
+                items.append(item)
+            for item in items:
+                item["id"] = str(item.get("id") or "")
+                item["originStoreId"] = str(item.get("originStoreId") or item.get("local_origen") or item.get("localOrigen") or "")
+                item["destinationStoreId"] = str(item.get("destinationStoreId") or item.get("local_destino") or item.get("localDestino") or "")
+                item["createdAt"] = item.get("createdAt") or item.get("created_at") or item.get("fecha") or ""
+                item["createdBy"] = str(item.get("createdBy") or item.get("empleado") or item.get("vendedor") or "")
+                raw_status = str(item.get("status") or item.get("estado") or "RECIBIDO").upper()
+                item["status"] = "RECIBIDO" if raw_status == "COMPLETADO" else raw_status
+                if isinstance(item.get("items"), str):
+                    item["items"] = json.loads(item["items"])
         if collection == "credits":
             for item in items:
                 sale_id = item.get("sale_id") or item.get("saleId") or item.get("venta_id") or item.get("ventaId")
@@ -1473,7 +1511,7 @@ class AppHandler(SimpleHTTPRequestHandler):
             return
         if path == "/api/users":
             with connection() as database:
-                rows = database.execute("SELECT id, username, email, phone, role, store_id AS storeId, tenant_id AS tenantId, active, created_at AS createdAt FROM auth_users WHERE tenant_id = ? ORDER BY username", (tenant_id(self),)).fetchall()
+                rows = database.execute("SELECT id, username, email, phone, document, role, store_id AS storeId, tenant_id AS tenantId, active, created_at AS createdAt FROM auth_users WHERE tenant_id = ? ORDER BY username", (tenant_id(self),)).fetchall()
             self.send_json(200, {"items": [dict(row) for row in rows]})
             return
         if path.startswith("/api/users/") and path.endswith("/permissions"):
@@ -1631,13 +1669,14 @@ class AppHandler(SimpleHTTPRequestHandler):
                 username = str(payload.get("username", "")).strip()
                 password = str(payload.get("password", ""))
                 role = str(payload.get("role", "VENDEDOR")).strip().upper()
+                document = str(payload.get("document", "")).strip()
                 if len(username) < 3 or len(password) < 8:
                     raise ValueError("El usuario requiere 3 caracteres y la clave 8")
                 if role not in {"ADMINISTRADOR", "GERENTE", "CONTADOR", "SUPERVISOR", "BODEGA", "CAJERO", "VENDEDOR"}:
                     raise ValueError("Rol no valido")
                 user_id = secrets.token_hex(8)
                 with connection() as database:
-                    database.execute("INSERT INTO auth_users (id, username, email, phone, password_hash, role, store_id, tenant_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", (user_id, username, str(payload.get("email", "")).strip(), str(payload.get("phone", "")).strip(), password_hash(password), role, payload.get("storeId"), tenant_id(self, payload)))
+                    database.execute("INSERT INTO auth_users (id, username, email, phone, document, password_hash, role, store_id, tenant_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", (user_id, username, str(payload.get("email", "")).strip(), str(payload.get("phone", "")).strip(), document, password_hash(password), role, payload.get("storeId"), tenant_id(self, payload)))
                 self.send_json(201, {"ok": True, "id": user_id, "username": username, "role": role})
                 return
             if path.startswith("/api/users/") and path.endswith("/permissions"):
@@ -2411,9 +2450,10 @@ class AppHandler(SimpleHTTPRequestHandler):
             return
         if collection == "transfers" and _postgres_enabled():
             with connection() as database:
-                movement = database.execute("SELECT id, tipo, local_origen, local_destino FROM movimientos WHERE id = %s FOR UPDATE", (identifier,)).fetchone()
-                if movement and str(movement["tipo"] or "").upper() == "TRASLADO":
-                    lines = database.execute("SELECT codigo, cantidad FROM movimiento_productos WHERE movimiento_id = %s FOR UPDATE", (identifier,)).fetchall()
+                movement = resolve_transfer_movement_for_delete(database, identifier)
+                if movement and str(movement.get("tipo") or "").upper() == "TRASLADO":
+                    movement_id = int(movement["id"])
+                    lines = database.execute("SELECT codigo, cantidad FROM movimiento_productos WHERE movimiento_id = %s FOR UPDATE", (movement_id,)).fetchall()
                     for line in lines:
                         stock = database.execute("SELECT cantidad FROM inventarios WHERE local = %s AND codigo = %s FOR UPDATE", (movement["local_destino"], line["codigo"])).fetchone()
                         if not stock or float(stock["cantidad"] or 0) < float(line["cantidad"] or 0):
@@ -2423,8 +2463,9 @@ class AppHandler(SimpleHTTPRequestHandler):
                     for line in lines:
                         database.execute("UPDATE inventarios SET cantidad = cantidad - %s, actualizado = CURRENT_TIMESTAMP WHERE local = %s AND codigo = %s", (line["cantidad"], movement["local_destino"], line["codigo"]))
                         database.execute("UPDATE inventarios SET cantidad = cantidad + %s, actualizado = CURRENT_TIMESTAMP WHERE local = %s AND codigo = %s", (line["cantidad"], movement["local_origen"], line["codigo"]))
-                    database.execute("DELETE FROM movimiento_productos WHERE movimiento_id = %s", (identifier,))
-                    database.execute("DELETE FROM movimientos WHERE id = %s", (identifier,))
+                    database.execute("DELETE FROM movimiento_productos WHERE movimiento_id = %s", (movement_id,))
+                    database.execute("DELETE FROM movimientos WHERE id = %s", (movement_id,))
+                    database.execute("DELETE FROM domain_records WHERE tenant_id = %s AND collection = %s AND id = %s", (tenant_id(self), collection, identifier))
                     database.execute("INSERT INTO audit_events(action, collection, record_id, data_json) VALUES(%s, %s, %s, %s)", ("DELETE", "transfers", identifier, "{}"))
                     self.send_json(200, {"ok": True, "deleted": True, "reverted": True})
                     return
@@ -2458,6 +2499,7 @@ class AppHandler(SimpleHTTPRequestHandler):
                 username = str(payload.get("username", "")).strip()
                 role = str(payload.get("role", "VENDEDOR")).strip().upper()
                 password = str(payload.get("password", ""))
+                document = str(payload.get("document", "")).strip()
                 active = 0 if payload.get("active") is False else 1
                 valid_roles = {"ADMINISTRADOR", "GERENTE", "CONTADOR", "SUPERVISOR", "BODEGA", "CAJERO", "VENDEDOR"}
                 if len(username) < 3 or role not in valid_roles:
@@ -2470,9 +2512,9 @@ class AppHandler(SimpleHTTPRequestHandler):
                         self.send_json(404, {"error": "Usuario no encontrado"})
                         return
                     if password:
-                        database.execute("UPDATE auth_users SET username = ?, email = ?, phone = ?, role = ?, store_id = ?, active = ?, password_hash = ? WHERE id = ? AND tenant_id = ?", (username, str(payload.get("email", "")).strip(), str(payload.get("phone", "")).strip(), role, payload.get("storeId"), active, password_hash(password), identifier, tenant_id(self, payload)))
+                        database.execute("UPDATE auth_users SET username = ?, email = ?, phone = ?, document = ?, role = ?, store_id = ?, active = ?, password_hash = ? WHERE id = ? AND tenant_id = ?", (username, str(payload.get("email", "")).strip(), str(payload.get("phone", "")).strip(), document, role, payload.get("storeId"), active, password_hash(password), identifier, tenant_id(self, payload)))
                     else:
-                        database.execute("UPDATE auth_users SET username = ?, email = ?, phone = ?, role = ?, store_id = ?, active = ? WHERE id = ? AND tenant_id = ?", (username, str(payload.get("email", "")).strip(), str(payload.get("phone", "")).strip(), role, payload.get("storeId"), active, identifier, tenant_id(self, payload)))
+                        database.execute("UPDATE auth_users SET username = ?, email = ?, phone = ?, document = ?, role = ?, store_id = ?, active = ? WHERE id = ? AND tenant_id = ?", (username, str(payload.get("email", "")).strip(), str(payload.get("phone", "")).strip(), document, role, payload.get("storeId"), active, identifier, tenant_id(self, payload)))
                     if not active:
                         database.execute("DELETE FROM auth_tokens WHERE user_id = ?", (identifier,))
                 self.send_json(200, {"ok": True, "id": identifier})

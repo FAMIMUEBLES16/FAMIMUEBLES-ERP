@@ -9,6 +9,36 @@ from server import _create_shared_sale, _shared_domain_items, canonical_request_
 
 
 class BackendSafetyTests(unittest.TestCase):
+    def test_resolve_transfer_movement_from_transfer_reference_string(self):
+        class FakeCursor:
+            def __init__(self, rows=None):
+                self.rows = rows or []
+
+            def fetchone(self):
+                return self.rows[0] if self.rows else None
+
+            def fetchall(self):
+                return self.rows
+
+        class FakeDatabase:
+            def __init__(self):
+                self.queries = []
+
+            def execute(self, query, params=()):
+                self.queries.append((query, params))
+                if "WHERE referencia = %s" in query:
+                    return FakeCursor([{"id": 368, "tipo": "TRASLADO", "local_origen": "INV CRR 5 3 26", "local_destino": "INV BODEGA MANABLANCA"}])
+                if "WHERE id = %s" in query:
+                    return FakeCursor([])
+                return FakeCursor([])
+
+        database = FakeDatabase()
+        movement = server.resolve_transfer_movement_for_delete(database, "TRA-00360")
+
+        self.assertEqual(movement["id"], 368)
+        self.assertEqual(movement["local_origen"], "INV CRR 5 3 26")
+        self.assertEqual(movement["local_destino"], "INV BODEGA MANABLANCA")
+
     def test_idempotency_hash_is_order_independent(self):
         first = canonical_request_hash({"id": "VEN-1", "items": [{"productId": "P-1", "quantity": 2}], "requestId": "a"})
         second = canonical_request_hash({"items": [{"productId": "P-1", "quantity": 2}], "id": "VEN-1", "requestId": "b"})
