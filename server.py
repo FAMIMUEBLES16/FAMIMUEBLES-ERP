@@ -390,6 +390,23 @@ def password_matches(password: str, stored: str) -> bool:
     return secrets.compare_digest(candidate, digest)
 
 
+def normalize_user_active_flag(value) -> int:
+    """Normaliza true/false como texto o booleano para el campo active de auth_users."""
+    if isinstance(value, bool):
+        return 1 if value else 0
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in {"1", "true", "activo", "active", "enabled", "si", "yes", "on"}:
+            return 1
+        if text in {"0", "false", "inactivo", "inactive", "disabled", "no", "off"}:
+            return 0
+    if isinstance(value, int):
+        return 1 if value else 0
+    if value is None:
+        return 1
+    return 1 if str(value).strip().lower() not in {"0", "false", "inactivo", "inactive", "disabled", "no", "off"} else 0
+
+
 def request_json(handler: "AppHandler") -> dict:
     length = int(handler.headers.get("Content-Length", "0"))
     payload = json.loads(handler.rfile.read(length).decode("utf-8"))
@@ -2500,7 +2517,7 @@ class AppHandler(SimpleHTTPRequestHandler):
                 role = str(payload.get("role", "VENDEDOR")).strip().upper()
                 password = str(payload.get("password", ""))
                 document = str(payload.get("document", "")).strip()
-                active = 0 if payload.get("active") is False else 1
+                active = normalize_user_active_flag(payload.get("active"))
                 valid_roles = {"ADMINISTRADOR", "GERENTE", "CONTADOR", "SUPERVISOR", "BODEGA", "CAJERO", "VENDEDOR"}
                 if len(username) < 3 or role not in valid_roles:
                     raise ValueError("Usuario o rol no valido")
