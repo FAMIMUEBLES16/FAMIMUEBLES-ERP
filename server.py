@@ -558,8 +558,12 @@ def can_access(handler: "AppHandler", path: str, method: str = "GET") -> bool:
         requested_user_id = unquote(path.removeprefix("/api/users/").removesuffix("/permissions")).strip("/")
         if requested_user_id == user["id"]:
             return True
-    if path.startswith("/api/users") and user["role"] != "ADMINISTRADOR":
+    if path == "/api/users":
+        return user["role"] in {"ADMINISTRADOR", "GERENTE", "SUPERVISOR", "CONTADOR", "BODEGA", "CAJERO", "VENDEDOR"}
+    if path.startswith("/api/users") and user["role"] not in {"ADMINISTRADOR", "GERENTE", "SUPERVISOR", "CONTADOR", "BODEGA", "CAJERO", "VENDEDOR"}:
         return False
+    if path.startswith("/api/users") and path.endswith("/permissions"):
+        return user["role"] in {"ADMINISTRADOR", "GERENTE", "SUPERVISOR"} or requested_user_id == user["id"]
     target = permission_target(path, method)
     if target and not has_user_permission(handler, *target):
         return False

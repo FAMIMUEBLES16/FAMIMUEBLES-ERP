@@ -195,6 +195,16 @@ class BackendSafetyTests(unittest.TestCase):
         self.assertEqual(server.normalize_user_active_flag("true"), 1)
         self.assertEqual(server.normalize_user_active_flag(True), 1)
 
+    def test_gerente_can_view_users_and_permission_listing(self):
+        class FakeHandler:
+            headers = {"X-Tenant-ID": "tenant-default"}
+
+        fake_user = {"id": "USR-1", "role": "GERENTE", "tenant_id": "tenant-default"}
+
+        with patch("server.authenticated_user", return_value=fake_user):
+            self.assertTrue(server.can_access(FakeHandler(), "/api/users", "GET"))
+            self.assertTrue(server.can_access(FakeHandler(), "/api/users/USR-1/permissions", "GET"))
+
     def test_non_admin_user_without_permission_rows_is_denied(self):
         fake_user = {"id": "USR-1", "role": "VENDEDOR", "tenant_id": "tenant-default"}
 
