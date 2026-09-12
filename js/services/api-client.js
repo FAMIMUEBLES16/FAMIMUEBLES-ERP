@@ -38,9 +38,11 @@ async function parseResponse(response) {
 export async function apiRequest(path, options = {}) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), options.timeout || REQUEST_TIMEOUT_MS);
+  const method = String(options.method || 'GET').toUpperCase();
   const headers = { Accept: 'application/json', 'ngrok-skip-browser-warning': 'true', ...authHeaders(), ...(options.headers || {}) };
+  const cacheMode = options.cache || (method === 'GET' ? 'default' : 'no-store');
   try {
-    const response = await fetch(buildUrl(path), { ...options, headers, cache: 'no-store', signal: controller.signal });
+    const response = await fetch(buildUrl(path), { ...options, headers, cache: cacheMode, signal: controller.signal });
     return await parseResponse(response);
   } catch (error) {
     if (error.name === 'AbortError') throw new ApiError('El servidor FAMIMUEBLES tardo demasiado en responder.', 0, 'TIMEOUT');

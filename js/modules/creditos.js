@@ -6,18 +6,19 @@ function normalizeCredit(item, sales = []) {
   const saleId = item.saleId || item.sale_id || item.venta_id || item.sourceId || item.source_id || '';
   const sale = sales.find(candidate => String(candidate.id) === String(saleId));
   const initialValue = Number(item.initial ?? item.downPayment ?? item.cuota_inicial ?? item.cuotaInicial ?? 0);
-  const pendingValue = Number(item.saldo_pendiente ?? item.saldoPendiente ?? item.balance ?? 0);
-  const total = Number(item.originalAmount ?? item.total ?? item.valor_total ?? (initialValue + pendingValue));
+  const hasExplicitPending = [item.saldo_pendiente, item.saldoPendiente, item.balance, item.pending].some(value => value !== null && value !== undefined && value !== '');
+  const pendingValue = hasExplicitPending ? Number(item.saldo_pendiente ?? item.saldoPendiente ?? item.balance ?? item.pending ?? 0) : null;
+  const total = Number(item.originalAmount ?? item.total ?? item.valor_total ?? (initialValue + (pendingValue ?? 0)));
   const initial = initialValue;
-  const pending = pendingValue || Math.max(0, total - initial - Number(item.paid || 0));
-  const paid = Number(item.paid ?? Math.max(0, total - initial - pending));
+  const paid = Number(item.paid ?? Math.max(0, total - initial - (pendingValue ?? 0)));
+  const pending = pendingValue !== null && Number.isFinite(pendingValue) ? Math.max(0, pendingValue) : Math.max(0, total - initial - paid);
   return {
     ...item,
     id: String(item.id || item.credito_id || 'SIN-ID'),
     saleId: String(saleId),
     customer: item.customer || item.cliente || item.cliente_nombre || sale?.customer || sale?.cliente || 'Cliente sin nombre',
     date: item.date || item.createdAt || item.creado_en || item.fecha || sale?.date || '',
-    total, initial, paid, pending: creditBalance({ total, initial, paid }),
+    total, initial, paid, pending,
     status: String(item.status || item.estado || 'Al dia'),
     next: item.next || item.proxima_cuota || 'Pendiente',
   };

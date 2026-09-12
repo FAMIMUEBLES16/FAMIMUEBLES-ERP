@@ -2,6 +2,7 @@ import io
 import json
 import unittest
 import zipfile
+from pathlib import Path
 from unittest.mock import patch
 
 import server
@@ -9,6 +10,12 @@ from server import _create_shared_sale, _shared_domain_items, canonical_request_
 
 
 class BackendSafetyTests(unittest.TestCase):
+    def test_active_flag_string_false_is_normalized_to_inactive_in_server_contract(self):
+        self.assertEqual(server.normalize_active_flag("false"), 0)
+        self.assertEqual(server.normalize_active_flag("true"), 1)
+        self.assertEqual(server.normalize_active_flag(False), 0)
+        self.assertEqual(server.normalize_active_flag(True), 1)
+
     def test_resolve_transfer_movement_from_transfer_reference_string(self):
         class FakeCursor:
             def __init__(self, rows=None):
@@ -57,6 +64,12 @@ class BackendSafetyTests(unittest.TestCase):
     def test_password_hash_uses_unique_salts(self):
         self.assertNotEqual(password_hash("ClaveSegura123"), password_hash("ClaveSegura123"))
 
+    def test_user_contract_supports_document_field_in_server_source(self):
+        server_source = Path(server.__file__).read_text(encoding="utf-8")
+        self.assertIn("SELECT id, username, email, phone, document, role, store_id AS storeId", server_source)
+        self.assertIn("INSERT INTO auth_users (id, username, email, phone, document, password_hash, role, store_id, tenant_id)", server_source)
+        self.assertIn("UPDATE auth_users SET username = ?, email = ?, phone = ?, document = ?, role = ?, store_id = ?, active = ?", server_source)
+
     def test_specialized_xlsx_is_a_valid_zip_package(self):
         content = specialized_xlsx(["codigo", "descripcion"], [["001", "Mueble <demo>"]])
         with zipfile.ZipFile(io.BytesIO(content)) as package:
@@ -89,6 +102,36 @@ class BackendSafetyTests(unittest.TestCase):
         self.assertEqual(len(items), 1)
         self.assertEqual(items[0]["id"], "CR-1")
         self.assertEqual(items[0]["customer"], "Cliente Demo")
+
+    def test_shared_domain_items_customer_route_reads_postgres_customer_fields(self):
+        class FakeCursor:
+            def __init__(self, rows=None):
+                self.rows = rows or []
+
+            def fetchall(self):
+                return self.rows
+
+        class FakeDatabase:
+            def __init__(self):
+                self.queries = []
+
+            def execute(self, query, params=()):
+                self.queries.append(query)
+                if "FROM clientes c" in query:
+                    return FakeCursor([
+                        {"id": 5, "name": "Fernando Suárez", "document": "123456", "phone": "3017439000", "address": "Calle 1", "email": "", "purchases": 2, "credits": 1, "balance": 150000, "status": "Activo"}
+                    ])
+                if "information_schema.columns" in query:
+                    return FakeCursor([])
+                return FakeCursor([])
+
+        items = _shared_domain_items(FakeDatabase(), "customers")
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["id"], 5)
+        self.assertEqual(items[0]["name"], "Fernando Suárez")
+        self.assertEqual(items[0]["document"], "123456")
+        self.assertEqual(items[0]["phone"], "3017439000")
+        self.assertEqual(items[0]["address"], "Calle 1")
 
     def test_create_shared_sale_creates_credit_record_for_credit_payment(self):
         class FakeCursor:

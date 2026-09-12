@@ -247,6 +247,8 @@ def _initialize_schema() -> sqlite3.Connection:
         database.execute("ALTER TABLE auth_users ADD COLUMN email TEXT NOT NULL DEFAULT ''")
     if "phone" not in user_columns:
         database.execute("ALTER TABLE auth_users ADD COLUMN phone TEXT NOT NULL DEFAULT ''")
+    if "document" not in user_columns:
+        database.execute("ALTER TABLE auth_users ADD COLUMN document TEXT NOT NULL DEFAULT ''")
     database.execute(
         "CREATE TABLE IF NOT EXISTS auth_tokens (token TEXT PRIMARY KEY, user_id TEXT NOT NULL, expires_at TEXT NOT NULL)"
     )
@@ -329,6 +331,9 @@ def _initialize_postgres_schema() -> _PostgresConnection:
         "CREATE TABLE IF NOT EXISTS app_state (id INTEGER PRIMARY KEY, state_json TEXT NOT NULL, updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)",
         "CREATE TABLE IF NOT EXISTS domain_records (tenant_id TEXT NOT NULL, collection TEXT NOT NULL, id TEXT NOT NULL, data_json TEXT NOT NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (tenant_id, collection, id))",
         "CREATE TABLE IF NOT EXISTS auth_users (id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL, role TEXT NOT NULL, store_id TEXT, active INTEGER NOT NULL DEFAULT 1, tenant_id TEXT NOT NULL DEFAULT 'tenant-default', email TEXT NOT NULL DEFAULT '', phone TEXT NOT NULL DEFAULT '', document TEXT NOT NULL DEFAULT '', created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)",
+        "ALTER TABLE empleados ADD COLUMN IF NOT EXISTS email TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE empleados ADD COLUMN IF NOT EXISTS telefono TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE empleados ADD COLUMN IF NOT EXISTS documento TEXT NOT NULL DEFAULT ''",
         "CREATE TABLE IF NOT EXISTS auth_tokens (token TEXT PRIMARY KEY, user_id TEXT NOT NULL, expires_at TIMESTAMP NOT NULL)",
         "CREATE TABLE IF NOT EXISTS user_permissions (tenant_id TEXT NOT NULL, user_id TEXT NOT NULL, resource TEXT NOT NULL, action TEXT NOT NULL, allowed INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (tenant_id, user_id, resource, action))",
         "CREATE TABLE IF NOT EXISTS audit_events (id BIGSERIAL PRIMARY KEY, user_id TEXT, action TEXT NOT NULL, collection TEXT, record_id TEXT, data_json TEXT NOT NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)",
@@ -347,7 +352,6 @@ def _initialize_postgres_schema() -> _PostgresConnection:
     ]
     for statement in statements:
         database.execute(statement)
-    database.execute("ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS document TEXT NOT NULL DEFAULT ''")
     database.execute("ALTER TABLE locales ADD COLUMN IF NOT EXISTS direccion TEXT NOT NULL DEFAULT ''")
     database.execute("ALTER TABLE locales ADD COLUMN IF NOT EXISTS telefono TEXT NOT NULL DEFAULT ''")
     database.execute("""
@@ -443,6 +447,21 @@ def complete_idempotency(database: _PostgresConnection, handler: "AppHandler", p
         "UPDATE idempotency_keys SET response_status = ?, response_json = ? WHERE tenant_id = ? AND request_key = ?",
         (status, json.dumps(response, ensure_ascii=False, separators=(",", ":")), tenant_id(handler, payload), f"{path}:{request_key}"),
     )
+
+
+def normalize_active_flag(value) -> int:
+    if isinstance(value, bool):
+        return 1 if value else 0
+    if isinstance(value, int):
+        return 1 if value else 0
+    if value is None:
+        return 1
+    text = str(value).strip().lower()
+    if text in {"false", "no", "off", "0", "inactive", "inactivo"}:
+        return 0
+    if text in {"true", "yes", "on", "1", "active", "activo"}:
+        return 1
+    return 1 if text else 1
 
 
 def record_id(payload: dict) -> str:
@@ -820,14 +839,66 @@ def _shared_domain_items(database: _PostgresConnection, collection: str) -> list
     }
     if collection == "customers":
         query = """
-            SELECT DISTINCT cliente AS id, cliente AS name, cliente AS customer
-            FROM movimientos
-            WHERE NULLIF(BTRIM(COALESCE(cliente, '')), '') IS NOT NULL
-            UNION
-            SELECT DISTINCT cliente AS id, cliente AS name, cliente AS customer
-            FROM apartados
-            WHERE NULLIF(BTRIM(COALESCE(cliente, '')), '') IS NOT NULL
-            ORDER BY name
+            WITH customer_source AS (
+                SELECT c.id::text AS id, c.nombre, c.documento, c.telefono, c.direccion, 3 AS source_priority
+                FROM clientes c
+                UNION ALL
+                SELECT ('MOV-' || m.id::text) AS id, m.cliente AS nombre, '' AS documento, m.telefono, '' AS direccion, 2 AS source_priority
+                FROM movimientos m
+                WHERE NULLIF(BTRIM(COALESCE(m.cliente, '')), '') IS NOT NULL
+                UNION ALL
+                SELECT ('CR-' || cr.id::text) AS id, cr.cliente AS nombre, cr.documento, cr.telefono, '' AS direccion, 1 AS source_priority
+                FROM creditos cr
+                WHERE NULLIF(BTRIM(COALESCE(cr.cliente, '')), '') IS NOT NULL
+            ), distinct_customers AS (
+                SELECT DISTINCT ON (LOWER(BTRIM(nombre))) id, nombre, documento, telefono, direccion
+                FROM customer_source
+                ORDER BY LOWER(BTRIM(nombre)), source_priority DESC, id
+            )
+            SELECT
+                c.id AS id,
+                c.nombre AS name,
+                COALESCE(NULLIF(BTRIM(c.documento), ''), NULLIF(BTRIM((
+                    SELECT cr.documento FROM creditos cr
+                    WHERE LOWER(BTRIM(COALESCE(cr.cliente, ''))) = LOWER(BTRIM(COALESCE(c.nombre, '')))
+                    ORDER BY cr.creado_en DESC NULLS LAST, cr.id DESC LIMIT 1
+                )), ''), '') AS document,
+                COALESCE(NULLIF(BTRIM(c.telefono), ''), NULLIF(BTRIM((
+                    SELECT COALESCE(NULLIF(m.telefono, ''), cr.telefono)
+                    FROM creditos cr
+                    LEFT JOIN movimientos m ON m.id = cr.movimiento_id
+                    WHERE LOWER(BTRIM(COALESCE(cr.cliente, ''))) = LOWER(BTRIM(COALESCE(c.nombre, '')))
+                    ORDER BY cr.creado_en DESC NULLS LAST, cr.id DESC LIMIT 1
+                )), ''), NULLIF(BTRIM((
+                    SELECT m.telefono FROM movimientos m
+                    WHERE LOWER(BTRIM(COALESCE(m.cliente, ''))) = LOWER(BTRIM(COALESCE(c.nombre, '')))
+                    ORDER BY m.fecha DESC NULLS LAST, m.id DESC LIMIT 1
+                )), ''), '') AS phone,
+                COALESCE(c.direccion, '') AS address,
+                '' AS email,
+                COALESCE((
+                    SELECT COUNT(*) FROM movimientos m
+                    WHERE UPPER(COALESCE(m.tipo, '')) IN ('VENTA', 'APARTADO')
+                      AND LOWER(BTRIM(COALESCE(m.cliente, ''))) = LOWER(BTRIM(COALESCE(c.nombre, '')))
+                ), 0) AS purchases,
+                COALESCE((
+                    SELECT COUNT(*) FROM creditos cr
+                    WHERE LOWER(BTRIM(COALESCE(cr.cliente, ''))) = LOWER(BTRIM(COALESCE(c.nombre, '')))
+                ), 0) AS credits,
+                COALESCE((
+                    SELECT SUM(mp.precio_total)
+                    FROM movimientos m
+                    LEFT JOIN movimiento_productos mp ON mp.movimiento_id = m.id
+                    WHERE UPPER(COALESCE(m.tipo, '')) IN ('VENTA', 'APARTADO')
+                      AND LOWER(BTRIM(COALESCE(m.cliente, ''))) = LOWER(BTRIM(COALESCE(c.nombre, '')))
+                ), 0) AS purchase_total,
+                COALESCE((
+                    SELECT COALESCE(SUM(cr.saldo_pendiente), 0) FROM creditos cr
+                    WHERE LOWER(BTRIM(COALESCE(cr.cliente, ''))) = LOWER(BTRIM(COALESCE(c.nombre, '')))
+                ), 0) AS balance,
+                'Activo' AS status
+            FROM distinct_customers c
+            ORDER BY c.nombre
         """
     elif collection == "inventoryMovements":
         query = """
@@ -931,6 +1002,23 @@ def _shared_domain_items(database: _PostgresConnection, collection: str) -> list
                     continue
                 items.append(_with_frontend_aliases(item))
         if collection == "customers":
+            stored = database.execute(
+                "SELECT data_json FROM domain_records WHERE tenant_id = %s AND collection = %s ORDER BY created_at",
+                (DEFAULT_TENANT, collection),
+            ).fetchall()
+            existing_keys = {
+                str(item.get("id") or item.get("name") or item.get("customer") or "").strip().casefold()
+                for item in items
+            }
+            for row in stored:
+                payload = row[0] if isinstance(row, (tuple, list)) else row.get("data_json")
+                if not payload:
+                    continue
+                stored_item = _with_frontend_aliases(json.loads(payload))
+                key = str(stored_item.get("id") or stored_item.get("name") or stored_item.get("customer") or "").strip().casefold()
+                if key and key not in existing_keys:
+                    items.append(stored_item)
+                    existing_keys.add(key)
             credit_columns = {
                 row["column_name"]
                 for row in database.execute(
@@ -949,7 +1037,45 @@ def _shared_domain_items(database: _PostgresConnection, collection: str) -> list
                     if key:
                         balances[key] = balances.get(key, 0) + max(0, float(row["balance"] or 0))
                 for item in items:
-                    item["balance"] = balances.get(str(item.get("name") or item.get("customer") or "").strip().lower(), 0)
+                    key = str(item.get("name") or item.get("customer") or "").strip().lower()
+                    item["balance"] = balances.get(key, item.get("balance") or 0)
+            credit_rows = database.execute(
+                "SELECT cliente, documento, telefono, cuota_inicial, saldo_pendiente FROM creditos"
+            ).fetchall()
+            movement_rows = database.execute(
+                "SELECT cliente, telefono, tipo FROM movimientos WHERE NULLIF(BTRIM(COALESCE(cliente, '')), '') IS NOT NULL"
+            ).fetchall()
+            credit_info = {}
+            movement_info = {}
+            for row in credit_rows:
+                key = str(row["cliente"] or "").strip().lower()
+                if not key:
+                    continue
+                info = credit_info.setdefault(key, {"credits": 0, "creditTotal": 0, "balance": 0, "document": "", "phone": ""})
+                info["credits"] += 1
+                info["creditTotal"] += max(0, float(row["cuota_inicial"] or 0) + float(row["saldo_pendiente"] or 0))
+                info["balance"] += max(0, float(row["saldo_pendiente"] or 0))
+                info["document"] = info["document"] or str(row["documento"] or "").strip()
+                info["phone"] = info["phone"] or str(row["telefono"] or "").strip()
+            for row in movement_rows:
+                key = str(row["cliente"] or "").strip().lower()
+                if not key:
+                    continue
+                info = movement_info.setdefault(key, {"purchases": 0, "phone": ""})
+                if str(row["tipo"] or "").upper() in {"VENTA", "APARTADO"}:
+                    info["purchases"] += 1
+                info["phone"] = info["phone"] or str(row["telefono"] or "").strip()
+            for item in items:
+                key = str(item.get("name") or item.get("customer") or "").strip().lower()
+                credit = credit_info.get(key, {})
+                movement = movement_info.get(key, {})
+                item["document"] = item.get("document") or item.get("documento") or credit.get("document", "")
+                item["phone"] = item.get("phone") or item.get("telefono") or credit.get("phone") or movement.get("phone", "")
+                item["purchases"] = item.get("purchases") if item.get("purchases") not in (None, "") else movement.get("purchases", 0)
+                item["credits"] = item.get("credits") if item.get("credits") not in (None, "") else credit.get("credits", 0)
+                item["creditTotal"] = item.get("creditTotal") if item.get("creditTotal") not in (None, "") else credit.get("creditTotal", 0)
+                item["purchaseTotal"] = item.get("purchaseTotal") or item.get("purchase_total") or 0
+                item["balance"] = item.get("balance") if item.get("balance") not in (None, "") else credit.get("balance", 0)
         if collection == "transfers":
             stored = database.execute("SELECT data_json FROM domain_records WHERE tenant_id = %s AND collection = %s ORDER BY created_at", (DEFAULT_TENANT, collection)).fetchall()
             existing_ids = {str(item.get("id")) for item in items}
@@ -2500,7 +2626,7 @@ class AppHandler(SimpleHTTPRequestHandler):
                 role = str(payload.get("role", "VENDEDOR")).strip().upper()
                 password = str(payload.get("password", ""))
                 document = str(payload.get("document", "")).strip()
-                active = 0 if payload.get("active") is False else 1
+                active = normalize_active_flag(payload.get("active"))
                 valid_roles = {"ADMINISTRADOR", "GERENTE", "CONTADOR", "SUPERVISOR", "BODEGA", "CAJERO", "VENDEDOR"}
                 if len(username) < 3 or role not in valid_roles:
                     raise ValueError("Usuario o rol no valido")
@@ -2517,6 +2643,27 @@ class AppHandler(SimpleHTTPRequestHandler):
                         database.execute("UPDATE auth_users SET username = ?, email = ?, phone = ?, document = ?, role = ?, store_id = ?, active = ? WHERE id = ? AND tenant_id = ?", (username, str(payload.get("email", "")).strip(), str(payload.get("phone", "")).strip(), document, role, payload.get("storeId"), active, identifier, tenant_id(self, payload)))
                     if not active:
                         database.execute("DELETE FROM auth_tokens WHERE user_id = ?", (identifier,))
+                self.send_json(200, {"ok": True, "id": identifier})
+                return
+            if path.rstrip("/") == "/api/domain/users":
+                current_user = authenticated_user(self)
+                if current_user["role"] != "ADMINISTRADOR":
+                    self.send_json(403, {"error": "Solo el administrador puede editar usuarios"})
+                    return
+                identifier = str(record_id(payload)).strip()
+                username = str(payload.get("username") or payload.get("name") or payload.get("nombre") or "").strip()
+                role = str(payload.get("role") or payload.get("rol") or "VENDEDOR").strip().upper()
+                active = normalize_active_flag(payload.get("active", payload.get("activo", True)))
+                if not identifier or len(username) < 3 or role not in {"ADMINISTRADOR", "GERENTE", "CONTADOR", "SUPERVISOR", "BODEGA", "CAJERO", "VENDEDOR"}:
+                    raise ValueError("Usuario o rol no valido")
+                with connection() as database:
+                    updated = database.execute(
+                        "UPDATE empleados SET nombre = %s, rol = %s, local_asignado = %s, activo = %s, email = %s, telefono = %s, documento = %s WHERE id_telegram = %s",
+                        (username, role, str(payload.get("storeId") or payload.get("local_asignado") or ""), "SI" if active else "NO", str(payload.get("email") or "").strip(), str(payload.get("phone") or payload.get("telefono") or "").strip(), str(payload.get("document") or payload.get("documento") or "").strip(), identifier),
+                    ).rowcount
+                if not updated:
+                    self.send_json(404, {"error": "Usuario de Telegram no encontrado"})
+                    return
                 self.send_json(200, {"ok": True, "id": identifier})
                 return
             if path == "/api/shared-entry":
