@@ -51,9 +51,6 @@
   <div id="toast-region" class="toast-region" aria-live="polite"></div>
   <div id="modal-root"></div>
   <script>
-    if (window.location.hostname.endsWith('.github.io') && !window.FAMIMUEBLES_API_BASE_URL) {
-      window.FAMIMUEBLES_API_BASE_URL = 'http://127.0.0.1:8024/api';
-    }
     if (!location.hash) {
       location.hash = '#inventario';
     }
