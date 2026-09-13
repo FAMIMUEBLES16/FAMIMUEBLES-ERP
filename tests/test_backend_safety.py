@@ -2,7 +2,6 @@ import io
 import json
 import unittest
 import zipfile
-from pathlib import Path
 from unittest.mock import patch
 
 import server
@@ -10,42 +9,6 @@ from server import _create_shared_sale, _shared_domain_items, canonical_request_
 
 
 class BackendSafetyTests(unittest.TestCase):
-    def test_active_flag_string_false_is_normalized_to_inactive_in_server_contract(self):
-        self.assertEqual(server.normalize_active_flag("false"), 0)
-        self.assertEqual(server.normalize_active_flag("true"), 1)
-        self.assertEqual(server.normalize_active_flag(False), 0)
-        self.assertEqual(server.normalize_active_flag(True), 1)
-
-    def test_resolve_transfer_movement_from_transfer_reference_string(self):
-        class FakeCursor:
-            def __init__(self, rows=None):
-                self.rows = rows or []
-
-            def fetchone(self):
-                return self.rows[0] if self.rows else None
-
-            def fetchall(self):
-                return self.rows
-
-        class FakeDatabase:
-            def __init__(self):
-                self.queries = []
-
-            def execute(self, query, params=()):
-                self.queries.append((query, params))
-                if "WHERE referencia = %s" in query:
-                    return FakeCursor([{"id": 368, "tipo": "TRASLADO", "local_origen": "INV CRR 5 3 26", "local_destino": "INV BODEGA MANABLANCA"}])
-                if "WHERE id = %s" in query:
-                    return FakeCursor([])
-                return FakeCursor([])
-
-        database = FakeDatabase()
-        movement = server.resolve_transfer_movement_for_delete(database, "TRA-00360")
-
-        self.assertEqual(movement["id"], 368)
-        self.assertEqual(movement["local_origen"], "INV CRR 5 3 26")
-        self.assertEqual(movement["local_destino"], "INV BODEGA MANABLANCA")
-
     def test_idempotency_hash_is_order_independent(self):
         first = canonical_request_hash({"id": "VEN-1", "items": [{"productId": "P-1", "quantity": 2}], "requestId": "a"})
         second = canonical_request_hash({"items": [{"productId": "P-1", "quantity": 2}], "id": "VEN-1", "requestId": "b"})
@@ -63,12 +26,6 @@ class BackendSafetyTests(unittest.TestCase):
 
     def test_password_hash_uses_unique_salts(self):
         self.assertNotEqual(password_hash("ClaveSegura123"), password_hash("ClaveSegura123"))
-
-    def test_user_contract_supports_document_field_in_server_source(self):
-        server_source = Path(server.__file__).read_text(encoding="utf-8")
-        self.assertIn("SELECT id, username, email, phone, document, role, store_id AS storeId", server_source)
-        self.assertIn("INSERT INTO auth_users (id, username, email, phone, document, password_hash, role, store_id, tenant_id)", server_source)
-        self.assertIn("UPDATE auth_users SET username = ?, email = ?, phone = ?, document = ?, role = ?, store_id = ?, active = ?", server_source)
 
     def test_specialized_xlsx_is_a_valid_zip_package(self):
         content = specialized_xlsx(["codigo", "descripcion"], [["001", "Mueble <demo>"]])
@@ -103,35 +60,79 @@ class BackendSafetyTests(unittest.TestCase):
         self.assertEqual(items[0]["id"], "CR-1")
         self.assertEqual(items[0]["customer"], "Cliente Demo")
 
-    def test_shared_domain_items_customer_route_reads_postgres_customer_fields(self):
-        class FakeCursor:
-            def __init__(self, rows=None):
-                self.rows = rows or []
+    def test_shared_domain_items_maps_warranties_collection_to_garantias_table(self):
+        class FakeResult:
+            def __init__(self, rows):
+                self.rows = rows
 
             def fetchall(self):
                 return self.rows
 
         class FakeDatabase:
-            def __init__(self):
-                self.queries = []
-
             def execute(self, query, params=()):
-                self.queries.append(query)
-                if "FROM clientes c" in query:
-                    return FakeCursor([
-                        {"id": 5, "name": "Fernando Suárez", "document": "123456", "phone": "3017439000", "address": "Calle 1", "email": "", "purchases": 2, "credits": 1, "balance": 150000, "status": "Activo"}
+                if "FROM garantias" in query:
+                    return FakeResult([
+                        {
+                            "id": 2,
+                            "fecha": "2026-09-12T16:54:13",
+                            "local": "INV CRR 5 3 17",
+                            "producto": "0373",
+                            "cliente": "NEVECON",
+                            "cantidad": 1,
+                            "estado": "PENDIENTE",
+                            "descripcion": "Salida por garantía | Factura: - | Registrado por Michael Díaz",
+                        }
                     ])
                 if "information_schema.columns" in query:
-                    return FakeCursor([])
-                return FakeCursor([])
+                    return FakeResult([])
+                return FakeResult([])
 
-        items = _shared_domain_items(FakeDatabase(), "customers")
+        items = _shared_domain_items(FakeDatabase(), "warranties")
+
         self.assertEqual(len(items), 1)
-        self.assertEqual(items[0]["id"], 5)
-        self.assertEqual(items[0]["name"], "Fernando Suárez")
-        self.assertEqual(items[0]["document"], "123456")
-        self.assertEqual(items[0]["phone"], "3017439000")
-        self.assertEqual(items[0]["address"], "Calle 1")
+        self.assertEqual(items[0]["id"], 2)
+        self.assertEqual(items[0]["local"], "INV CRR 5 3 17")
+        self.assertEqual(items[0]["estado"], "PENDIENTE")
+        self.assertEqual(items[0]["storeId"], "INV CRR 5 3 17")
+        self.assertEqual(items[0]["status"], "PENDIENTE")
+
+    def test_shared_domain_items_exposes_telegram_warranty_frontend_aliases(self):
+        class FakeResult:
+            def __init__(self, rows):
+                self.rows = rows
+
+            def fetchall(self):
+                return self.rows
+
+        class FakeDatabase:
+            def execute(self, query, params=()):
+                if "FROM garantias" in query:
+                    return FakeResult([
+                        {
+                            "id": 9,
+                            "fecha": "2026-09-13T10:15:00",
+                            "local": "LOCAL 01",
+                            "codigo": "0373",
+                            "cliente": "NEVECON",
+                            "cantidad": 1,
+                            "estado": "PENDIENTE",
+                            "descripcion": "Salida por garantía | Factura: FAC-300 | Registrado por Michael Díaz",
+                            "factura": "FAC-300",
+                            "precio_total": 245000,
+                        }
+                    ])
+                return FakeResult([])
+
+        items = _shared_domain_items(FakeDatabase(), "warranties")
+
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["productId"], "0373")
+        self.assertEqual(items[0]["productName"], "0373")
+        self.assertEqual(items[0]["customerName"], "NEVECON")
+        self.assertEqual(items[0]["invoiceNumber"], "FAC-300")
+        self.assertEqual(items[0]["amount"], 245000)
+        self.assertEqual(items[0]["storeId"], "LOCAL 01")
+        self.assertEqual(items[0]["status"], "PENDIENTE")
 
     def test_create_shared_sale_creates_credit_record_for_credit_payment(self):
         class FakeCursor:

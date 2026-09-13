@@ -9,7 +9,6 @@ import secrets
 import sys
 import threading
 import zipfile
-from datetime import date as calendar_date
 from decimal import Decimal
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -247,8 +246,6 @@ def _initialize_schema() -> sqlite3.Connection:
         database.execute("ALTER TABLE auth_users ADD COLUMN email TEXT NOT NULL DEFAULT ''")
     if "phone" not in user_columns:
         database.execute("ALTER TABLE auth_users ADD COLUMN phone TEXT NOT NULL DEFAULT ''")
-    if "document" not in user_columns:
-        database.execute("ALTER TABLE auth_users ADD COLUMN document TEXT NOT NULL DEFAULT ''")
     database.execute(
         "CREATE TABLE IF NOT EXISTS auth_tokens (token TEXT PRIMARY KEY, user_id TEXT NOT NULL, expires_at TEXT NOT NULL)"
     )
@@ -330,10 +327,7 @@ def _initialize_postgres_schema() -> _PostgresConnection:
     statements = [
         "CREATE TABLE IF NOT EXISTS app_state (id INTEGER PRIMARY KEY, state_json TEXT NOT NULL, updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)",
         "CREATE TABLE IF NOT EXISTS domain_records (tenant_id TEXT NOT NULL, collection TEXT NOT NULL, id TEXT NOT NULL, data_json TEXT NOT NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (tenant_id, collection, id))",
-        "CREATE TABLE IF NOT EXISTS auth_users (id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL, role TEXT NOT NULL, store_id TEXT, active INTEGER NOT NULL DEFAULT 1, tenant_id TEXT NOT NULL DEFAULT 'tenant-default', email TEXT NOT NULL DEFAULT '', phone TEXT NOT NULL DEFAULT '', document TEXT NOT NULL DEFAULT '', created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)",
-        "ALTER TABLE empleados ADD COLUMN IF NOT EXISTS email TEXT NOT NULL DEFAULT ''",
-        "ALTER TABLE empleados ADD COLUMN IF NOT EXISTS telefono TEXT NOT NULL DEFAULT ''",
-        "ALTER TABLE empleados ADD COLUMN IF NOT EXISTS documento TEXT NOT NULL DEFAULT ''",
+        "CREATE TABLE IF NOT EXISTS auth_users (id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL, role TEXT NOT NULL, store_id TEXT, active INTEGER NOT NULL DEFAULT 1, tenant_id TEXT NOT NULL DEFAULT 'tenant-default', email TEXT NOT NULL DEFAULT '', phone TEXT NOT NULL DEFAULT '', created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)",
         "CREATE TABLE IF NOT EXISTS auth_tokens (token TEXT PRIMARY KEY, user_id TEXT NOT NULL, expires_at TIMESTAMP NOT NULL)",
         "CREATE TABLE IF NOT EXISTS user_permissions (tenant_id TEXT NOT NULL, user_id TEXT NOT NULL, resource TEXT NOT NULL, action TEXT NOT NULL, allowed INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (tenant_id, user_id, resource, action))",
         "CREATE TABLE IF NOT EXISTS audit_events (id BIGSERIAL PRIMARY KEY, user_id TEXT, action TEXT NOT NULL, collection TEXT, record_id TEXT, data_json TEXT NOT NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)",
@@ -449,37 +443,10 @@ def complete_idempotency(database: _PostgresConnection, handler: "AppHandler", p
     )
 
 
-def normalize_active_flag(value) -> int:
-    if isinstance(value, bool):
-        return 1 if value else 0
-    if isinstance(value, int):
-        return 1 if value else 0
-    if value is None:
-        return 1
-    text = str(value).strip().lower()
-    if text in {"false", "no", "off", "0", "inactive", "inactivo"}:
-        return 0
-    if text in {"true", "yes", "on", "1", "active", "activo"}:
-        return 1
-    return 1 if text else 1
-
-
 def record_id(payload: dict) -> str:
     value = str(payload.get("id", "")).strip()
     if not value:
         raise ValueError("El registro requiere un id")
-    return value
-
-
-def sale_date(payload: dict) -> str | None:
-    raw_value = payload.get("date", payload.get("fecha"))
-    if raw_value in (None, ""):
-        return None
-    value = str(raw_value).strip()
-    try:
-        calendar_date.fromisoformat(value)
-    except ValueError as error:
-        raise ValueError("La fecha de la venta debe tener el formato AAAA-MM-DD y ser valida") from error
     return value
 
 
@@ -532,7 +499,7 @@ def permission_target(path: str, method: str) -> tuple[str, str] | None:
         return "Productos", action
     if "/catalog/store" in path:
         return "Locales", action
-    if "/catalog/inventory" in path or "/catalog/transfer" in path:
+    if "/catalog/inventory" in path:
         return "Inventario", action
     if "/report" in path:
         return "Reportes", "view"
@@ -551,9 +518,8 @@ def can_access(handler: "AppHandler", path: str, method: str = "GET") -> bool:
     if _postgres_enabled() and tenant_id(handler) != DEFAULT_TENANT and (
         path == "/api/state"
         or path == "/api/catalog"
-        or path.startswith("/api/catalog/")
         or path.startswith("/api/parity/")
-        or path.startswith("/api/report-pdf/")
+        or path.startswith("/api/report")
     ):
         return False
     if path.startswith("/api/users/") and path.endswith("/permissions"):
@@ -642,35 +608,7 @@ def specialized_report_rows(database: _PostgresConnection, report_name: str, que
     query, columns = queries.get(report_name, (None, None))
     if not query:
         raise ValueError("Reporte especializado no disponible")
-    report_filters = []
-    report_params = []
-    if date_from and report_name in {"gastos", "gasolina", "historial-empleado"}:
-        report_filters.append("fecha::date >= %s")
-        report_params.append(date_from)
-    if date_to and report_name in {"gastos", "gasolina", "historial-empleado"}:
-        report_filters.append("fecha::date <= %s")
-        report_params.append(date_to)
-    if local and report_name == "historial-empleado":
-        report_filters.append("COALESCE(local_origen, '') = %s")
-        report_params.append(local)
-    if vendedor and report_name == "gastos":
-        report_filters.append("COALESCE(usuario, '') ILIKE %s")
-        report_params.append(f"%{vendedor}%")
-    elif vendedor and report_name == "gasolina":
-        report_filters.append("COALESCE(conductor, '') ILIKE %s")
-        report_params.append(f"%{vendedor}%")
-    elif vendedor and report_name == "historial-empleado":
-        report_filters.append("COALESCE(vendedor, '') ILIKE %s")
-        report_params.append(f"%{vendedor}%")
-    if report_filters:
-        where_clause = ' AND '.join(report_filters)
-        order_marker = ' ORDER BY '
-        if order_marker in query:
-            base_query, order_clause = query.split(order_marker, 1)
-            query = f"{base_query} WHERE {where_clause} ORDER BY {order_clause}"
-        else:
-            query = f"{query} WHERE {where_clause}"
-    rows = database.execute(query, tuple(report_params)).fetchall()
+    rows = database.execute(query).fetchall()
     return columns, [[row[column] for column in columns] for row in rows]
 
 
@@ -788,32 +726,22 @@ def _with_frontend_aliases(row: dict) -> dict:
         if "_" in key:
             parts = key.split("_")
             result[parts[0] + "".join(part[:1].upper() + part[1:] for part in parts[1:])] = value
+
+    aliases = {
+        "storeId": row.get("storeId") or row.get("local") or row.get("local_id") or row.get("store_id"),
+        "status": row.get("status") or row.get("estado") or row.get("state"),
+        "customer": row.get("customer") or row.get("cliente") or row.get("customer_name") or row.get("nombre_cliente"),
+        "customerName": row.get("customerName") or row.get("customer") or row.get("cliente") or row.get("customer_name") or row.get("nombre_cliente"),
+        "productId": row.get("productId") or row.get("codigo") or row.get("product") or row.get("producto") or row.get("product_id"),
+        "productName": row.get("productName") or row.get("product_name") or row.get("nombre_producto") or row.get("name") or row.get("codigo") or row.get("producto") or row.get("product") or row.get("descripcion"),
+        "invoiceNumber": row.get("invoiceNumber") or row.get("factura") or row.get("invoice") or row.get("numero_factura"),
+        "amount": row.get("amount") if row.get("amount") is not None else row.get("precio_total") if row.get("precio_total") is not None else row.get("valor_total") if row.get("valor_total") is not None else row.get("monto") if row.get("monto") is not None else row.get("total"),
+        "total": row.get("total") if row.get("total") is not None else row.get("precio_total") if row.get("precio_total") is not None else row.get("valor_total") if row.get("valor_total") is not None else row.get("monto") if row.get("monto") is not None else row.get("amount"),
+    }
+    for key, value in aliases.items():
+        if value is not None and key not in result:
+            result[key] = value
     return result
-
-
-def resolve_transfer_movement_for_delete(database, transfer_identifier: str) -> dict | None:
-    """Resuelve el movimiento real de un traslado desde el id visible del dominio o la referencia del movimiento.
-
-    El ERP guarda el traslado de la UI con id tipo TRA-00360 en domain_records, pero la
-    fuente de verdad del inventario sigue siendo la fila numérica de movimientos. El
-    borrado debe buscar primero por id entero, y luego caer a la referencia textual
-    registrada en movimientos.referencia = 'TRA-00360'.
-    """
-    identifier = str(transfer_identifier or "").strip()
-    if not identifier:
-        return None
-    try:
-        numeric_id = int(identifier)
-    except Exception:
-        numeric_id = None
-    if numeric_id is not None:
-        row = database.execute("SELECT id, tipo, local_origen, local_destino FROM movimientos WHERE id = %s FOR UPDATE", (numeric_id,)).fetchone()
-        if row:
-            return dict(row) if isinstance(row, dict) else {"id": row[0], "tipo": row[1], "local_origen": row[2], "local_destino": row[3]}
-    row = database.execute("SELECT id, tipo, local_origen, local_destino FROM movimientos WHERE referencia = %s AND UPPER(COALESCE(tipo, '')) = 'TRASLADO' ORDER BY id DESC LIMIT 1 FOR UPDATE", (identifier,)).fetchone()
-    if row:
-        return dict(row) if isinstance(row, dict) else {"id": row[0], "tipo": row[1], "local_origen": row[2], "local_destino": row[3]}
-    return None
 
 
 def _shared_domain_items(database: _PostgresConnection, collection: str) -> list[dict] | None:
@@ -839,66 +767,14 @@ def _shared_domain_items(database: _PostgresConnection, collection: str) -> list
     }
     if collection == "customers":
         query = """
-            WITH customer_source AS (
-                SELECT c.id::text AS id, c.nombre, c.documento, c.telefono, c.direccion, 3 AS source_priority
-                FROM clientes c
-                UNION ALL
-                SELECT ('MOV-' || m.id::text) AS id, m.cliente AS nombre, '' AS documento, m.telefono, '' AS direccion, 2 AS source_priority
-                FROM movimientos m
-                WHERE NULLIF(BTRIM(COALESCE(m.cliente, '')), '') IS NOT NULL
-                UNION ALL
-                SELECT ('CR-' || cr.id::text) AS id, cr.cliente AS nombre, cr.documento, cr.telefono, '' AS direccion, 1 AS source_priority
-                FROM creditos cr
-                WHERE NULLIF(BTRIM(COALESCE(cr.cliente, '')), '') IS NOT NULL
-            ), distinct_customers AS (
-                SELECT DISTINCT ON (LOWER(BTRIM(nombre))) id, nombre, documento, telefono, direccion
-                FROM customer_source
-                ORDER BY LOWER(BTRIM(nombre)), source_priority DESC, id
-            )
-            SELECT
-                c.id AS id,
-                c.nombre AS name,
-                COALESCE(NULLIF(BTRIM(c.documento), ''), NULLIF(BTRIM((
-                    SELECT cr.documento FROM creditos cr
-                    WHERE LOWER(BTRIM(COALESCE(cr.cliente, ''))) = LOWER(BTRIM(COALESCE(c.nombre, '')))
-                    ORDER BY cr.creado_en DESC NULLS LAST, cr.id DESC LIMIT 1
-                )), ''), '') AS document,
-                COALESCE(NULLIF(BTRIM(c.telefono), ''), NULLIF(BTRIM((
-                    SELECT COALESCE(NULLIF(m.telefono, ''), cr.telefono)
-                    FROM creditos cr
-                    LEFT JOIN movimientos m ON m.id = cr.movimiento_id
-                    WHERE LOWER(BTRIM(COALESCE(cr.cliente, ''))) = LOWER(BTRIM(COALESCE(c.nombre, '')))
-                    ORDER BY cr.creado_en DESC NULLS LAST, cr.id DESC LIMIT 1
-                )), ''), NULLIF(BTRIM((
-                    SELECT m.telefono FROM movimientos m
-                    WHERE LOWER(BTRIM(COALESCE(m.cliente, ''))) = LOWER(BTRIM(COALESCE(c.nombre, '')))
-                    ORDER BY m.fecha DESC NULLS LAST, m.id DESC LIMIT 1
-                )), ''), '') AS phone,
-                COALESCE(c.direccion, '') AS address,
-                '' AS email,
-                COALESCE((
-                    SELECT COUNT(*) FROM movimientos m
-                    WHERE UPPER(COALESCE(m.tipo, '')) IN ('VENTA', 'APARTADO')
-                      AND LOWER(BTRIM(COALESCE(m.cliente, ''))) = LOWER(BTRIM(COALESCE(c.nombre, '')))
-                ), 0) AS purchases,
-                COALESCE((
-                    SELECT COUNT(*) FROM creditos cr
-                    WHERE LOWER(BTRIM(COALESCE(cr.cliente, ''))) = LOWER(BTRIM(COALESCE(c.nombre, '')))
-                ), 0) AS credits,
-                COALESCE((
-                    SELECT SUM(mp.precio_total)
-                    FROM movimientos m
-                    LEFT JOIN movimiento_productos mp ON mp.movimiento_id = m.id
-                    WHERE UPPER(COALESCE(m.tipo, '')) IN ('VENTA', 'APARTADO')
-                      AND LOWER(BTRIM(COALESCE(m.cliente, ''))) = LOWER(BTRIM(COALESCE(c.nombre, '')))
-                ), 0) AS purchase_total,
-                COALESCE((
-                    SELECT COALESCE(SUM(cr.saldo_pendiente), 0) FROM creditos cr
-                    WHERE LOWER(BTRIM(COALESCE(cr.cliente, ''))) = LOWER(BTRIM(COALESCE(c.nombre, '')))
-                ), 0) AS balance,
-                'Activo' AS status
-            FROM distinct_customers c
-            ORDER BY c.nombre
+            SELECT DISTINCT cliente AS id, cliente AS name, cliente AS customer
+            FROM movimientos
+            WHERE NULLIF(BTRIM(COALESCE(cliente, '')), '') IS NOT NULL
+            UNION
+            SELECT DISTINCT cliente AS id, cliente AS name, cliente AS customer
+            FROM apartados
+            WHERE NULLIF(BTRIM(COALESCE(cliente, '')), '') IS NOT NULL
+            ORDER BY name
         """
     elif collection == "inventoryMovements":
         query = """
@@ -937,23 +813,25 @@ def _shared_domain_items(database: _PostgresConnection, collection: str) -> list
         """
     elif collection == "installments":
         query = "SELECT id_abono AS id, credito_id, fecha, usuario, vendedor, local, valor_abono, saldo_anterior, saldo_nuevo, metodo_pago, observacion, numero_recibo FROM abonos_creditos ORDER BY fecha DESC"
+    elif collection == "warranties":
+        query = """
+            SELECT id, fecha, local, codigo, cliente, cantidad, estado, descripcion,
+                   factura, usuario, tipo, referencia, observacion, precio_unitario,
+                   precio_total, tipo_garantia, costo, numero_serie, fecharecepcion
+            FROM garantias
+            ORDER BY fecha DESC, id DESC
+        """
+    elif collection == "damagedStock":
+        query = """
+            SELECT id, fecha, local, codigo, cliente, cantidad, estado, descripcion,
+                   factura, usuario, tipo, referencia, observacion, precio_unitario,
+                   precio_total, tipo_garantia, costo, numero_serie, fecharecepcion
+            FROM garantias
+            WHERE UPPER(COALESCE(estado, '')) IN ('PENDIENTE', 'EN_ESPERA', 'RECIBIDA', 'REPARADA')
+            ORDER BY fecha DESC, id DESC
+        """
     elif collection == "paymentMethods":
         query = "SELECT DISTINCT metodo_pago AS name FROM movimientos WHERE NULLIF(BTRIM(COALESCE(metodo_pago, '')), '') IS NOT NULL ORDER BY name"
-    elif collection == "transfers":
-        query = """
-            SELECT m.id, m.fecha AS created_at, m.estado, m.local_origen, m.local_destino,
-                   m.empleado, m.vendedor, m.referencia, m.observacion,
-                   COALESCE(json_agg(json_build_object(
-                       'productId', mp.codigo, 'name', mp.descripcion,
-                       'quantity', mp.cantidad, 'entrada', mp.entrada, 'salida', mp.salida
-                   ) ORDER BY mp.codigo) FILTER (WHERE mp.codigo IS NOT NULL), '[]'::json) AS items
-            FROM movimientos m
-            LEFT JOIN movimiento_productos mp ON mp.movimiento_id = m.id
-            WHERE UPPER(COALESCE(m.tipo, '')) = 'TRASLADO'
-            GROUP BY m.id, m.fecha, m.estado, m.local_origen, m.local_destino,
-                     m.empleado, m.vendedor, m.referencia, m.observacion
-            ORDER BY m.fecha DESC, m.id DESC
-        """
     elif collection == "credits":
         credit_columns = {
             row["column_name"]
@@ -1002,23 +880,6 @@ def _shared_domain_items(database: _PostgresConnection, collection: str) -> list
                     continue
                 items.append(_with_frontend_aliases(item))
         if collection == "customers":
-            stored = database.execute(
-                "SELECT data_json FROM domain_records WHERE tenant_id = %s AND collection = %s ORDER BY created_at",
-                (DEFAULT_TENANT, collection),
-            ).fetchall()
-            existing_keys = {
-                str(item.get("id") or item.get("name") or item.get("customer") or "").strip().casefold()
-                for item in items
-            }
-            for row in stored:
-                payload = row[0] if isinstance(row, (tuple, list)) else row.get("data_json")
-                if not payload:
-                    continue
-                stored_item = _with_frontend_aliases(json.loads(payload))
-                key = str(stored_item.get("id") or stored_item.get("name") or stored_item.get("customer") or "").strip().casefold()
-                if key and key not in existing_keys:
-                    items.append(stored_item)
-                    existing_keys.add(key)
             credit_columns = {
                 row["column_name"]
                 for row in database.execute(
@@ -1037,64 +898,18 @@ def _shared_domain_items(database: _PostgresConnection, collection: str) -> list
                     if key:
                         balances[key] = balances.get(key, 0) + max(0, float(row["balance"] or 0))
                 for item in items:
-                    key = str(item.get("name") or item.get("customer") or "").strip().lower()
-                    item["balance"] = balances.get(key, item.get("balance") or 0)
-            credit_rows = database.execute(
-                "SELECT cliente, documento, telefono, cuota_inicial, saldo_pendiente FROM creditos"
-            ).fetchall()
-            movement_rows = database.execute(
-                "SELECT cliente, telefono, tipo FROM movimientos WHERE NULLIF(BTRIM(COALESCE(cliente, '')), '') IS NOT NULL"
-            ).fetchall()
-            credit_info = {}
-            movement_info = {}
-            for row in credit_rows:
-                key = str(row["cliente"] or "").strip().lower()
-                if not key:
-                    continue
-                info = credit_info.setdefault(key, {"credits": 0, "creditTotal": 0, "balance": 0, "document": "", "phone": ""})
-                info["credits"] += 1
-                info["creditTotal"] += max(0, float(row["cuota_inicial"] or 0) + float(row["saldo_pendiente"] or 0))
-                info["balance"] += max(0, float(row["saldo_pendiente"] or 0))
-                info["document"] = info["document"] or str(row["documento"] or "").strip()
-                info["phone"] = info["phone"] or str(row["telefono"] or "").strip()
-            for row in movement_rows:
-                key = str(row["cliente"] or "").strip().lower()
-                if not key:
-                    continue
-                info = movement_info.setdefault(key, {"purchases": 0, "phone": ""})
-                if str(row["tipo"] or "").upper() in {"VENTA", "APARTADO"}:
-                    info["purchases"] += 1
-                info["phone"] = info["phone"] or str(row["telefono"] or "").strip()
-            for item in items:
-                key = str(item.get("name") or item.get("customer") or "").strip().lower()
-                credit = credit_info.get(key, {})
-                movement = movement_info.get(key, {})
-                item["document"] = item.get("document") or item.get("documento") or credit.get("document", "")
-                item["phone"] = item.get("phone") or item.get("telefono") or credit.get("phone") or movement.get("phone", "")
-                item["purchases"] = item.get("purchases") if item.get("purchases") not in (None, "") else movement.get("purchases", 0)
-                item["credits"] = item.get("credits") if item.get("credits") not in (None, "") else credit.get("credits", 0)
-                item["creditTotal"] = item.get("creditTotal") if item.get("creditTotal") not in (None, "") else credit.get("creditTotal", 0)
-                item["purchaseTotal"] = item.get("purchaseTotal") or item.get("purchase_total") or 0
-                item["balance"] = item.get("balance") if item.get("balance") not in (None, "") else credit.get("balance", 0)
+                    item["balance"] = balances.get(str(item.get("name") or item.get("customer") or "").strip().lower(), 0)
         if collection == "transfers":
-            stored = database.execute("SELECT data_json FROM domain_records WHERE tenant_id = %s AND collection = %s ORDER BY created_at", (DEFAULT_TENANT, collection)).fetchall()
+            stored = database.execute(
+                "SELECT data_json FROM domain_records WHERE tenant_id = %s AND collection = %s ORDER BY created_at",
+                (DEFAULT_TENANT, collection),
+            ).fetchall()
             existing_ids = {str(item.get("id")) for item in items}
-            for row in stored:
-                item = json.loads(row[0])
-                status = str(item.get("status") or item.get("estado") or "").upper()
-                if status not in {"BORRADOR", "PENDIENTE"} or str(item.get("id")) in existing_ids:
-                    continue
-                items.append(item)
-            for item in items:
-                item["id"] = str(item.get("id") or "")
-                item["originStoreId"] = str(item.get("originStoreId") or item.get("local_origen") or item.get("localOrigen") or "")
-                item["destinationStoreId"] = str(item.get("destinationStoreId") or item.get("local_destino") or item.get("localDestino") or "")
-                item["createdAt"] = item.get("createdAt") or item.get("created_at") or item.get("fecha") or ""
-                item["createdBy"] = str(item.get("createdBy") or item.get("empleado") or item.get("vendedor") or "")
-                raw_status = str(item.get("status") or item.get("estado") or "RECIBIDO").upper()
-                item["status"] = "RECIBIDO" if raw_status == "COMPLETADO" else raw_status
-                if isinstance(item.get("items"), str):
-                    item["items"] = json.loads(item["items"])
+            items.extend(
+                json.loads(row[0])
+                for row in stored
+                if str(json.loads(row[0]).get("id")) not in existing_ids
+            )
         if collection == "credits":
             for item in items:
                 sale_id = item.get("sale_id") or item.get("saleId") or item.get("venta_id") or item.get("ventaId")
@@ -1273,57 +1088,6 @@ def _create_shared_sale(database: _PostgresConnection, payload: dict, user: dict
     if credit_record:
         result["creditId"] = credit_record["id"]
     complete_idempotency(database, handler, payload, "/api/catalog/sale", 201, {"ok": True, **result})
-    return result
-
-
-def _create_shared_transfer(database: _PostgresConnection, payload: dict, user: dict, handler: "AppHandler") -> dict:
-    """Aplica un traslado web completo en una sola transaccion PostgreSQL."""
-    _, cached = claim_idempotency(database, handler, payload, "/api/catalog/transfer")
-    if cached is not None:
-        return cached
-    origin = str(payload.get("originStoreId") or payload.get("originStore") or "").strip()
-    destination = str(payload.get("destinationStoreId") or payload.get("destinationStore") or "").strip()
-    items = payload.get("items")
-    if not origin or not destination or origin == destination or not isinstance(items, list) or not items:
-        raise ValueError("El traslado requiere origen, destino y productos diferentes")
-    enforce_user_store_proxy(user, origin)
-    origin_row = database.execute("SELECT nombre FROM locales WHERE nombre = %s AND activo = TRUE", (origin,)).fetchone()
-    destination_row = database.execute("SELECT nombre FROM locales WHERE nombre = %s AND activo = TRUE", (destination,)).fetchone()
-    if not origin_row or not destination_row:
-        raise ValueError("El local de origen o destino no existe o esta inactivo")
-    origin_name = str(origin_row["nombre"])
-    destination_name = str(destination_row["nombre"])
-    quantities = {}
-    for item in items:
-        code = str(item.get("productCode") or item.get("code") or item.get("productId") or "").strip()
-        quantity = float(item.get("quantity", 0) or 0)
-        if not code or quantity <= 0 or quantity != int(quantity):
-            raise ValueError("Cada producto debe tener un codigo y una cantidad entera positiva")
-        product = database.execute("SELECT codigo, nombre_producto FROM productos WHERE codigo = %s AND UPPER(COALESCE(activo, 'SI')) <> 'NO'", (code,)).fetchone()
-        if not product:
-            raise ValueError(f"El producto {code} no existe o esta inactivo")
-        canonical_code = str(product["codigo"])
-        entry = quantities.setdefault(canonical_code, {"description": product["nombre_producto"], "quantity": 0})
-        entry["quantity"] += int(quantity)
-    for code, item in quantities.items():
-        stock = database.execute("SELECT cantidad FROM inventarios WHERE local = %s AND codigo = %s FOR UPDATE", (origin_name, code)).fetchone()
-        if not stock or int(stock["cantidad"] or 0) < item["quantity"]:
-            available = int(stock["cantidad"] or 0) if stock else 0
-            raise ValueError(f"Stock insuficiente para {code}: disponible {available}, solicitado {item['quantity']}")
-    movement = database.execute(
-        "INSERT INTO movimientos (tipo, estado, local_origen, local_destino, empleado, vendedor, referencia, observacion) VALUES ('TRASLADO', 'COMPLETADO', %s, %s, %s, %s, %s, %s) RETURNING id",
-        (origin_name, destination_name, str(user.get("username") or user.get("id") or "ERP"), str(user.get("username") or "ERP"), str(payload.get("transferId") or ""), "TRASLADO | Registrado desde ERP"),
-    ).fetchone()
-    if not movement:
-        raise RuntimeError("No se pudo crear el movimiento de traslado")
-    movement_id = movement[0]
-    for code, item in quantities.items():
-        quantity = item["quantity"]
-        database.execute("UPDATE inventarios SET cantidad = cantidad - %s, actualizado = CURRENT_TIMESTAMP WHERE local = %s AND codigo = %s", (quantity, origin_name, code))
-        database.execute("INSERT INTO inventarios (local, codigo, descripcion, cantidad) VALUES (%s, %s, %s, %s) ON CONFLICT (local, codigo) DO UPDATE SET cantidad = inventarios.cantidad + EXCLUDED.cantidad, actualizado = CURRENT_TIMESTAMP", (destination_name, code, item["description"], quantity))
-        database.execute("INSERT INTO movimiento_productos (movimiento_id, codigo, descripcion, cantidad, entrada, salida) VALUES (%s, %s, %s, %s, %s, %s)", (movement_id, code, item["description"], quantity, quantity, quantity))
-    result = {"ok": True, "id": movement_id, "status": "RECIBIDO", "items": [{"productCode": code, "quantity": item["quantity"]} for code, item in quantities.items()]}
-    complete_idempotency(database, handler, payload, "/api/catalog/transfer", 201, result)
     return result
 
 
@@ -1637,7 +1401,7 @@ class AppHandler(SimpleHTTPRequestHandler):
             return
         if path == "/api/users":
             with connection() as database:
-                rows = database.execute("SELECT id, username, email, phone, document, role, store_id AS storeId, tenant_id AS tenantId, active, created_at AS createdAt FROM auth_users WHERE tenant_id = ? ORDER BY username", (tenant_id(self),)).fetchall()
+                rows = database.execute("SELECT id, username, email, phone, role, store_id AS storeId, tenant_id AS tenantId, active, created_at AS createdAt FROM auth_users WHERE tenant_id = ? ORDER BY username", (tenant_id(self),)).fetchall()
             self.send_json(200, {"items": [dict(row) for row in rows]})
             return
         if path.startswith("/api/users/") and path.endswith("/permissions"):
@@ -1702,15 +1466,29 @@ class AppHandler(SimpleHTTPRequestHandler):
                 with connection() as database:
                     items = filter_report_items(report_domain_items(database, collection, current_tenant), date_from, date_to, store_filter)
             elif collection == "sales":
+                query = "SELECT id, store_id AS storeId, customer_id AS customerId, total, payment_method AS paymentMethod, created_at AS date FROM sales WHERE tenant_id = ?"
+                params = [current_tenant]
+                if date_from:
+                    query += " AND date(created_at) >= date(?)"
+                    params.append(date_from)
+                if date_to:
+                    query += " AND date(created_at) <= date(?)"
+                    params.append(date_to)
+                if store_filter:
+                    query += " AND store_id = ?"
+                    params.append(store_filter)
+                query += " ORDER BY created_at"
                 with connection() as database:
-                    items = filter_report_items(_shared_catalog(database)["sales"], date_from, date_to, store_filter)
+                    items = [dict(row) for row in database.execute(query, params).fetchall()]
             elif collection in {"inventory", "inventoryByStore"}:
+                query = "SELECT product_id AS productId, store_id AS storeId, quantity, reserved_quantity AS reservedQuantity, minimum_quantity AS minimumQuantity FROM inventory WHERE tenant_id = ?"
+                params = [current_tenant]
+                if store_filter:
+                    query += " AND store_id = ?"
+                    params.append(store_filter)
+                query += " ORDER BY store_id, product_id"
                 with connection() as database:
-                    items = filter_report_items(_shared_catalog(database)["inventory"], date_from, date_to, store_filter)
-            elif collection in {"stores", "products"} and _postgres_enabled() and current_tenant == DEFAULT_TENANT:
-                with connection() as database:
-                    catalog = _shared_catalog(database)
-                    items = catalog[collection]
+                    items = [dict(row) for row in database.execute(query, params).fetchall()]
             else:
                 with connection() as database:
                     state_row = database.execute("SELECT state_json FROM tenant_states WHERE tenant_id = ?", (current_tenant,)).fetchone()
@@ -1795,14 +1573,13 @@ class AppHandler(SimpleHTTPRequestHandler):
                 username = str(payload.get("username", "")).strip()
                 password = str(payload.get("password", ""))
                 role = str(payload.get("role", "VENDEDOR")).strip().upper()
-                document = str(payload.get("document", "")).strip()
                 if len(username) < 3 or len(password) < 8:
                     raise ValueError("El usuario requiere 3 caracteres y la clave 8")
                 if role not in {"ADMINISTRADOR", "GERENTE", "CONTADOR", "SUPERVISOR", "BODEGA", "CAJERO", "VENDEDOR"}:
                     raise ValueError("Rol no valido")
                 user_id = secrets.token_hex(8)
                 with connection() as database:
-                    database.execute("INSERT INTO auth_users (id, username, email, phone, document, password_hash, role, store_id, tenant_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", (user_id, username, str(payload.get("email", "")).strip(), str(payload.get("phone", "")).strip(), document, password_hash(password), role, payload.get("storeId"), tenant_id(self, payload)))
+                    database.execute("INSERT INTO auth_users (id, username, email, phone, password_hash, role, store_id, tenant_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", (user_id, username, str(payload.get("email", "")).strip(), str(payload.get("phone", "")).strip(), password_hash(password), role, payload.get("storeId"), tenant_id(self, payload)))
                 self.send_json(201, {"ok": True, "id": user_id, "username": username, "role": role})
                 return
             if path.startswith("/api/users/") and path.endswith("/permissions"):
@@ -2037,13 +1814,6 @@ class AppHandler(SimpleHTTPRequestHandler):
                     raise ValueError("La recepcion compartida requiere PostgreSQL")
                 with connection() as database:
                     result = _create_shared_purchase_entry(database, payload, authenticated_user(self), self)
-                self.send_json(201, result)
-                return
-            if path == "/api/catalog/transfer":
-                if not _postgres_enabled():
-                    raise ValueError("El traslado compartido requiere PostgreSQL")
-                with connection() as database:
-                    result = _create_shared_transfer(database, payload, authenticated_user(self), self)
                 self.send_json(201, result)
                 return
             if path == "/api/catalog/inventory-movement":
@@ -2499,14 +2269,11 @@ class AppHandler(SimpleHTTPRequestHandler):
                 for line in lines:
                     stock = database.execute("SELECT cantidad FROM inventarios WHERE local = %s AND codigo = %s FOR UPDATE", (movement["local_origen"], line["codigo"])).fetchone()
                     if not stock or float(stock["cantidad"] or 0) < float(line["cantidad"] or 0):
-                        available = float(stock["cantidad"] or 0) if stock else 0
-                        self.send_json(409, {"error": f"No se puede eliminar la compra {identifier}: el stock de {line['codigo']} es {available} y se necesitan {line['cantidad']}. Primero revise ventas o traslados relacionados."})
-                        return
+                        raise ValueError("No se puede eliminar la entrada porque el stock actual es menor que la cantidad registrada")
                 for line in lines:
                     database.execute("UPDATE inventarios SET cantidad = cantidad - %s, actualizado = CURRENT_TIMESTAMP WHERE local = %s AND codigo = %s", (line["cantidad"], movement["local_origen"], line["codigo"]))
                 database.execute("DELETE FROM movimiento_productos WHERE movimiento_id = %s", (identifier,))
                 database.execute("DELETE FROM movimientos WHERE id = %s", (identifier,))
-                database.execute("INSERT INTO audit_events (action, collection, record_id, data_json) VALUES (%s, %s, %s, %s)", ("DELETE", "entries", identifier, "{}"))
             self.send_json(200, {"ok": True, "deleted": True})
             return
         if path.startswith("/api/catalog/store/"):
@@ -2574,30 +2341,6 @@ class AppHandler(SimpleHTTPRequestHandler):
         if collection not in DOMAIN_COLLECTIONS or not identifier:
             self.send_json(400, {"error": "Coleccion o id invalido"})
             return
-        if collection == "transfers" and _postgres_enabled():
-            with connection() as database:
-                movement = resolve_transfer_movement_for_delete(database, identifier)
-                if movement and str(movement.get("tipo") or "").upper() == "TRASLADO":
-                    movement_id = int(movement["id"])
-                    lines = database.execute("SELECT codigo, cantidad FROM movimiento_productos WHERE movimiento_id = %s FOR UPDATE", (movement_id,)).fetchall()
-                    for line in lines:
-                        stock = database.execute("SELECT cantidad FROM inventarios WHERE local = %s AND codigo = %s FOR UPDATE", (movement["local_destino"], line["codigo"])).fetchone()
-                        if not stock or float(stock["cantidad"] or 0) < float(line["cantidad"] or 0):
-                            available = float(stock["cantidad"] or 0) if stock else 0
-                            self.send_json(409, {"error": f"No se puede eliminar el traslado: el destino tiene {available} de {line['codigo']} y se necesitan {line['cantidad']}."})
-                            return
-                    for line in lines:
-                        database.execute("UPDATE inventarios SET cantidad = cantidad - %s, actualizado = CURRENT_TIMESTAMP WHERE local = %s AND codigo = %s", (line["cantidad"], movement["local_destino"], line["codigo"]))
-                        database.execute("UPDATE inventarios SET cantidad = cantidad + %s, actualizado = CURRENT_TIMESTAMP WHERE local = %s AND codigo = %s", (line["cantidad"], movement["local_origen"], line["codigo"]))
-                    database.execute("DELETE FROM movimiento_productos WHERE movimiento_id = %s", (movement_id,))
-                    database.execute("DELETE FROM movimientos WHERE id = %s", (movement_id,))
-                    database.execute("DELETE FROM domain_records WHERE tenant_id = %s AND collection = %s AND id = %s", (tenant_id(self), collection, identifier))
-                    database.execute("INSERT INTO audit_events(action, collection, record_id, data_json) VALUES(%s, %s, %s, %s)", ("DELETE", "transfers", identifier, "{}"))
-                    self.send_json(200, {"ok": True, "deleted": True, "reverted": True})
-                    return
-                deleted = database.execute("DELETE FROM domain_records WHERE tenant_id = %s AND collection = %s AND id = %s", (tenant_id(self), collection, identifier)).rowcount
-            self.send_json(200, {"ok": True, "deleted": bool(deleted), "reverted": False})
-            return
         with connection() as database:
             deleted = database.execute("DELETE FROM domain_records WHERE tenant_id = ? AND collection = ? AND id = ?", (tenant_id(self), collection, identifier)).rowcount
             database.execute("INSERT INTO audit_events (action, collection, record_id, data_json) VALUES (?, ?, ?, ?)", ("DELETE", collection, identifier, "{}"))
@@ -2625,8 +2368,7 @@ class AppHandler(SimpleHTTPRequestHandler):
                 username = str(payload.get("username", "")).strip()
                 role = str(payload.get("role", "VENDEDOR")).strip().upper()
                 password = str(payload.get("password", ""))
-                document = str(payload.get("document", "")).strip()
-                active = normalize_active_flag(payload.get("active"))
+                active = 0 if payload.get("active") is False else 1
                 valid_roles = {"ADMINISTRADOR", "GERENTE", "CONTADOR", "SUPERVISOR", "BODEGA", "CAJERO", "VENDEDOR"}
                 if len(username) < 3 or role not in valid_roles:
                     raise ValueError("Usuario o rol no valido")
@@ -2638,32 +2380,11 @@ class AppHandler(SimpleHTTPRequestHandler):
                         self.send_json(404, {"error": "Usuario no encontrado"})
                         return
                     if password:
-                        database.execute("UPDATE auth_users SET username = ?, email = ?, phone = ?, document = ?, role = ?, store_id = ?, active = ?, password_hash = ? WHERE id = ? AND tenant_id = ?", (username, str(payload.get("email", "")).strip(), str(payload.get("phone", "")).strip(), document, role, payload.get("storeId"), active, password_hash(password), identifier, tenant_id(self, payload)))
+                        database.execute("UPDATE auth_users SET username = ?, email = ?, phone = ?, role = ?, store_id = ?, active = ?, password_hash = ? WHERE id = ? AND tenant_id = ?", (username, str(payload.get("email", "")).strip(), str(payload.get("phone", "")).strip(), role, payload.get("storeId"), active, password_hash(password), identifier, tenant_id(self, payload)))
                     else:
-                        database.execute("UPDATE auth_users SET username = ?, email = ?, phone = ?, document = ?, role = ?, store_id = ?, active = ? WHERE id = ? AND tenant_id = ?", (username, str(payload.get("email", "")).strip(), str(payload.get("phone", "")).strip(), document, role, payload.get("storeId"), active, identifier, tenant_id(self, payload)))
+                        database.execute("UPDATE auth_users SET username = ?, email = ?, phone = ?, role = ?, store_id = ?, active = ? WHERE id = ? AND tenant_id = ?", (username, str(payload.get("email", "")).strip(), str(payload.get("phone", "")).strip(), role, payload.get("storeId"), active, identifier, tenant_id(self, payload)))
                     if not active:
                         database.execute("DELETE FROM auth_tokens WHERE user_id = ?", (identifier,))
-                self.send_json(200, {"ok": True, "id": identifier})
-                return
-            if path.rstrip("/") == "/api/domain/users":
-                current_user = authenticated_user(self)
-                if current_user["role"] != "ADMINISTRADOR":
-                    self.send_json(403, {"error": "Solo el administrador puede editar usuarios"})
-                    return
-                identifier = str(record_id(payload)).strip()
-                username = str(payload.get("username") or payload.get("name") or payload.get("nombre") or "").strip()
-                role = str(payload.get("role") or payload.get("rol") or "VENDEDOR").strip().upper()
-                active = normalize_active_flag(payload.get("active", payload.get("activo", True)))
-                if not identifier or len(username) < 3 or role not in {"ADMINISTRADOR", "GERENTE", "CONTADOR", "SUPERVISOR", "BODEGA", "CAJERO", "VENDEDOR"}:
-                    raise ValueError("Usuario o rol no valido")
-                with connection() as database:
-                    updated = database.execute(
-                        "UPDATE empleados SET nombre = %s, rol = %s, local_asignado = %s, activo = %s, email = %s, telefono = %s, documento = %s WHERE id_telegram = %s",
-                        (username, role, str(payload.get("storeId") or payload.get("local_asignado") or ""), "SI" if active else "NO", str(payload.get("email") or "").strip(), str(payload.get("phone") or payload.get("telefono") or "").strip(), str(payload.get("document") or payload.get("documento") or "").strip(), identifier),
-                    ).rowcount
-                if not updated:
-                    self.send_json(404, {"error": "Usuario de Telegram no encontrado"})
-                    return
                 self.send_json(200, {"ok": True, "id": identifier})
                 return
             if path == "/api/shared-entry":
@@ -2686,59 +2407,13 @@ class AppHandler(SimpleHTTPRequestHandler):
                     self.send_json(200, {"ok": True, "id": identifier, "updated": True})
                     return
                 with connection() as database:
-                    movement = database.execute("SELECT id, tipo, local_origen FROM movimientos WHERE id = %s FOR UPDATE", (identifier,)).fetchone()
+                    movement = database.execute("SELECT id, tipo FROM movimientos WHERE id = %s FOR UPDATE", (identifier,)).fetchone()
                     if not movement or str(movement["tipo"] or "").upper() != "ENTRADA":
                         self.send_json(404, {"error": "Entrada no encontrada"})
                         return
-                    old_lines = database.execute("SELECT codigo, descripcion, cantidad, precio_unitario, precio_total FROM movimiento_productos WHERE movimiento_id = %s FOR UPDATE", (identifier,)).fetchall()
-                    raw_items = payload.get("items")
-                    if isinstance(raw_items, str):
-                        raw_items = json.loads(raw_items)
-                    if not isinstance(raw_items, list) or not raw_items:
-                        raise ValueError("La entrada debe conservar al menos un producto")
-                    target_local = str(payload.get("local") or payload.get("local_origen") or payload.get("storeId") or movement["local_origen"] or "").strip()
-                    local = database.execute("SELECT nombre FROM locales WHERE (nombre = %s OR codigo = %s) AND activo = TRUE", (target_local, target_local)).fetchone()
-                    if not local:
-                        raise ValueError("El local seleccionado no existe o esta inactivo")
-                    target_local = str(local["nombre"])
-                    old_effects = {}
-                    for line in old_lines:
-                        key = (str(movement["local_origen"]), str(line["codigo"]))
-                        old_effects[key] = old_effects.get(key, 0) - int(line["cantidad"] or 0)
-                    normalized = {}
-                    for item in raw_items:
-                        code = str(item.get("productId") or item.get("codigo") or item.get("code") or "").strip()
-                        quantity = int(float(item.get("quantity") or item.get("cantidad") or 0))
-                        unit_cost = int(float(item.get("unitCost") or item.get("precio_unitario") or item.get("price") or 0))
-                        product = database.execute("SELECT codigo, nombre_producto FROM productos WHERE codigo = %s AND UPPER(COALESCE(activo, 'SI')) <> 'NO'", (code,)).fetchone()
-                        if not product or quantity <= 0 or unit_cost < 0:
-                            raise ValueError("Producto, cantidad y costo de entrada invalidos")
-                        key = (target_local, str(product["codigo"]))
-                        entry = normalized.setdefault(key, {"description": product["nombre_producto"], "quantity": 0, "unitCost": unit_cost})
-                        entry["quantity"] += quantity
-                    for (local_name, code), effect in old_effects.items():
-                        old_effects[(local_name, code)] = effect
-                    for key, item in normalized.items():
-                        old_effects[key] = old_effects.get(key, 0) + item["quantity"]
-                    for (local_name, code), effect in old_effects.items():
-                        stock = database.execute("SELECT cantidad FROM inventarios WHERE local = %s AND codigo = %s FOR UPDATE", (local_name, code)).fetchone()
-                        current = int(stock["cantidad"] or 0) if stock else 0
-                        if current + effect < 0:
-                            raise ValueError(f"Stock insuficiente para actualizar {code} en {local_name}")
-                    for (local_name, code), effect in old_effects.items():
-                        if effect == 0:
-                            continue
-                        item = normalized.get((local_name, code))
-                        if item and effect > 0:
-                            database.execute("INSERT INTO inventarios (local, codigo, descripcion, cantidad) VALUES (%s, %s, %s, %s) ON CONFLICT (local, codigo) DO UPDATE SET cantidad = inventarios.cantidad + EXCLUDED.cantidad, actualizado = CURRENT_TIMESTAMP", (local_name, code, item["description"], effect))
-                        else:
-                            database.execute("UPDATE inventarios SET cantidad = cantidad + %s, actualizado = CURRENT_TIMESTAMP WHERE local = %s AND codigo = %s", (effect, local_name, code))
-                    database.execute("DELETE FROM movimiento_productos WHERE movimiento_id = %s", (identifier,))
-                    for (local_name, code), item in normalized.items():
-                        database.execute("INSERT INTO movimiento_productos (movimiento_id, codigo, descripcion, cantidad, precio_unitario, precio_total, entrada, salida) VALUES (%s, %s, %s, %s, %s, %s, %s, 0)", (identifier, code, item["description"], item["quantity"], item["unitCost"], item["quantity"] * item["unitCost"], item["quantity"]))
                     updated = database.execute(
                         "UPDATE movimientos SET estado = %s, local_origen = %s, empleado = %s, vendedor = %s, factura = %s, referencia = %s, observacion = %s WHERE id = %s",
-                        (str(payload.get("estado") or payload.get("status") or "COMPLETADO"), target_local, str(payload.get("supplier_name") or payload.get("supplierName") or payload.get("empleado") or ""), str(payload.get("vendedor") or ""), str(payload.get("factura") or payload.get("supplierInvoice") or ""), str(payload.get("referencia") or ""), str(payload.get("observacion") or payload.get("notes") or ""), identifier),
+                        (str(payload.get("estado") or payload.get("status") or "COMPLETADO"), str(payload.get("local") or payload.get("local_origen") or ""), str(payload.get("supplier_name") or payload.get("supplierName") or payload.get("empleado") or ""), str(payload.get("vendedor") or ""), str(payload.get("factura") or payload.get("supplierInvoice") or ""), str(payload.get("referencia") or ""), str(payload.get("observacion") or payload.get("notes") or ""), identifier),
                     ).rowcount
                 self.send_json(200, {"ok": True, "id": identifier, "updated": bool(updated)})
                 return
@@ -2748,7 +2423,6 @@ class AppHandler(SimpleHTTPRequestHandler):
                     self.send_json(403, {"error": "Solo el administrador puede editar ventas"})
                     return
                 identifier = record_id(payload)
-                edited_date = sale_date(payload)
                 items = payload.get("items", [])
                 if isinstance(items, str):
                     items = json.loads(items)
@@ -2780,23 +2454,10 @@ class AppHandler(SimpleHTTPRequestHandler):
                                 database.execute("UPDATE inventarios SET cantidad = cantidad - %s, actualizado = CURRENT_TIMESTAMP WHERE local = %s AND codigo = %s", (quantity, store_id, code))
                                 database.execute("INSERT INTO movimiento_productos (movimiento_id, codigo, descripcion, cantidad, precio_unitario, precio_total, entrada, salida) VALUES (%s, %s, %s, %s, %s, %s, 0, %s)", (identifier, code, description, quantity, price, quantity * price, quantity))
                                 total += quantity * price
-                            update_fields = "cliente = %s, metodo_pago = %s, factura = %s"
-                            update_values = [payload.get("customerId") or payload.get("cliente") or "", str(payload.get("paymentMethod") or payload.get("metodo_pago") or ""), str(payload.get("invoiceNumber") or payload.get("factura") or "")]
-                            if edited_date:
-                                update_fields += ", fecha = %s::date"
-                                update_values.append(edited_date)
-                            update_values.append(identifier)
-                            database.execute(f"UPDATE movimientos SET {update_fields} WHERE id = %s", tuple(update_values))
+                            database.execute("UPDATE movimientos SET cliente = %s, metodo_pago = %s, factura = %s WHERE id = %s", (payload.get("customerId") or payload.get("cliente") or "", str(payload.get("paymentMethod") or payload.get("metodo_pago") or ""), str(payload.get("invoiceNumber") or payload.get("factura") or ""), identifier))
                         else:
-                            update_fields = "cliente = %s, metodo_pago = %s"
-                            update_values = [payload.get("customerId") or payload.get("cliente") or "", str(payload.get("paymentMethod") or payload.get("metodo_pago") or "")]
-                            if edited_date:
-                                update_fields += ", fecha = %s::date"
-                                update_values.append(edited_date)
-                            update_values.append(identifier)
-                            database.execute(f"UPDATE movimientos SET {update_fields} WHERE id = %s", tuple(update_values))
-                        saved = database.execute("SELECT fecha FROM movimientos WHERE id = %s", (identifier,)).fetchone()
-                    self.send_json(200, {"ok": True, "id": identifier, "date": saved["fecha"] if saved else edited_date})
+                            database.execute("UPDATE movimientos SET cliente = %s, metodo_pago = %s WHERE id = %s", (payload.get("customerId") or payload.get("cliente") or "", str(payload.get("paymentMethod") or payload.get("metodo_pago") or ""), identifier))
+                    self.send_json(200, {"ok": True, "id": identifier})
                     return
                 with connection() as database:
                     sale = database.execute("SELECT store_id, total FROM sales WHERE id = ? AND tenant_id = ?", (identifier, tenant_id(self, payload))).fetchone()
@@ -2819,21 +2480,9 @@ class AppHandler(SimpleHTTPRequestHandler):
                             database.execute("INSERT INTO sale_items (sale_id, product_id, quantity, unit_price, tax_rate) VALUES (?, ?, ?, ?, ?)", (identifier, product_id, quantity, price, float(item.get("taxRate", 0))))
                             database.execute("UPDATE inventory SET quantity = quantity - ? WHERE tenant_id = ? AND product_id = ? AND store_id = ?", (quantity, tenant_id(self, payload), product_id, sale[0]))
                             total += quantity * price
-                        update_fields = "customer_id = ?, invoice_number = ?, payment_method = ?, total = ?"
-                        update_values = [payload.get("customerId"), str(payload.get("invoiceNumber", "")), str(payload.get("paymentMethod", "")), total]
-                        if edited_date:
-                            update_fields += ", created_at = ?"
-                            update_values.append(edited_date)
-                        update_values.extend([identifier, tenant_id(self, payload)])
-                        updated = database.execute(f"UPDATE sales SET {update_fields} WHERE id = ? AND tenant_id = ?", tuple(update_values)).rowcount
+                        updated = database.execute("UPDATE sales SET customer_id = ?, invoice_number = ?, payment_method = ?, total = ? WHERE id = ? AND tenant_id = ?", (payload.get("customerId"), str(payload.get("invoiceNumber", "")), str(payload.get("paymentMethod", "")), total, identifier, tenant_id(self, payload))).rowcount
                     else:
-                        update_fields = "customer_id = ?, invoice_number = ?, payment_method = ?"
-                        update_values = [payload.get("customerId"), str(payload.get("invoiceNumber", "")), str(payload.get("paymentMethod", ""))]
-                        if edited_date:
-                            update_fields += ", created_at = ?"
-                            update_values.append(edited_date)
-                        update_values.extend([identifier, tenant_id(self, payload)])
-                        updated = database.execute(f"UPDATE sales SET {update_fields} WHERE id = ? AND tenant_id = ?", tuple(update_values)).rowcount
+                        updated = database.execute("UPDATE sales SET customer_id = ?, invoice_number = ?, payment_method = ? WHERE id = ? AND tenant_id = ?", (payload.get("customerId"), str(payload.get("invoiceNumber", "")), str(payload.get("paymentMethod", "")), identifier, tenant_id(self, payload))).rowcount
                     if not updated:
                         self.send_json(404, {"error": "Venta no encontrada"})
                         return

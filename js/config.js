@@ -6,7 +6,10 @@ const configuredApiBase = String(
   ''
 ).trim();
 const hasDeprecatedApiBase = configuredApiBase.includes('artwork-charges-wiley-sort.trycloudflare.com');
-const isLocalHostname = ['localhost', '127.0.0.1', '::1'].includes(window.location.hostname);
+const hostname = window.location.hostname || '';
+const protocol = window.location.protocol || '';
+const isFileOrigin = protocol === 'file:' || hostname === '';
+const isLocalHostname = ['localhost', '127.0.0.1', '::1'].includes(hostname) || isFileOrigin;
 
 export const API_BASE_URL = isLocalHostname
   ? LOCAL_API_URL
