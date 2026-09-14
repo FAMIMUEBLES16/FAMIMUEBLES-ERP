@@ -8,8 +8,10 @@ import io
 import re
 import secrets
 import sys
+import subprocess
 import threading
 import zipfile
+from datetime import datetime
 from decimal import Decimal
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -78,6 +80,26 @@ DOMAIN_COLLECTIONS = {
     "quotes", "orders", "deliveries", "transfers", "credit-notes", "creditNotes", "company-settings", "companySettings",
 }
 DEFAULT_TENANT = "tenant-default"
+PUBLISHABLE_FILES = ("index.html", "css/main.css", "js/", "server.py")
+
+
+def publish_public_version() -> dict:
+    def run_git(*arguments: str) -> str:
+        result = subprocess.run(["git", *arguments], cwd=ROOT, capture_output=True, text=True, encoding="utf-8", timeout=90, check=False)
+        if result.returncode:
+            raise RuntimeError((result.stderr or result.stdout or "Fallo de Git").strip()[-500:])
+        return result.stdout.strip()
+
+    status = run_git("status", "--porcelain", "--", *PUBLISHABLE_FILES)
+    if not status:
+        return {"ok": True, "published": False, "message": "No hay cambios funcionales pendientes."}
+    run_git("add", "-u", "--", *PUBLISHABLE_FILES)
+    changed = run_git("diff", "--cached", "--name-only")
+    if not changed:
+        return {"ok": True, "published": False, "message": "No hay archivos funcionales para publicar."}
+    run_git("commit", "-m", f"Publicar actualizacion local {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+    run_git("push", "origin", "main")
+    return {"ok": True, "published": True, "commit": run_git("rev-parse", "--short", "HEAD"), "files": changed.splitlines(), "message": "Actualizacion publicada correctamente."}
 SCHEMA_LOCK = threading.Lock()
 SCHEMA_READY = False
 
@@ -1578,6 +1600,20 @@ class AppHandler(SimpleHTTPRequestHandler):
         path = urlparse(self.path).path
         try:
             payload = request_json(self)
+            if path == "/api/local/publish":
+                host = self.headers.get("Host", "").split(":", 1)[0].lower()
+                if host not in {"127.0.0.1", "localhost", "::1"}:
+                    self.send_json(403, {"error": "La publicacion solo esta disponible desde el servidor local."})
+                    return
+                user = authenticated_user(self)
+                if not user:
+                    self.send_json(401, {"error": "Autenticacion requerida"})
+                    return
+                if str(user.get("role", "")).upper() != "ADMINISTRADOR":
+                    self.send_json(403, {"error": "Solo el administrador puede publicar cambios."})
+                    return
+                self.send_json(200, publish_public_version())
+                return
             if path == "/api/auth/logout":
                 token = self.headers.get("Authorization", "").removeprefix("Bearer ").strip()
                 with connection() as database:

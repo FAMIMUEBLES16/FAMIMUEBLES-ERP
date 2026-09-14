@@ -97,6 +97,7 @@ const actionPermissionMap = {
 	'parity-count':['Inventario','edit'],'parity-sistecredito':['Creditos','create']
 };
 const $ = selector => document.querySelector(selector);
+const isLocalApp = ['localhost','127.0.0.1','::1'].includes(window.location.hostname);
 const views = { dashboard:()=>renderDashboard(store.collection), ventas:()=>renderVentas(store.collection), facturacion:()=>renderFacturacion(store.collection,state.cart,state.payment,state.customerId,state.transport,state.transportDestination,state.transportNote,state.storeId), productos:()=>renderProductos(store.collection), inventario:()=>renderInventario(store.collection,state.storeId), traslados:()=>renderTraslados(store.collection), proveedores:()=>renderProveedores(store.collection), compras:()=>renderCompras(store.collection), 'cuentas-por-pagar':()=>renderCuentasPorPagar(store.collection), clientes:()=>renderClientes(store.collection), creditos:()=>renderCreditos(store.collection), cartera:()=>renderCartera(store.collection), apartados:()=>renderApartados(store.collection), locales:()=>renderLocales(store.collection), operaciones:()=>renderOperaciones(store.collection), paridad:()=>renderParidad(store.collection), gastos:()=>renderGastos(store.collection), gasolina:()=>renderGasolina(store.collection), auditoria:()=>renderAuditoria(store.collection), usuarios:()=>renderUsuarios(store.collection), reportes:()=>renderReportes(store.collection), configuracion:renderConfiguracion };
 function activeStoreKey(){ return `famimuebles-active-store-${activeTenantId() || 'default'}`; }
 function resolveActiveStore(){ const stores=store.collection.stores||[]; const saved=localStorage.getItem(activeStoreKey()); return stores.some(item=>String(item.id)===String(saved)) ? String(saved) : (stores[0]?.id || ''); }
@@ -596,6 +597,8 @@ document.addEventListener('click',event=>{if(event.target.closest('[data-action=
 document.addEventListener('click',event=>{const button=event.target.closest('[data-action="edit-user"]');if(button){event.stopImmediatePropagation();openEditUserModal(button.dataset.userId);}},true);
 document.addEventListener('submit',async event=>{if(!event.target.matches('#purchase-modal'))return;event.preventDefault();event.stopImmediatePropagation();if(!purchaseDraft.length)return showToast('Agrega al menos un producto.','error');try{const values=Object.fromEntries(new FormData(event.target));const purchase={id:generateId('COM',store.collection.purchases),...values,items:purchaseDraft,createdAt:new Date().toISOString(),status:'BORRADOR'};await persistDomainRecord('purchases',purchase);store.collection.purchases.push(purchase);$('#modal-root').innerHTML='';location.hash='#compras';render();showToast('Compra guardada en PostgreSQL.');}catch(error){showToast(error.message,'error');}},true);
 async function boot() {
+	const publishButton = $('#publish-local');
+	if (publishButton) publishButton.hidden = !isLocalApp;
 	renderNav();
 	if (isStaticDeployment()) {
 		localStorage.setItem('famimuebles-user', JSON.stringify({ id:'STATIC-USER', username:'Administrador', role:'ADMINISTRADOR' }));
@@ -646,6 +649,22 @@ document.addEventListener('click', async event => {
 	try {
 		await refreshSharedState();
 		showToast('Datos actualizados desde PostgreSQL.');
+	} finally {
+		button.disabled = false;
+		button.classList.remove('is-loading');
+	}
+});
+document.addEventListener('click', async event => {
+	const button = event.target.closest('#publish-local');
+	if (!button || !isLocalApp || button.disabled) return;
+	if (!window.confirm('¿Publicar los cambios funcionales locales en GitHub Pages?')) return;
+	button.disabled = true;
+	button.classList.add('is-loading');
+	try {
+		const result = await api.post('/api/local/publish', {});
+		showToast(result.message || 'Actualizacion publicada correctamente.');
+	} catch (error) {
+		showToast(error.message, 'error');
 	} finally {
 		button.disabled = false;
 		button.classList.remove('is-loading');
