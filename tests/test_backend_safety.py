@@ -134,6 +134,28 @@ class BackendSafetyTests(unittest.TestCase):
         self.assertEqual(items[0]["storeId"], "LOCAL 01")
         self.assertEqual(items[0]["status"], "PENDIENTE")
 
+    def test_shared_domain_items_uses_real_garantias_schema_columns(self):
+        class FakeResult:
+            def __init__(self, rows):
+                self.rows = rows
+
+            def fetchall(self):
+                return self.rows
+
+        class FakeDatabase:
+            def execute(self, query, params=()):
+                if "FROM garantias" in query:
+                    self.last_query = query
+                    return FakeResult([])
+                return FakeResult([])
+
+        fake_database = FakeDatabase()
+        _shared_domain_items(fake_database, "warranties")
+
+        self.assertIn("local_origen", fake_database.last_query)
+        self.assertIn("local_recibido", fake_database.last_query)
+        self.assertIn("COALESCE(local_origen, local_recibido)", fake_database.last_query)
+
     def test_create_shared_sale_creates_credit_record_for_credit_payment(self):
         class FakeCursor:
             def __init__(self, row=None):
@@ -175,6 +197,49 @@ class BackendSafetyTests(unittest.TestCase):
         self.assertEqual(result["creditId"], 42)
         self.assertEqual(credit_helper.call_args.args[2], 1)
         self.assertEqual(credit_helper.call_args.args[6], 200000)
+
+    def test_create_shared_sale_persists_selected_date(self):
+        class FakeCursor:
+            def __init__(self, row=None):
+                self._row = row
+
+            def fetchone(self):
+                return self._row
+
+        class FakeDatabase:
+            def __init__(self):
+                self.insert_params = None
+
+            def execute(self, query, params=()):
+                if "SELECT nombre FROM locales" in query:
+                    return FakeCursor({"nombre": "LOCAL-01"})
+                if "SELECT nombre_producto FROM productos" in query:
+                    return FakeCursor({"nombre_producto": "Mesa Test"})
+                if "SELECT cantidad FROM inventarios" in query:
+                    return FakeCursor({"cantidad": 5})
+                if "INSERT INTO movimientos" in query:
+                    self.insert_params = params
+                    return FakeCursor((1,))
+                return FakeCursor()
+
+        payload = {
+            "id": "VEN-2",
+            "storeId": "LOCAL-01",
+            "invoiceNumber": "FAC-002",
+            "customer": "Cliente Demo",
+            "paymentMethod": "Efectivo",
+            "date": "2026-09-14",
+            "items": [{"productId": "PROD-1", "quantity": 1, "unitPrice": 200000}],
+        }
+
+        database = FakeDatabase()
+        with patch("server.claim_idempotency", return_value=(None, None)), \
+             patch("server.complete_idempotency"), \
+             patch("server.record_id", return_value="VEN-2"), \
+             patch("server._create_shared_credit_record", return_value=None):
+            _create_shared_sale(database, payload, {"username": "erp-user", "id": "ERP-1", "store_id": "LOCAL-01", "role": "ADMINISTRADOR"}, object())
+
+        self.assertEqual(database.insert_params[-1], "2026-09-14")
 
     def test_non_admin_user_can_access_sales_and_tenants(self):
         class FakeHandler:
