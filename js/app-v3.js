@@ -11,14 +11,14 @@ import { navItems, navGroups } from './components/sidebar.js?v=21';
 import { showToast } from './components/toast.js';
 import { table } from './components/tables.js';
 import { renderNotifications } from './components/notifications.js';
-import { renderDashboard } from './modules/dashboard-v3.js?v=23';
+import { renderDashboard } from './modules/dashboard-v3.js?v=24';
 import { canonicalSellerName, renderVentas, salesTable, normalizeSales, saleTimestamp } from './modules/ventas.js?v=23';
 import { renderFacturacion, cartTotal, productResults, customerResults } from './modules/facturacion.js?v=23';
 import { renderProductos, productTable, productMatches } from './modules/productos.js?v=20';
 import { renderInventario, inventoryContent } from './modules/inventario.js?v=19';
 import { renderTraslados, transferModal, transferTable } from './modules/traslados.js?v=19';
 import { inventoryEntry, ensureInventoryEntry } from './utils/inventory.js?v=19';
-import { renderClientes, customerTable } from './modules/clientes.js?v=19';
+import { renderClientes, customerTable } from './modules/clientes.js?v=20';
 import { renderCreditos } from './modules/creditos.js?v=22';
 import { renderCartera } from './modules/cartera.js?v=22';
 import { renderLocales } from './modules/locales.js?v=19';
@@ -53,7 +53,30 @@ let inventoryViewState = { store:'all', query:'', active:'all', status:'all', so
 let salesViewState = { query:'', store:'all', payment:'all', status:'all', version:0 };
 let productViewState = { query:'', category:'all', subcategory:'all', brand:'all', status:'all', active:'all', sort:'name', pageSize:'50', version:0 };
 let activeCreditPaymentId = '';
-function syncCustomerBalances(){(store.collection.credits||[]).forEach(credit=>{credit.id=String(credit.id);credit.initial=Number(credit.initial??credit.downPayment??credit.cuota_inicial??credit.cuotaInicial??0);credit.paid=Number(credit.paid??credit.valor_pagado??credit.pagado??0);credit.total=Number(credit.total??credit.originalAmount??credit.valor_total??credit.initial+(Number(credit.saldo_pendiente??credit.saldoPendiente??0)));});(store.collection.customers||[]).forEach(customer=>{customer.balance=(store.collection.credits||[]).filter(item=>String(item.customerId||item.cliente_id||'')===String(customer.id)||String(item.customer||item.cliente||'').trim().toLowerCase()===String(customer.name||'').trim().toLowerCase()).reduce((sum,item)=>{const total=Number(item.total??item.originalAmount??item.valor_total??0),initial=Number(item.initial??item.downPayment??item.cuota_inicial??0),paid=Number(item.paid??item.valor_pagado??item.pagado??0),explicit=item.saldo_pendiente??item.saldoPendiente??item.balance;return sum+Math.max(0,explicit===undefined||explicit===null||explicit===''?total-initial-paid:Number(explicit));},0);});}
+function syncCustomerBalances(){
+	const credits=store.collection.credits||[], sales=store.collection.sales||[];
+	credits.forEach(credit=>{
+		credit.id=String(credit.id);
+		credit.initial=Number(credit.initial??credit.downPayment??credit.cuota_inicial??credit.cuotaInicial??0);
+		credit.paid=Number(credit.paid??credit.valor_pagado??credit.pagado??0);
+		credit.total=Number(credit.total??credit.originalAmount??credit.valor_total??credit.initial+(Number(credit.saldo_pendiente??credit.saldoPendiente??0)));
+	});
+	const matchesCustomer=(item,customer)=>String(item.customerId||item.cliente_id||'')===String(customer.id)||String(item.customer||item.cliente||item.cliente_nombre||'').trim().toLowerCase()===String(customer.name||'').trim().toLowerCase();
+	(store.collection.customers||[]).forEach(customer=>{
+		const customerSales=sales.filter(item=>matchesCustomer(item,customer));
+		const customerCredits=credits.filter(item=>matchesCustomer(item,customer));
+		if(!String(customer.phone||'').trim()) customer.phone=customerSales.map(item=>item.phone||item.telefono||'').find(value=>String(value).trim())||customer.phone||'';
+		customer.purchases=customerSales.length;
+		customer.credits=customerCredits.length;
+		customer.purchaseTotal=customerSales.reduce((sum,item)=>sum+Number(item.total??item.valor_total??item.amount??0),0);
+		if(customer.purchaseTotal===0) customer.purchaseTotal=customerCredits.reduce((sum,item)=>sum+Number(item.total??item.originalAmount??item.valor_total??0),0);
+		customer.balance=customerCredits.reduce((sum,item)=>{
+			const total=Number(item.total??item.originalAmount??item.valor_total??0),initial=Number(item.initial??item.downPayment??item.cuota_inicial??0),paid=Number(item.paid??item.valor_pagado??item.pagado??0),explicit=item.saldo_pendiente??item.saldoPendiente??item.balance;
+			return sum+Math.max(0,explicit===undefined||explicit===null||explicit===''?total-initial-paid:Number(explicit));
+		},0);
+		customer.status=customer.balance>0?'Credito':'Al dia';
+	});
+}
 const transferDraft = [];
 let productPage = 1;
 let purchaseDraft = [];
@@ -84,8 +107,8 @@ function allowedRoute(route){ const role=String(JSON.parse(localStorage.getItem(
 function canPerform(resource,action){const role=String(JSON.parse(localStorage.getItem('famimuebles-user')||'{}').role||'').toUpperCase();if(role==='ADMINISTRADOR')return true;const permissions=Array.isArray(userPermissions)?userPermissions:[];const item=permissions.find(permission=>permission.resource===resource&&permission.action===action);return Boolean(item?.allowed);}
 function applyUserPermissions(){const mapping=actionPermissionMap;
 	document.querySelectorAll('[data-action]').forEach(element=>{const target=mapping[element.dataset.action];if(target)element.hidden=!canPerform(target[0],target[1]);});}
-function renderNav(){ const visible=navItems.filter(item=>allowedRoute(item.id)); const quick=['dashboard','inventario','facturacion'].map(id=>visible.find(item=>item.id===id)).filter(Boolean); const activeRoute=currentRoute(); const stored=JSON.parse(localStorage.getItem('famimuebles-nav-groups')||'{}'); const grouped=navGroups.map(group=>{const children=group.items.map(id=>visible.find(item=>item.id===id)).filter(Boolean);if(!children.length)return '';const open=stored[group.id]||children.some(item=>item.id===activeRoute);return `<section class="nav-group ${open?'is-open':''}" data-nav-group-section="${group.id}"><button class="nav-group-toggle" type="button" data-nav-group="${group.id}" aria-expanded="${open}"><span><span class="nav-icon">${group.icon}</span>${group.label}</span><span class="nav-chevron">⌄</span></button><div class="nav-group-items">${children.map(item=>`<a class="nav-item ${activeRoute===item.id?'active':''}" href="#${item.id}"><span class="nav-icon">${item.icon}</span><span>${item.label}</span></a>`).join('')}</div></section>`;}).join(''); $('#main-nav').innerHTML=quick.map(item=>`<a class="nav-item nav-quick ${activeRoute===item.id?'active':''}" href="#${item.id}"><span class="nav-icon">${item.icon}</span><span>${item.label}</span></a>`).join('')+grouped; const mobileItems=visible.filter(item=>['dashboard','inventario','facturacion','ventas'].includes(item.id)); $('#bottom-nav').innerHTML=mobileItems.map(item=>`<a class="${activeRoute===item.id?'active':''}" href="#${item.id}"><span>${item.icon}</span><span>${item.label}</span></a>`).join('')+'<button type="button" class="mobile-nav-menu" aria-label="Abrir menu"><span aria-hidden="true"><i></i><i></i><i></i></span><span>Mas</span></button>'; }
-document.addEventListener('click',event=>{const toggle=event.target.closest('[data-nav-group]');if(!toggle)return;const section=toggle.closest('[data-nav-group-section]');const groupId=toggle.dataset.navGroup;const open=!section.classList.contains('is-open');section.classList.toggle('is-open',open);toggle.setAttribute('aria-expanded',String(open));const stored=JSON.parse(localStorage.getItem('famimuebles-nav-groups')||'{}');stored[groupId]=open;localStorage.setItem('famimuebles-nav-groups',JSON.stringify(stored));});
+function renderNav(){ const visible=navItems.filter(item=>allowedRoute(item.id)); const quick=['dashboard','inventario','facturacion'].map(id=>visible.find(item=>item.id===id)).filter(Boolean); const activeRoute=currentRoute(); const stored=JSON.parse(localStorage.getItem('famimuebles-nav-groups')||'{}'); const grouped=navGroups.map(group=>{const children=group.items.map(id=>visible.find(item=>item.id===id)).filter(Boolean);if(!children.length)return '';const hasStored=Object.prototype.hasOwnProperty.call(stored,group.id);const open=hasStored?stored[group.id]:children.some(item=>item.id===activeRoute);return `<section class="nav-group ${open?'is-open':''}" data-nav-group-section="${group.id}"><button class="nav-group-toggle" type="button" data-nav-group="${group.id}" aria-expanded="${open}"><span><span class="nav-icon">${group.icon}</span>${group.label}</span><span class="nav-chevron">⌄</span></button><div class="nav-group-items">${children.map(item=>`<a class="nav-item ${activeRoute===item.id?'active':''}" href="#${item.id}"><span class="nav-icon">${item.icon}</span><span>${item.label}</span></a>`).join('')}</div></section>`;}).join(''); $('#main-nav').innerHTML=quick.map(item=>`<a class="nav-item nav-quick ${activeRoute===item.id?'active':''}" href="#${item.id}"><span class="nav-icon">${item.icon}</span><span>${item.label}</span></a>`).join('')+grouped; const mobileItems=visible.filter(item=>['dashboard','inventario','facturacion','ventas'].includes(item.id)); $('#bottom-nav').innerHTML=mobileItems.map(item=>`<a class="${activeRoute===item.id?'active':''}" href="#${item.id}"><span>${item.icon}</span><span>${item.label}</span></a>`).join('')+'<button type="button" class="mobile-nav-menu" aria-label="Abrir menu"><span aria-hidden="true"><i></i><i></i><i></i></span><span>Mas</span></button>'; }
+document.addEventListener('click',event=>{const toggle=event.target.closest('[data-nav-group]');if(!toggle)return;event.preventDefault();event.stopImmediatePropagation();const section=toggle.closest('[data-nav-group-section]');const groupId=toggle.dataset.navGroup;const open=!section.classList.contains('is-open');const stored=JSON.parse(localStorage.getItem('famimuebles-nav-groups')||'{}');document.querySelectorAll('[data-nav-group-section]').forEach(item=>{const same=item===section;item.classList.toggle('is-open',same&&open);item.querySelector('[data-nav-group]')?.setAttribute('aria-expanded',String(same&&open));const id=item.dataset.navGroupSection;if(id)stored[id]=same&&open;});stored[groupId]=open;localStorage.setItem('famimuebles-nav-groups',JSON.stringify(stored));},true);
 function setMobileSidebar(open){ $('#sidebar')?.classList.toggle('open',open); $('#sidebar-backdrop')?.classList.toggle('is-visible',open); }
 document.addEventListener('click',event=>{if(!event.target.closest('.mobile-nav-menu'))return;setMobileSidebar(true);});
 document.addEventListener('click',event=>{if(event.target.closest('#sidebar-backdrop'))setMobileSidebar(false);});
@@ -129,9 +152,9 @@ function modal(title, fields, onSubmit){ $('#modal-root').innerHTML=`<div class=
 async function persistCatalogRecord(path, record, method='POST'){ const requestId=method==='POST'?(record.requestId||(record.requestId=globalThis.crypto?.randomUUID?crypto.randomUUID():`${path}-${Date.now()}-${Math.random()}`)):''; const options={headers:{'X-Tenant-ID':activeTenantId(),...(requestId?{'Idempotency-Key':requestId}: {})}}; const body={...record,...(requestId?{requestId}:{}),tenantId:activeTenantId()}; try { return method==='PUT' ? await api.put(path,body,options) : method==='DELETE' ? await api.delete(path,body,options) : await api.post(path,body,options); } catch(error) { if(error.status===401){localStorage.removeItem('famimuebles-auth-token');localStorage.removeItem('famimuebles-user');throw new Error('La sesion expiro. Inicia sesion nuevamente para guardar cambios.');} throw error; } }
 const remoteDomainCollections=['customers','suppliers','purchases','credits','expenses','users','accountsPayable','supplierPayments','customerAccounts','returns','supplierReturns','stockCounts','reservations','warranties','damagedStock','cashSessions','cashMovements','bankAccounts','quotes','orders','deliveries','creditNotes'];
 async function persistDomainRecord(collection, record){ return persistCatalogRecord(`/api/domain/${encodeURIComponent(collection)}`,{...record,tenantId:activeTenantId()}); }
-async function hydrateDomainCollections(state){ await Promise.all(remoteDomainCollections.map(async collection=>{ try { const payload=await api.get(`/api/domain/${encodeURIComponent(collection)}`,{headers:{'X-Tenant-ID':activeTenantId()},cache:'no-store'}); const items=Array.isArray(payload.items)?payload.items:[];if(items.length||!Array.isArray(state[collection])||state[collection].length===0)state[collection]=items; } catch(error) {} })); return state; }
-async function hydrateUsers(state){ try { const payload=await api.get('/api/users',{headers:{'X-Tenant-ID':activeTenantId()},cache:'no-store'});state.users=(payload.items||[]).map(item=>({...item,name:item.username,email:item.email||'',phone:item.phone||'',status:item.active?'Activo':'Inactivo'})); } catch(error) {} return state; }
-async function hydrateCurrentUserPermissions(){const user=JSON.parse(localStorage.getItem('famimuebles-user')||'{}');if(!user.id){userPermissions=[];return;}try{const payload=await api.get(`/api/users/${encodeURIComponent(user.id)}/permissions`,{headers:{'X-Tenant-ID':activeTenantId()},cache:'no-store'});userPermissions=Array.isArray(payload.items)?payload.items:[];}catch(error){userPermissions=[];}}
+async function hydrateDomainCollections(state){ await Promise.all(remoteDomainCollections.map(async collection=>{ try { const payload=await api.get(`/api/domain/${encodeURIComponent(collection)}`,{headers:{'X-Tenant-ID':activeTenantId()},cache:'no-store',timeout:4000}); const items=Array.isArray(payload.items)?payload.items:[];if(items.length||!Array.isArray(state[collection])||state[collection].length===0)state[collection]=items; } catch(error) {} })); return state; }
+async function hydrateUsers(state){ try { const payload=await api.get('/api/users',{headers:{'X-Tenant-ID':activeTenantId()},cache:'no-store',timeout:4000});state.users=(payload.items||[]).map(item=>({...item,name:item.username,email:item.email||'',phone:item.phone||'',status:item.active?'Activo':'Inactivo'})); } catch(error) {} return state; }
+async function hydrateCurrentUserPermissions(){const user=JSON.parse(localStorage.getItem('famimuebles-user')||'{}');if(!user.id){userPermissions=[];return;}try{const payload=await api.get(`/api/users/${encodeURIComponent(user.id)}/permissions`,{headers:{'X-Tenant-ID':activeTenantId()},cache:'no-store',timeout:4000});userPermissions=Array.isArray(payload.items)?payload.items:[];}catch(error){userPermissions=[];}}
 async function refreshSharedState(){
 	if(document.querySelector('.modal-backdrop') || sharedRefreshInFlight)return;
 	sharedRefreshInFlight=true;
@@ -149,6 +172,7 @@ async function refreshSharedState(){
 		await hydrateCatalog(store.state);
 		await hydrateDomainCollections(store.state);
 		await hydrateUsers(store.state);
+		syncCustomerBalances();
 		try {
 			await parityPost('/api/shared-payment', { kind:'mora', amount:0 });
 			const overdue = await api.get('/api/parity/mora', {headers:{'X-Tenant-ID':activeTenantId()}, cache:'no-store'});
@@ -488,6 +512,24 @@ document.addEventListener('click',event=>{const action=event.target.closest('[da
 document.addEventListener('click',event=>{const button=event.target.closest('[data-action="credit-payment"]');if(!button)return;const creditId=button.dataset.creditId;setTimeout(()=>{const form=$('#credit-payment-form');if(!form)return;form.dataset.creditId=creditId;form.onsubmit=async submitEvent=>{submitEvent.preventDefault();try{const values=Object.fromEntries(new FormData(form));await persistCatalogRecord('/api/shared-payment',{kind:'credit',id:creditId,amount:Number(values.amount),receiptNumber:values.receiptNumber,method:values.method});const normalized=await hydrateState();if(normalized){store.state=normalized;await hydrateCatalog(store.state);}$('#modal-root').innerHTML='';render();showToast('Abono registrado correctamente en PostgreSQL.');}catch(error){showToast(error.message,'error');}};},0);});
 $('#user-menu').addEventListener('click',async()=>{try{await api.post('/api/auth/logout',{});}finally{localStorage.removeItem('famimuebles-auth-token');localStorage.removeItem('famimuebles-user');location.reload();}});
 document.addEventListener('click',event=>{const action=event.target.closest('[data-action]')?.dataset.action;if(action==='report'){downloadReport(event.target.closest('[data-report-collection]')?.dataset.reportCollection||'sales');}if(action==='advanced-new'){const collection=event.target.closest('[data-collection]')?.dataset.collection;$('#modal-root').innerHTML=advancedModal(collection,store.collection);$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';}if(action==='advanced-export'){const payload=Object.fromEntries(['returns','supplierReturns','stockCounts','reservations','warranties','damagedStock','cashSessions','cashMovements','bankAccounts','customerAccounts','quotes','orders','deliveries','creditNotes'].map(key=>[key,store.collection[key]||[]]));const link=document.createElement('a');link.href=URL.createObjectURL(new Blob([JSON.stringify(payload,null,2)],{type:'application/json'}));link.download='famimuebles-operaciones.json';link.click();URL.revokeObjectURL(link.href);}});
+async function changeWarrantyStatus(id, action){
+	if(!id)return;
+	try{
+		await api.post(`/api/domain/warranties/${encodeURIComponent(id)}/action`,{action},{headers:{'X-Tenant-ID':activeTenantId()}});
+		const normalized=await hydrateState();
+		if(normalized){store.state=normalized;await hydrateCatalog(store.state);await hydrateDomainCollections(store.state);}
+		render();
+		showToast(action==='receive'?'Garantia recibida correctamente.':'Garantia cancelada correctamente.');
+	}catch(error){showToast(error.message,'error');}
+}
+document.addEventListener('click',event=>{
+	const button=event.target.closest('[data-action="warranty-receive"],[data-action="warranty-cancel"]');
+	if(!button)return;
+	const action=button.dataset.action==='warranty-receive'?'receive':'cancel';
+	if(action==='cancel'&&!window.confirm('¿Cancelar esta garantia?'))return;
+	button.disabled=true;
+	changeWarrantyStatus(button.dataset.id,action).finally(()=>{button.disabled=false;});
+});
 document.addEventListener('submit',async event=>{if(event.target.id!=='advanced-form')return;event.preventDefault();const values=Object.fromEntries(new FormData(event.target));const collection=values.collection;const item={...values,id:values.id.trim()||nextAdvancedId(store.collection,collection),amount:Number(values.amount||0),createdAt:new Date().toISOString(),createdBy:JSON.parse(localStorage.getItem('famimuebles-user')||'{}').username||'usuario'};delete item.collection;try{await persistDomainRecord(collection,item);if(!Array.isArray(store.collection[collection]))store.collection[collection]=[];const index=store.collection[collection].findIndex(entry=>entry.id===item.id);if(index===-1)store.collection[collection].push(item);else store.collection[collection][index]=item;$('#modal-root').innerHTML='';render();showToast('Registro guardado correctamente.');}catch(error){showToast(error.message,'error');}});
 async function parityPost(path, payload) { return api.post(path, {...payload, tenantId:activeTenantId()}, {headers:{'X-Tenant-ID':activeTenantId()}}); }
 document.addEventListener('click', async event=>{
@@ -554,6 +596,7 @@ document.addEventListener('click',event=>{if(event.target.closest('[data-action=
 document.addEventListener('click',event=>{const button=event.target.closest('[data-action="edit-user"]');if(button){event.stopImmediatePropagation();openEditUserModal(button.dataset.userId);}},true);
 document.addEventListener('submit',async event=>{if(!event.target.matches('#purchase-modal'))return;event.preventDefault();event.stopImmediatePropagation();if(!purchaseDraft.length)return showToast('Agrega al menos un producto.','error');try{const values=Object.fromEntries(new FormData(event.target));const purchase={id:generateId('COM',store.collection.purchases),...values,items:purchaseDraft,createdAt:new Date().toISOString(),status:'BORRADOR'};await persistDomainRecord('purchases',purchase);store.collection.purchases.push(purchase);$('#modal-root').innerHTML='';location.hash='#compras';render();showToast('Compra guardada en PostgreSQL.');}catch(error){showToast(error.message,'error');}},true);
 async function boot() {
+	renderNav();
 	if (isStaticDeployment()) {
 		localStorage.setItem('famimuebles-user', JSON.stringify({ id:'STATIC-USER', username:'Administrador', role:'ADMINISTRADOR' }));
 		store.collection.demoMode = true;

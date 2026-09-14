@@ -5,6 +5,7 @@ import os
 import csv
 import hashlib
 import io
+import re
 import secrets
 import sys
 import threading
@@ -702,7 +703,7 @@ def _shared_catalog(database: _PostgresConnection) -> dict:
     sales_by_id = {}
     rows = database.execute(
         """
-        SELECT m.id, m.fecha, COALESCE(m.local_origen, l.nombre) AS local, m.vendedor, m.cliente,
+        SELECT m.id, m.fecha, COALESCE(m.local_origen, l.nombre) AS local, m.vendedor, m.cliente, m.telefono,
                m.factura, m.metodo_pago, mp.codigo, mp.descripcion, mp.cantidad,
                mp.precio_unitario, mp.precio_total
         FROM movimientos m
@@ -713,7 +714,7 @@ def _shared_catalog(database: _PostgresConnection) -> dict:
         """
     ).fetchall()
     for row in rows:
-        sale = sales_by_id.setdefault(row["id"], {"id": row["id"], "storeId": row["local"], "customerId": row["cliente"], "invoiceNumber": row["factura"], "paymentMethod": row["metodo_pago"], "date": row["fecha"], "vendedor": row["vendedor"] or "", "total": 0, "items": []})
+        sale = sales_by_id.setdefault(row["id"], {"id": row["id"], "storeId": row["local"], "customerId": row["cliente"], "customer": row["cliente"], "phone": row["telefono"] or "", "invoiceNumber": row["factura"], "paymentMethod": row["metodo_pago"], "date": row["fecha"], "vendedor": row["vendedor"] or "", "total": 0, "items": []})
         sale["total"] += float(row["precio_total"] or 0)
         sale["items"].append({"productId": row["codigo"], "quantity": row["cantidad"], "unitPrice": row["precio_unitario"], "price": row["precio_unitario"], "name": row["descripcion"]})
     return {"stores": stores, "products": products, "inventory": inventory, "sales": list(sales_by_id.values())}
@@ -766,16 +767,30 @@ def _shared_domain_items(database: _PostgresConnection, collection: str) -> list
         "payments": "abonos_creditos",
     }
     if collection == "customers":
-        query = """
-            SELECT DISTINCT cliente AS id, cliente AS name, cliente AS customer
-            FROM movimientos
-            WHERE NULLIF(BTRIM(COALESCE(cliente, '')), '') IS NOT NULL
-            UNION
-            SELECT DISTINCT cliente AS id, cliente AS name, cliente AS customer
-            FROM apartados
-            WHERE NULLIF(BTRIM(COALESCE(cliente, '')), '') IS NOT NULL
-            ORDER BY name
-        """
+        def table_columns(table_name: str) -> set[str]:
+            return {
+                row["column_name"]
+                for row in database.execute(
+                    "SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = %s",
+                    (table_name,),
+                ).fetchall()
+            }
+
+        def field_expression(alias: str, columns: set[str], candidates: tuple[str, ...]) -> str:
+            available = [f"NULLIF(BTRIM(COALESCE({alias}.{column}::text, '')), '')" for column in candidates if column in columns]
+            return "COALESCE(" + ", ".join(available + ["''"]) + ")"
+
+        source_specs = (("movimientos", "m"), ("apartados", "a"), ("creditos", "c"))
+        source_queries = []
+        for table_name, alias in source_specs:
+            columns = table_columns(table_name)
+            name = field_expression(alias, columns, ("cliente", "cliente_nombre", "nombre_cliente", "customer", "customer_name"))
+            phone = field_expression(alias, columns, ("telefono", "cliente_telefono", "phone", "customer_phone"))
+            document = field_expression(alias, columns, ("documento", "cliente_documento", "document", "customer_document"))
+            source_queries.append(
+                f"SELECT {name} AS id, {name} AS name, {name} AS customer, {phone} AS phone, {document} AS document FROM {table_name} {alias} WHERE {name} <> ''"
+            )
+        query = "SELECT DISTINCT name, document, phone, customer, id FROM (" + " UNION ALL ".join(source_queries) + ") AS customer_sources ORDER BY name"
     elif collection == "inventoryMovements":
         query = """
             SELECT m.id, m.fecha, m.tipo, m.estado, m.local_origen, m.local_destino,
@@ -815,17 +830,35 @@ def _shared_domain_items(database: _PostgresConnection, collection: str) -> list
         query = "SELECT id_abono AS id, credito_id, fecha, usuario, vendedor, local, valor_abono, saldo_anterior, saldo_nuevo, metodo_pago, observacion, numero_recibo FROM abonos_creditos ORDER BY fecha DESC"
     elif collection == "warranties":
         query = """
-            SELECT id, fecha, local, codigo, cliente, cantidad, estado, descripcion,
-                   factura, usuario, tipo, referencia, observacion, precio_unitario,
-                   precio_total, tipo_garantia, costo, numero_serie, fecharecepcion
+            SELECT id, fecha,
+                   COALESCE(local_origen, local_recibido) AS local,
+                   COALESCE(codigo, codigo_recibido) AS codigo,
+                   cliente, cantidad, estado, descripcion,
+                   factura, vendedor AS usuario,
+                   tipo_recibido AS tipo, observacion AS referencia,
+                   observacion, NULL::numeric AS precio_unitario,
+                   NULL::numeric AS precio_total,
+                   NULL::text AS tipo_garantia,
+                   NULL::numeric AS costo,
+                   NULL::text AS numero_serie,
+                   fecha_recibido AS fecharecepcion
             FROM garantias
             ORDER BY fecha DESC, id DESC
         """
     elif collection == "damagedStock":
         query = """
-            SELECT id, fecha, local, codigo, cliente, cantidad, estado, descripcion,
-                   factura, usuario, tipo, referencia, observacion, precio_unitario,
-                   precio_total, tipo_garantia, costo, numero_serie, fecharecepcion
+            SELECT id, fecha,
+                   COALESCE(local_origen, local_recibido) AS local,
+                   COALESCE(codigo, codigo_recibido) AS codigo,
+                   cliente, cantidad, estado, descripcion,
+                   factura, vendedor AS usuario,
+                   tipo_recibido AS tipo, observacion AS referencia,
+                   observacion, NULL::numeric AS precio_unitario,
+                   NULL::numeric AS precio_total,
+                   NULL::text AS tipo_garantia,
+                   NULL::numeric AS costo,
+                   NULL::text AS numero_serie,
+                   fecha_recibido AS fecharecepcion
             FROM garantias
             WHERE UPPER(COALESCE(estado, '')) IN ('PENDIENTE', 'EN_ESPERA', 'RECIBIDA', 'REPARADA')
             ORDER BY fecha DESC, id DESC
@@ -1055,6 +1088,7 @@ def _create_shared_sale(database: _PostgresConnection, payload: dict, user: dict
     sale_id = record_id(payload)
     store_id = str(payload.get("storeId", "")).strip()
     invoice_number = str(payload.get("invoiceNumber", "")).strip()
+    sale_date = str(payload.get("date") or payload.get("fecha") or payload.get("createdAt") or "").strip()[:10]
     items = payload.get("items")
     if not store_id or not invoice_number or not isinstance(items, list) or not items:
         raise ValueError("La venta requiere local, numero de factura fisica y productos")
@@ -1075,7 +1109,10 @@ def _create_shared_sale(database: _PostgresConnection, payload: dict, user: dict
         total += quantity * price
         normalized.append((code, product["nombre_producto"], quantity, price))
     customer_name = str(payload.get("customer") or payload.get("customerId") or "").strip()
-    movement_cursor = database.execute("INSERT INTO movimientos (tipo, estado, local_origen, empleado, vendedor, factura, cliente, metodo_pago) VALUES ('VENTA', 'COMPLETADO', %s, %s, %s, %s, %s, %s) RETURNING id", (store_id, str(user["username"] or user["id"] or "ERP"), str(user["username"] or "ERP"), invoice_number, customer_name, str(payload.get("paymentMethod", ""))))
+    movement_cursor = database.execute(
+        "INSERT INTO movimientos (tipo, estado, local_origen, empleado, vendedor, factura, cliente, metodo_pago, fecha) VALUES ('VENTA', 'COMPLETADO', %s, %s, %s, %s, %s, %s, %s) RETURNING id",
+        (store_id, str(user["username"] or user["id"] or "ERP"), str(user["username"] or "ERP"), invoice_number, customer_name, str(payload.get("paymentMethod", "")), sale_date or None),
+    )
     movement_id = movement_cursor.fetchone()
     if movement_id is None:
         raise RuntimeError("No se pudo crear el movimiento de venta")
@@ -1956,7 +1993,8 @@ class AppHandler(SimpleHTTPRequestHandler):
                             raise ValueError("Stock insuficiente o producto inexistente")
                         total += quantity * price
                     total += transport
-                    database.execute("INSERT INTO sales (id, tenant_id, store_id, customer_id, invoice_number, total, payment_method) VALUES (?, ?, ?, ?, ?, ?, ?)", (sale_id, current_tenant, store_id, payload.get("customerId"), invoice_number, total, str(payload.get("paymentMethod", ""))))
+                    sale_date = str(payload.get("date") or payload.get("fecha") or payload.get("createdAt") or "").strip()[:10]
+                    database.execute("INSERT INTO sales (id, tenant_id, store_id, customer_id, invoice_number, total, payment_method, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", (sale_id, current_tenant, store_id, payload.get("customerId"), invoice_number, total, str(payload.get("paymentMethod", "")), sale_date or __import__('datetime').datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%S')))
                     for item in items:
                         product_id = str(item["productId"])
                         quantity = float(item["quantity"])
@@ -2053,6 +2091,29 @@ class AppHandler(SimpleHTTPRequestHandler):
                 self.send_json(200, {"ok": True, "id": record_id_value})
                 return
             if path.startswith("/api/domain/"):
+                warranty_action_match = re.fullmatch(r"/api/domain/warranties/([^/]+)/action", path)
+                if warranty_action_match:
+                    warranty_id = unquote(warranty_action_match.group(1)).strip()
+                    action = str(payload.get("action", "")).strip().lower()
+                    status_by_action = {"receive": "RECIBIDO", "cancel": "CANCELADO"}
+                    if action not in status_by_action:
+                        self.send_json(400, {"error": "Accion de garantia no valida"})
+                        return
+                    with connection() as database:
+                        if not _postgres_enabled():
+                            self.send_json(503, {"error": "Las garantias compartidas requieren PostgreSQL"})
+                            return
+                        existing = database.execute("SELECT id FROM garantias WHERE id = %s FOR UPDATE", (warranty_id,)).fetchone()
+                        if not existing:
+                            self.send_json(404, {"error": "Garantia no encontrada"})
+                            return
+                        status = status_by_action[action]
+                        if action == "receive":
+                            database.execute("UPDATE garantias SET estado = %s, fecha_recibido = COALESCE(fecha_recibido, CURRENT_TIMESTAMP) WHERE id = %s", (status, warranty_id))
+                        else:
+                            database.execute("UPDATE garantias SET estado = %s WHERE id = %s", (status, warranty_id))
+                    self.send_json(200, {"ok": True, "id": int(warranty_id), "status": status})
+                    return
                 collection = unquote(path.removeprefix("/api/domain/")).strip("/")
                 if collection not in DOMAIN_COLLECTIONS:
                     self.send_json(404, {"error": "Coleccion no disponible"})
@@ -2454,9 +2515,11 @@ class AppHandler(SimpleHTTPRequestHandler):
                                 database.execute("UPDATE inventarios SET cantidad = cantidad - %s, actualizado = CURRENT_TIMESTAMP WHERE local = %s AND codigo = %s", (quantity, store_id, code))
                                 database.execute("INSERT INTO movimiento_productos (movimiento_id, codigo, descripcion, cantidad, precio_unitario, precio_total, entrada, salida) VALUES (%s, %s, %s, %s, %s, %s, 0, %s)", (identifier, code, description, quantity, price, quantity * price, quantity))
                                 total += quantity * price
-                            database.execute("UPDATE movimientos SET cliente = %s, metodo_pago = %s, factura = %s WHERE id = %s", (payload.get("customerId") or payload.get("cliente") or "", str(payload.get("paymentMethod") or payload.get("metodo_pago") or ""), str(payload.get("invoiceNumber") or payload.get("factura") or ""), identifier))
+                            sale_date = str(payload.get("date") or payload.get("fecha") or payload.get("createdAt") or "").strip()[:10]
+                            database.execute("UPDATE movimientos SET cliente = %s, metodo_pago = %s, factura = %s, fecha = %s WHERE id = %s", (payload.get("customerId") or payload.get("cliente") or "", str(payload.get("paymentMethod") or payload.get("metodo_pago") or ""), str(payload.get("invoiceNumber") or payload.get("factura") or ""), sale_date or None, identifier))
                         else:
-                            database.execute("UPDATE movimientos SET cliente = %s, metodo_pago = %s WHERE id = %s", (payload.get("customerId") or payload.get("cliente") or "", str(payload.get("paymentMethod") or payload.get("metodo_pago") or ""), identifier))
+                            sale_date = str(payload.get("date") or payload.get("fecha") or payload.get("createdAt") or "").strip()[:10]
+                            database.execute("UPDATE movimientos SET cliente = %s, metodo_pago = %s, fecha = %s WHERE id = %s", (payload.get("customerId") or payload.get("cliente") or "", str(payload.get("paymentMethod") or payload.get("metodo_pago") or ""), sale_date or None, identifier))
                     self.send_json(200, {"ok": True, "id": identifier})
                     return
                 with connection() as database:
@@ -2464,6 +2527,7 @@ class AppHandler(SimpleHTTPRequestHandler):
                     if not sale:
                         self.send_json(404, {"error": "Venta no encontrada"})
                         return
+                    sale_date = str(payload.get("date") or payload.get("fecha") or payload.get("createdAt") or "").strip()[:10]
                     if items:
                         old_items = database.execute("SELECT product_id, quantity FROM sale_items WHERE sale_id = ?", (identifier,)).fetchall()
                         for item in old_items:
@@ -2480,9 +2544,9 @@ class AppHandler(SimpleHTTPRequestHandler):
                             database.execute("INSERT INTO sale_items (sale_id, product_id, quantity, unit_price, tax_rate) VALUES (?, ?, ?, ?, ?)", (identifier, product_id, quantity, price, float(item.get("taxRate", 0))))
                             database.execute("UPDATE inventory SET quantity = quantity - ? WHERE tenant_id = ? AND product_id = ? AND store_id = ?", (quantity, tenant_id(self, payload), product_id, sale[0]))
                             total += quantity * price
-                        updated = database.execute("UPDATE sales SET customer_id = ?, invoice_number = ?, payment_method = ?, total = ? WHERE id = ? AND tenant_id = ?", (payload.get("customerId"), str(payload.get("invoiceNumber", "")), str(payload.get("paymentMethod", "")), total, identifier, tenant_id(self, payload))).rowcount
+                        updated = database.execute("UPDATE sales SET customer_id = ?, invoice_number = ?, payment_method = ?, total = ?, created_at = ? WHERE id = ? AND tenant_id = ?", (payload.get("customerId"), str(payload.get("invoiceNumber", "")), str(payload.get("paymentMethod", "")), total, sale_date or None, identifier, tenant_id(self, payload))).rowcount
                     else:
-                        updated = database.execute("UPDATE sales SET customer_id = ?, invoice_number = ?, payment_method = ? WHERE id = ? AND tenant_id = ?", (payload.get("customerId"), str(payload.get("invoiceNumber", "")), str(payload.get("paymentMethod", "")), identifier, tenant_id(self, payload))).rowcount
+                        updated = database.execute("UPDATE sales SET customer_id = ?, invoice_number = ?, payment_method = ?, created_at = ? WHERE id = ? AND tenant_id = ?", (payload.get("customerId"), str(payload.get("invoiceNumber", "")), str(payload.get("paymentMethod", "")), sale_date or None, identifier, tenant_id(self, payload))).rowcount
                     if not updated:
                         self.send_json(404, {"error": "Venta no encontrada"})
                         return
