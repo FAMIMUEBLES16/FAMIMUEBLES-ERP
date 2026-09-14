@@ -77,7 +77,7 @@ export function renderOperaciones(data) {
   return page(
     'GARANTIAS',
     'Garantias',
-    '<button class="primary wide" data-action="advanced-new" data-collection="warranties">Nueva garantia</button>',
+    '<button class="primary warranty-new-button" data-action="advanced-new" data-collection="warranties">Nueva garantia</button>',
     `
       <section class="panel">
         <div class="panel-head">
