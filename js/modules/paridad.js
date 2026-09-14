@@ -1,21 +1,31 @@
 import { page, table, badge, money } from '../components/tables.js';
 
+const value = (item, ...keys) => keys.map(key => item?.[key]).find(item => item !== undefined && item !== null && item !== '') ?? '';
+const dateValue = item => String(value(item, 'fecha', 'date', 'createdAt', 'created_at')).slice(0, 10);
+
+export function sistecreditoTable(data = {}, filters = {}) {
+  const rows = (Array.isArray(data.sistecredito) ? data.sistecredito : []).filter(item => {
+    const date = dateValue(item);
+    const vendedor = String(value(item, 'vendedor', 'seller', 'empleado')).toLowerCase();
+    const local = String(value(item, 'local', 'store', 'storeId'));
+    const method = String(value(item, 'metodo_pago', 'method', 'paymentMethod'));
+    return (!filters.from || date >= filters.from)
+      && (!filters.to || date <= filters.to)
+      && (!filters.local || local === filters.local)
+      && (!filters.vendedor || vendedor.includes(filters.vendedor.toLowerCase()))
+      && (!filters.method || method === filters.method);
+  });
+  const body = rows.length ? rows.map(item => `<tr><td>${dateValue(item) || '-'}</td><td>${value(item, 'vendedor', 'seller', 'empleado') || '-'}</td><td>${value(item, 'local', 'store', 'storeId') || '-'}</td><td><strong>${money(Number(value(item, 'valor', 'amount', 'total') || 0))}</strong></td><td>${value(item, 'metodo_pago', 'method', 'paymentMethod') || '-'}</td></tr>`).join('') : '<tr><td colspan="5" class="muted">No hay operaciones de Sistecrédito para los filtros seleccionados.</td></tr>';
+  return table(['Fecha', 'Vendedor', 'Local', 'Valor', 'Método de pago'], body);
+}
+
 export function renderParidad(data = {}) {
   const stores = (data.stores || []).map(item => `<option value="${item.name || item.id}">${item.name || item.id}</option>`).join('');
-  const sellers = sellerOptions(data.users || [], data.sales || []);
-  const paymentMethods = ['Efectivo', 'Transferencia', 'Tarjeta', 'Sistecrédito', 'Crédito interno FAMIMUEBLES', 'Apartado'];
-  const methodOptions = paymentMethods.map(method => `<option value="${method}">${method}</option>`).join('');
+  const sistecredito = Array.isArray(data.sistecredito) ? data.sistecredito : [];
+  const sellers = sellerOptions([], sistecredito);
+  const methods = [...new Set(sistecredito.map(item => value(item, 'metodo_pago', 'method', 'paymentMethod')).filter(Boolean))].sort((left, right) => left.localeCompare(right, 'es')).map(method => `<option value="${method}">${method}</option>`).join('');
   return page('PARIDAD OPERATIVA', 'Funciones del bot', '', `
-    <p class="date-line">Operaciones compartidas con PostgreSQL para nómina, conteos, cartera y Sistecrédito.</p>
-    <div class="report-grid">
-      <article class="report-card"><span class="report-icon">$</span><h3>Nómina</h3><p>Previsualiza y cierra períodos por local.</p><button class="primary" data-action="parity-payroll">Abrir</button><button class="outline" data-action="parity-payroll-config">Configurar</button></article>
-      <article class="report-card"><span class="report-icon">▦</span><h3>Conteo físico</h3><p>Registra diferencias y aplica ajustes confirmados.</p><button class="primary" data-action="parity-count">Abrir</button></article>
-      <article class="report-card"><span class="report-icon">◉</span><h3>Sistecrédito</h3><p>Registra operaciones y consulta su historial.</p><button class="primary" data-action="parity-sistecredito">Abrir</button></article>
-    </div>
-    <section class="panel"><div class="panel-head"><h3>Reportes especializados</h3></div><div class="filter-row parity-filters"><label class="input-label">Desde<input class="field" id="parity-from" type="date"></label><label class="input-label">Hasta<input class="field" id="parity-to" type="date"></label><label class="input-label">Local<select class="field" id="parity-local"><option value="">Todos</option>${stores}</select></label><label class="input-label">Vendedor<select class="field" id="parity-vendedor"><option value="">Todos</option>${sellers}</select></label><label class="input-label">Método de pago<select class="field" id="parity-method"><option value="">Todos</option>${methodOptions}</select></label></div><div class="quick-actions parity-report-actions">
-      ${['disponibilidad','inventario-bajo','sistecredito','gastos','gasolina','historial-empleado'].map(report => `<button class="outline" data-action="parity-report" data-report="${report}">${report.replaceAll('-', ' ')}</button>`).join('')}
-    </div><div id="parity-report-result" class="parity-report-result"><p class="muted">Selecciona un reporte para ver la información aquí.</p></div></section>
-    <template id="parity-stores">${stores}</template>`);
+    <section class="panel"><div class="panel-head"><h3>Sistecrédito</h3></div><div class="filter-row parity-filters"><label class="input-label">Desde<input class="field" id="parity-from" type="date"></label><label class="input-label">Hasta<input class="field" id="parity-to" type="date"></label><label class="input-label">Local<select class="field" id="parity-local"><option value="">Todos</option>${stores}</select></label><label class="input-label">Vendedor<select class="field" id="parity-vendedor"><option value="">Todos</option>${sellers}</select></label><label class="input-label">Método de pago<select class="field" id="parity-method"><option value="">Todos</option>${methods}</select></label></div><div id="sistecredito-table">${sistecreditoTable(data)}</div></section>`);
 }
 
 export function payrollModal(data = {}) {

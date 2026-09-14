@@ -44,7 +44,7 @@ import { renderCuentasPorPagar, payableTable } from './modules/cuentas-por-pagar
 import { accountsPayableDetail } from './modules/accounts-payable-detail.js?v=14';
 import { calculateBalance, registerPayment as registerSupplierPayment, updateAccountPayableStatus } from './services/accounts-payable-service.js?v=14';
 import { renderOperaciones, advancedModal, nextAdvancedId } from './modules/operaciones.js?v=2';
-import { renderParidad, payrollModal, payrollConfigModal, countModal, sistecreditoModal, formatParityResult } from './modules/paridad.js?v=1';
+import { renderParidad, payrollModal, payrollConfigModal, countModal, sistecreditoModal, formatParityResult, sistecreditoTable } from './modules/paridad.js?v=2';
 import { api } from './services/api-client.js?v=7';
 
 const state = { cart:[], payment:'Efectivo', customerId:'CLI-00001', storeId:store.collection.stores[0]?.id || '', transport:0, transportDestination:'', transportNote:'' };
@@ -671,6 +671,11 @@ document.addEventListener('click', async event => {
 	}
 });
 document.addEventListener('input', event => {
+	if (event.target.matches('#parity-from,#parity-to,#parity-local,#parity-vendedor,#parity-method')) {
+		const filters = { from: $('#parity-from')?.value || '', to: $('#parity-to')?.value || '', local: $('#parity-local')?.value || '', vendedor: $('#parity-vendedor')?.value || '', method: $('#parity-method')?.value || '' };
+		const container = $('#sistecredito-table');
+		if (container) container.innerHTML = sistecreditoTable(store.collection, filters);
+	}
 	if (event.target.matches('[data-filter="inventory"]')) {
 		const storeId = $('[data-inventory-store]')?.value || 'all';
 		const active = $('[data-inventory-active]')?.value || 'all';
@@ -679,6 +684,12 @@ document.addEventListener('input', event => {
 		inventoryViewState = { store:storeId, query:event.target.value, active, status, sort, version:inventoryViewState.version + 1 };
 		$('#inventory-content').innerHTML = inventoryContent(store.collection, storeId, event.target.value, active, status, sort);
 	}
+});
+document.addEventListener('change', event => {
+	if (!event.target.matches('#parity-from,#parity-to,#parity-local,#parity-vendedor,#parity-method')) return;
+	const filters = { from: $('#parity-from')?.value || '', to: $('#parity-to')?.value || '', local: $('#parity-local')?.value || '', vendedor: $('#parity-vendedor')?.value || '', method: $('#parity-method')?.value || '' };
+	const container = $('#sistecredito-table');
+	if (container) container.innerHTML = sistecreditoTable(store.collection, filters);
 });
 document.addEventListener('change', event => {
 	if (event.target.matches('[data-inventory-store],[data-inventory-active],[data-inventory-status],[data-inventory-sort]')) {
