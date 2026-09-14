@@ -2,6 +2,7 @@ import { page, table, badge, money } from '../components/tables.js';
 
 const value = (item, ...keys) => keys.map(key => item?.[key]).find(item => item !== undefined && item !== null && item !== '') ?? '';
 const dateValue = item => String(value(item, 'fecha', 'date', 'createdAt', 'created_at')).slice(0, 10);
+const photoValue = item => value(item, 'foto', 'photo', 'imagen', 'image', 'captura', 'screenshot', 'comprobante', 'evidencia', 'foto_url', 'photo_url');
 
 export function sistecreditoTable(data = {}, filters = {}) {
   const rows = (Array.isArray(data.sistecredito) ? data.sistecredito : []).filter(item => {
@@ -15,8 +16,8 @@ export function sistecreditoTable(data = {}, filters = {}) {
       && (!filters.vendedor || vendedor.includes(filters.vendedor.toLowerCase()))
       && (!filters.method || method === filters.method);
   });
-  const body = rows.length ? rows.map(item => `<tr><td>${dateValue(item) || '-'}</td><td>${value(item, 'vendedor', 'seller', 'empleado') || '-'}</td><td>${value(item, 'local', 'store', 'storeId') || '-'}</td><td><strong>${money(Number(value(item, 'valor', 'amount', 'total') || 0))}</strong></td><td>${value(item, 'metodo_pago', 'method', 'paymentMethod') || '-'}</td></tr>`).join('') : '<tr><td colspan="5" class="muted">No hay operaciones de Sistecrédito para los filtros seleccionados.</td></tr>';
-  return table(['Fecha', 'Vendedor', 'Local', 'Valor', 'Método de pago'], body);
+  const body = rows.length ? rows.map(item => `<tr><td>${dateValue(item) || '-'}</td><td>${value(item, 'vendedor', 'seller', 'empleado') || '-'}</td><td>${value(item, 'local', 'store', 'storeId') || '-'}</td><td><strong>${money(Number(value(item, 'valor', 'amount', 'total') || 0))}</strong></td><td>${value(item, 'metodo_pago', 'method', 'paymentMethod') || '-'}</td><td>${photoValue(item) ? `<button class="table-action" data-action="sistecredito-photo" data-photo="${photoValue(item)}">Ver foto</button>` : '<span class="muted">Sin foto</span>'}</td></tr>`).join('') : '<tr><td colspan="6" class="muted">No hay operaciones de Sistecrédito para los filtros seleccionados.</td></tr>';
+  return table(['Fecha', 'Vendedor', 'Local', 'Valor', 'Método de pago', 'Acciones'], body);
 }
 
 export function renderParidad(data = {}) {
@@ -24,7 +25,7 @@ export function renderParidad(data = {}) {
   const sistecredito = Array.isArray(data.sistecredito) ? data.sistecredito : [];
   const sellers = sellerOptions([], sistecredito);
   const methods = [...new Set(sistecredito.map(item => value(item, 'metodo_pago', 'method', 'paymentMethod')).filter(Boolean))].sort((left, right) => left.localeCompare(right, 'es')).map(method => `<option value="${method}">${method}</option>`).join('');
-  return page('PARIDAD OPERATIVA', 'Funciones del bot', '', `
+  return page('SISTECREDITO', 'Sistecredito', '', `
     <section class="panel"><div class="panel-head"><h3>Sistecrédito</h3></div><div class="filter-row parity-filters"><label class="input-label">Desde<input class="field" id="parity-from" type="date"></label><label class="input-label">Hasta<input class="field" id="parity-to" type="date"></label><label class="input-label">Local<select class="field" id="parity-local"><option value="">Todos</option>${stores}</select></label><label class="input-label">Vendedor<select class="field" id="parity-vendedor"><option value="">Todos</option>${sellers}</select></label><label class="input-label">Método de pago<select class="field" id="parity-method"><option value="">Todos</option>${methods}</select></label></div><div id="sistecredito-table">${sistecreditoTable(data)}</div></section>`);
 }
 

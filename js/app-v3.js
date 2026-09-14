@@ -7,7 +7,7 @@ import { store } from './data/store.js?v=20';
 import { hydrateState, hydrateCatalog, saveState, authHeaders, activeTenantId, isStaticDeployment } from './data/storage.js?v=22';
 import { generateId } from './utils/ids.js';
 import { currentRoute, startRouter } from './router.js?v=18';
-import { navItems, navGroups } from './components/sidebar.js?v=21';
+import { navItems, navGroups } from './components/sidebar.js?v=22';
 import { showToast } from './components/toast.js';
 import { table } from './components/tables.js';
 import { renderNotifications } from './components/notifications.js';
@@ -535,6 +535,14 @@ document.addEventListener('submit',async event=>{if(event.target.id!=='advanced-
 async function parityPost(path, payload) { return api.post(path, {...payload, tenantId:activeTenantId()}, {headers:{'X-Tenant-ID':activeTenantId()}}); }
 document.addEventListener('click', async event=>{
 	const action=event.target.closest('[data-action]')?.dataset.action;
+	if(action==='sistecredito-photo'){
+		const photo=event.target.closest('[data-action="sistecredito-photo"]')?.dataset.photo;
+		if(!photo)return showToast('Este registro no tiene una foto guardada.','error');
+		const source=/^(https?:|data:image\/|blob:)/i.test(photo)?photo:`data:image/jpeg;base64,${photo}`;
+		$('#modal-root').innerHTML=`<div class="modal-backdrop"><section class="modal photo-modal"><button type="button" class="modal-close">×</button><p class="eyebrow">SISTECREDITO</p><h2>Comprobante</h2><img src="${source}" alt="Comprobante de Sistecrédito" style="max-width:100%;height:auto;display:block;margin:auto;"></section></div>`;
+		$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';
+		return;
+	}
 	if(action==='parity-count-add-product'){
 		const form=event.target.closest('#parity-count-form');
 		const code=form?.querySelector('[data-count-add-code]')?.value.trim();
