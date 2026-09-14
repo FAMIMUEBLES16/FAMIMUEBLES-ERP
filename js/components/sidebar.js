@@ -13,6 +13,6 @@ export const navGroups = [
 	{id:'sales',label:'Ventas',icon:icons.sales,items:['ventas','clientes','cartera','apartados']},
 	{id:'inventory',label:'Inventario',icon:icons.box,items:['productos','traslados','locales','reportes']},
 	{id:'purchases',label:'Compras',icon:icons.receipt,items:['proveedores','compras','cuentas-por-pagar']},
-	{id:'operations',label:'Garantias',icon:icons.settings,items:['operaciones','paridad','gastos','gasolina']},
+	{id:'operations',label:'Operaciones',icon:icons.settings,items:['operaciones','paridad','gastos','gasolina']},
 	{id:'administration',label:'Administracion',icon:icons.settings,items:['auditoria','usuarios','configuracion']},
 ];
