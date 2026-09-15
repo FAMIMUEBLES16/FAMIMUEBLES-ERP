@@ -153,7 +153,7 @@ function modal(title, fields, onSubmit){ $('#modal-root').innerHTML=`<div class=
 async function persistCatalogRecord(path, record, method='POST'){ const requestId=method==='POST'?(record.requestId||(record.requestId=globalThis.crypto?.randomUUID?crypto.randomUUID():`${path}-${Date.now()}-${Math.random()}`)):''; const options={headers:{'X-Tenant-ID':activeTenantId(),...(requestId?{'Idempotency-Key':requestId}: {})}}; const body={...record,...(requestId?{requestId}:{}),tenantId:activeTenantId()}; try { return method==='PUT' ? await api.put(path,body,options) : method==='DELETE' ? await api.delete(path,body,options) : await api.post(path,body,options); } catch(error) { if(error.status===401){localStorage.removeItem('famimuebles-auth-token');localStorage.removeItem('famimuebles-user');throw new Error('La sesion expiro. Inicia sesion nuevamente para guardar cambios.');} throw error; } }
 const remoteDomainCollections=['customers','suppliers','purchases','credits','expenses','accountsPayable','supplierPayments','customerAccounts','returns','supplierReturns','stockCounts','reservations','warranties','damagedStock','cashSessions','cashMovements','bankAccounts','quotes','orders','deliveries','creditNotes'];
 async function persistDomainRecord(collection, record){ return persistCatalogRecord(`/api/domain/${encodeURIComponent(collection)}`,{...record,tenantId:activeTenantId()}); }
-async function hydrateDomainCollections(state){ await Promise.all(remoteDomainCollections.map(async collection=>{ try { const payload=await api.get(`/api/domain/${encodeURIComponent(collection)}`,{headers:{'X-Tenant-ID':activeTenantId()},cache:'no-store',timeout:4000}); const items=Array.isArray(payload.items)?payload.items:[];if(items.length||!Array.isArray(state[collection])||state[collection].length===0)state[collection]=items; } catch(error) {} })); return state; }
+async function hydrateDomainCollections(state){ await Promise.all(remoteDomainCollections.map(async collection=>{ try { const payload=await api.get(`/api/domain/${encodeURIComponent(collection)}`,{headers:{'X-Tenant-ID':activeTenantId()},cache:'no-store',timeout:15000}); const items=Array.isArray(payload.items)?payload.items:[];if(items.length||!Array.isArray(state[collection])||state[collection].length===0)state[collection]=items; } catch(error) { console.warn(`No se pudo cargar ${collection}:`,error.message); } })); return state; }
 async function hydrateUsers(state){
 	const normalize=(item,source)=>{
 		const name=String(item?.name||item?.nombre||item?.username||item?.usuario||item?.empleado||'').trim();
@@ -174,8 +174,8 @@ async function hydrateUsers(state){
 	};
 	const localUsers=Array.isArray(state.users)?state.users:[];
 	const results=await Promise.allSettled([
-		api.get('/api/users',{headers:{'X-Tenant-ID':activeTenantId()},cache:'no-store',timeout:4000}),
-		api.get('/api/domain/users',{headers:{'X-Tenant-ID':activeTenantId()},cache:'no-store',timeout:4000})
+		api.get('/api/users',{headers:{'X-Tenant-ID':activeTenantId()},cache:'no-store',timeout:15000}),
+		api.get('/api/domain/users',{headers:{'X-Tenant-ID':activeTenantId()},cache:'no-store',timeout:15000})
 	]);
 	const authPayload=results[0].status==='fulfilled'?results[0].value:null;
 	const employeePayload=results[1].status==='fulfilled'?results[1].value:null;
