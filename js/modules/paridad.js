@@ -2,7 +2,7 @@ import { page, table, badge, money } from '../components/tables.js';
 
 const value = (item, ...keys) => keys.map(key => item?.[key]).find(item => item !== undefined && item !== null && item !== '') ?? '';
 const dateValue = item => String(value(item, 'fecha', 'date', 'createdAt', 'created_at')).slice(0, 10);
-const photoValue = item => value(item, 'foto', 'photo', 'imagen', 'image', 'captura', 'screenshot', 'comprobante', 'evidencia', 'foto_url', 'photo_url');
+const photoValue = item => value(item, 'foto', 'photo', 'imagen', 'image', 'captura', 'screenshot', 'comprobante', 'evidencia', 'foto_url', 'photo_url', 'comprobante_file_id');
 
 export function sistecreditoTable(data = {}, filters = {}) {
   const rows = (Array.isArray(data.sistecredito) ? data.sistecredito : []).filter(item => {

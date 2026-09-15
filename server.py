@@ -7,9 +7,12 @@ import hashlib
 import io
 import re
 import secrets
+import shutil
 import sys
 import subprocess
 import threading
+import urllib.error
+import urllib.request
 import zipfile
 from datetime import datetime
 from decimal import Decimal
@@ -84,8 +87,12 @@ PUBLISHABLE_FILES = ("index.html", "css/main.css", "js/", "server.py")
 
 
 def publish_public_version() -> dict:
+    git_executable = shutil.which("git") or r"C:\Program Files\Git\cmd\git.exe"
+    if not Path(git_executable).exists() and not shutil.which(git_executable):
+        raise RuntimeError("No se encontro Git en el entorno del servidor local.")
+
     def run_git(*arguments: str) -> str:
-        result = subprocess.run(["git", *arguments], cwd=ROOT, capture_output=True, text=True, encoding="utf-8", timeout=90, check=False)
+        result = subprocess.run([git_executable, *arguments], cwd=ROOT, capture_output=True, text=True, encoding="utf-8", timeout=90, check=False)
         if result.returncode:
             raise RuntimeError((result.stderr or result.stdout or "Fallo de Git").strip()[-500:])
         return result.stdout.strip()
@@ -1349,6 +1356,45 @@ class AppHandler(SimpleHTTPRequestHandler):
             with connection() as database:
                 rows = database.execute("SELECT * FROM sistecredito ORDER BY fecha DESC, id DESC").fetchall()
             self.send_json(200, {"items": [dict(row) for row in rows]})
+            return
+        if path == "/api/parity/sistecredito/photo":
+            file_id = (parse_qs(parsed_url.query).get("file_id") or [""])[0].strip()
+            bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+            if not file_id or not bot_token:
+                self.send_json(404, {"error": "Comprobante no disponible"})
+                return
+            try:
+                with connection() as database:
+                    stored_file = database.execute(
+                        "SELECT 1 FROM sistecredito WHERE comprobante_file_id = %s LIMIT 1",
+                        (file_id,),
+                    ).fetchone()
+                if not stored_file:
+                    self.send_json(404, {"error": "Comprobante no disponible"})
+                    return
+                file_info_request = urllib.request.Request(
+                    f"https://api.telegram.org/bot{bot_token}/getFile?file_id={file_id}",
+                    headers={"Accept": "application/json"},
+                )
+                with urllib.request.urlopen(file_info_request, timeout=15) as response:
+                    file_info = json.loads(response.read().decode("utf-8"))
+                file_path = file_info.get("result", {}).get("file_path")
+                if not file_path:
+                    raise ValueError("Telegram no devolvio la ruta del comprobante")
+                with urllib.request.urlopen(
+                    f"https://api.telegram.org/file/bot{bot_token}/{file_path}", timeout=30
+                ) as response:
+                    body = response.read()
+                    content_type = response.headers.get_content_type() or "image/jpeg"
+                self.send_response(200)
+                self.send_header("Content-Type", content_type)
+                self.send_header("Content-Length", str(len(body)))
+                self._send_cors_headers()
+                self.send_header("Cache-Control", "private, max-age=300")
+                self.end_headers()
+                self.wfile.write(body)
+            except (urllib.error.URLError, ValueError, json.JSONDecodeError, TimeoutError):
+                self.send_json(502, {"error": "No se pudo obtener el comprobante de Telegram"})
             return
         if path == "/api/parity/conteos":
             with connection() as database:
