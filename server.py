@@ -83,7 +83,7 @@ DOMAIN_COLLECTIONS = {
     "quotes", "orders", "deliveries", "transfers", "credit-notes", "creditNotes", "company-settings", "companySettings", "talonarios",
 }
 DEFAULT_TENANT = "tenant-default"
-PUBLISHABLE_FILES = ("index.html", "css/main.css", "js/", "server.py")
+PUBLISHABLE_FILES = ("index.html", "css/", "js/", "server.py", "report_pdf.py")
 
 
 def publish_public_version() -> dict:
