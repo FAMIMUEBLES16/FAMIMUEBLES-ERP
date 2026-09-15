@@ -80,7 +80,7 @@ DOMAIN_COLLECTIONS = {
     "accountsPayable", "supplierPayments", "customerAccounts", "suppliers", "accounts-payable", "supplier-payments", "customer-accounts",
     "returns", "supplier-returns", "supplierReturns", "stock-counts", "stockCounts", "reservations", "warranties",
     "damaged-stock", "damagedStock", "cash-sessions", "cashSessions", "cash-movements", "cashMovements", "bank-accounts", "bankAccounts",
-    "quotes", "orders", "deliveries", "transfers", "credit-notes", "creditNotes", "company-settings", "companySettings",
+    "quotes", "orders", "deliveries", "transfers", "credit-notes", "creditNotes", "company-settings", "companySettings", "talonarios",
 }
 DEFAULT_TENANT = "tenant-default"
 PUBLISHABLE_FILES = ("index.html", "css/main.css", "js/", "server.py")

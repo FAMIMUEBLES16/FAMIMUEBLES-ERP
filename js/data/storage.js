@@ -45,6 +45,7 @@ function createEmptyState() {
     orders: [],
     deliveries: [],
     creditNotes: [],
+    talonarios: [],
     companySettings: [],
     permissionMatrix: [],
     notifications: [],
@@ -83,6 +84,7 @@ function normalizeState(state) {
   base.purchases.filter(purchase => purchase.status === 'RECIBIDA' && purchase.supplierId && base.suppliers.some(supplier => supplier.id === purchase.supplierId)).forEach(purchase => createAccountPayable(base,purchase,{ totalAmount:purchase.items.reduce((sum,item)=>sum + Math.max(0,item.quantity*item.unitCost-item.discount)*(1+item.iva/100),0), paymentTerms:purchase.paymentMethod }));
   base.paymentMethods = Array.isArray(base.paymentMethods) ? base.paymentMethods : [];
   base.permissionMatrix = Array.isArray(base.permissionMatrix) ? base.permissionMatrix : [];
+  base.talonarios = Array.isArray(base.talonarios) ? base.talonarios : [];
   base.notifications = Array.isArray(base.notifications) ? base.notifications : [];
   base.demoMode = state.demoMode === true;
   return base;

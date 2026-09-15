@@ -28,6 +28,8 @@ import { renderGastos } from './modules/gastos.js?v=19';
 import { renderGasolina } from './modules/gasolina.js?v=18';
 import { renderUsuarios } from './modules/usuarios.js?v=19';
 import { renderAuditoria, setAuditFilters, clearAuditFilters } from './modules/auditoria.js?v=21';
+import { renderTalonarios, talonarioModal, setTalonarioFilters } from './modules/talonarios.js?v=1';
+import { historicalTalonarios, historicalRecibos, storedTalonarios } from './modules/talonarios-historial.js?v=1';
 import { renderApartados } from './modules/apartados.js?v=19';
 import { createApartado, decreaseSaleInventory, registerPayment, runTransaction, addMovement } from './modules/finanzas.js?v=18';
 import { formatCurrency as money } from './utils/currency.js?v=18';
@@ -98,7 +100,7 @@ const actionPermissionMap = {
 };
 const $ = selector => document.querySelector(selector);
 const isLocalApp = ['localhost','127.0.0.1','::1'].includes(window.location.hostname);
-const views = { dashboard:()=>renderDashboard(store.collection), ventas:()=>renderVentas(store.collection), facturacion:()=>renderFacturacion(store.collection,state.cart,state.payment,state.customerId,state.transport,state.transportDestination,state.transportNote,state.storeId), productos:()=>renderProductos(store.collection), inventario:()=>renderInventario(store.collection,state.storeId), traslados:()=>renderTraslados(store.collection), proveedores:()=>renderProveedores(store.collection), compras:()=>renderCompras(store.collection), 'cuentas-por-pagar':()=>renderCuentasPorPagar(store.collection), clientes:()=>renderClientes(store.collection), creditos:()=>renderCreditos(store.collection), cartera:()=>renderCartera(store.collection), apartados:()=>renderApartados(store.collection), locales:()=>renderLocales(store.collection), operaciones:()=>renderOperaciones(store.collection), paridad:()=>renderParidad(store.collection), gastos:()=>renderGastos(store.collection), gasolina:()=>renderGasolina(store.collection), auditoria:()=>renderAuditoria(store.collection), usuarios:()=>renderUsuarios(store.collection), reportes:()=>renderReportes(store.collection), configuracion:renderConfiguracion };
+const views = { dashboard:()=>renderDashboard(store.collection), ventas:()=>renderVentas(store.collection), facturacion:()=>renderFacturacion(store.collection,state.cart,state.payment,state.customerId,state.transport,state.transportDestination,state.transportNote,state.storeId), productos:()=>renderProductos(store.collection), inventario:()=>renderInventario(store.collection,state.storeId), traslados:()=>renderTraslados(store.collection), proveedores:()=>renderProveedores(store.collection), compras:()=>renderCompras(store.collection), 'cuentas-por-pagar':()=>renderCuentasPorPagar(store.collection), clientes:()=>renderClientes(store.collection), creditos:()=>renderCreditos(store.collection), cartera:()=>renderCartera(store.collection), apartados:()=>renderApartados(store.collection), locales:()=>renderLocales(store.collection), operaciones:()=>renderOperaciones(store.collection), paridad:()=>renderParidad(store.collection), gastos:()=>renderGastos(store.collection), gasolina:()=>renderGasolina(store.collection), auditoria:()=>renderAuditoria(store.collection), usuarios:()=>renderUsuarios(store.collection), talonarios:()=>renderTalonarios(store.collection), reportes:()=>renderReportes(store.collection), configuracion:renderConfiguracion };
 function activeStoreKey(){ return `famimuebles-active-store-${activeTenantId() || 'default'}`; }
 function resolveActiveStore(){ const stores=store.collection.stores||[]; const saved=localStorage.getItem(activeStoreKey()); return stores.some(item=>String(item.id)===String(saved)) ? String(saved) : (stores[0]?.id || ''); }
 function syncActiveStoreSelector(){ const selector=$('#active-store-selector'); if(!selector)return; const stores=store.collection.stores||[]; selector.innerHTML=stores.length ? stores.map(item=>`<option value="${item.id}">${item.name}</option>`).join('') : '<option value="">Sin locales registrados</option>'; selector.disabled=!stores.length; selector.value=state.storeId; }
@@ -120,7 +122,7 @@ document.addEventListener('click',event=>{if(!event.target.closest('#tenant-menu
 document.addEventListener('click',event=>{const action=event.target.closest('[data-action]')?.dataset.action;const permission=action&&actionPermissionMap[action];if(permission&&!canPerform(permission[0],permission[1])){event.preventDefault();event.stopImmediatePropagation();showToast('No tienes permiso para realizar esta accion.','error');}},true);
 async function loadTenants(){ const selector=$('#tenant-selector'); if(!selector)return;$('#tenant-toggle').onclick=()=>toggleTenantMenu(); try{const payload=await api.get('/api/tenants');selector.innerHTML=(payload.items||[]).map(item=>`<option value="${item.id}">${item.name}</option>`).join('');selector.value=activeTenantId();selector.onchange=()=>{localStorage.setItem('famimuebles-tenant-id',selector.value);location.reload();};$('#tenant-create').onclick=openTenantModal;}catch(error){selector.innerHTML='<option>Empresa</option>';}}
 function syncBillingSummary(){ const summary=$('.financial-summary'); if(!summary)return; const transportRow=summary.querySelector('[data-transport-row]') || document.createElement('div'); transportRow.dataset.transportRow='true'; transportRow.innerHTML='<span>Transporte</span><input class="field transport-input" type="number" min="0" value="'+(Number(state.transport)||'')+'" data-transport-value placeholder="0">'; const rows=[...summary.children]; const oldTransport=rows.find(row=>row.textContent.trim().startsWith('Transporte')); if(oldTransport)oldTransport.replaceWith(transportRow);else summary.insertBefore(transportRow,summary.querySelector('.grand-total')); const discount=state.cart.reduce((sum,item)=>sum + Math.max(0,Number(item.priceLista ?? item.price) - Number(item.priceVenta ?? item.price)) * Number(item.quantity || 0),0); let discountRow=summary.querySelector('[data-discount-row]'); if(!discountRow){discountRow=document.createElement('div');discountRow.dataset.discountRow='true';summary.insertBefore(discountRow,summary.querySelector('.grand-total'));} discountRow.innerHTML='<span>Descuento</span><strong>'+money(discount)+'</strong>'; }
-function syncInvoiceField(){const summary=document.querySelector('.billing-summary');if(!summary||document.querySelector('[data-physical-invoice]'))return;const field=document.createElement('label');field.className='input-label';field.innerHTML='<span>Numero de factura fisica</span><input class="field" type="text" name="invoiceNumber" data-physical-invoice placeholder="Factura que entregas al cliente" required>';summary.prepend(field);}
+function syncInvoiceField(){const summary=document.querySelector('.billing-summary');if(!summary||document.querySelector('[data-physical-invoice]'))return;const typeField=document.createElement('label');typeField.className='input-label';typeField.innerHTML='<span>Tipo de documento</span><select class="field" name="documentType" data-document-type><option value="REMISION">Remision</option><option value="RECIBO">Recibo</option></select>';const field=document.createElement('label');field.className='input-label';field.innerHTML='<span>Numero de factura fisica</span><input class="field" type="text" name="invoiceNumber" data-physical-invoice placeholder="Numero de remision o recibo" required>';summary.prepend(field);summary.prepend(typeField);}
 function syncCreditFlow(){ const summary=$('.billing-summary'); if(!summary)return; summary.querySelector('[data-credit-flow]')?.remove(); if(state.payment!=='Crédito interno FAMIMUEBLES')return; const flow=document.createElement('div'); flow.className='credit-flow'; flow.dataset.creditFlow='true'; flow.innerHTML='<p class="eyebrow">CREDITO INTERNO</p><label>Cuota inicial<input class="field" type="number" min="0" value="0" data-credit-initial placeholder="Cuota inicial"></label><label>Numero de cuotas<input class="field" type="number" min="1" value="6" data-credit-installments placeholder="Numero de cuotas"></label>'; summary.querySelector('[data-action="finish-sale"]')?.before(flow); }
 function captureViewState(){
 	return {
@@ -151,8 +153,113 @@ function refreshProducts(){ const query=$('[data-filter="products"]')?.value||''
 function clearProductFilters(){ const defaults={'[data-filter="products"]':'','[data-product-category]':'all','[data-product-subcategory]':'all','[data-product-brand]':'all','[data-product-status]':'all','[data-product-active]':'all','[data-product-sort]':'name','[data-product-page-size]':'50'};Object.entries(defaults).forEach(([selector,value])=>{const element=$(selector);if(element)element.value=value;});productPage=1;refreshProducts();}
 function modal(title, fields, onSubmit){ $('#modal-root').innerHTML=`<div class="modal-backdrop"><form class="modal" id="data-modal"><button type="button" class="modal-close">×</button><p class="eyebrow">FAMIMUEBLES ERP</p><h2>${title}</h2>${fields.map(field=>`<label class="input-label">${field.label}<input class="field" name="${field.name}" type="${field.type||'text'}" value="${field.value||''}" ${field.required===false?'':'required'}></label>`).join('')}<button class="primary wide">Guardar</button></form></div>`; $('.modal-close').onclick=()=>$('#modal-root').innerHTML=''; $('#data-modal').onsubmit=async event=>{event.preventDefault();const button=event.target.querySelector('button.primary');button.disabled=true;try{await onSubmit(Object.fromEntries(new FormData(event.target)));}catch(error){showToast(error.message,'error');}finally{button.disabled=false;}}; }
 async function persistCatalogRecord(path, record, method='POST'){ const requestId=method==='POST'?(record.requestId||(record.requestId=globalThis.crypto?.randomUUID?crypto.randomUUID():`${path}-${Date.now()}-${Math.random()}`)):''; const options={headers:{'X-Tenant-ID':activeTenantId(),...(requestId?{'Idempotency-Key':requestId}: {})}}; const body={...record,...(requestId?{requestId}:{}),tenantId:activeTenantId()}; try { return method==='PUT' ? await api.put(path,body,options) : method==='DELETE' ? await api.delete(path,body,options) : await api.post(path,body,options); } catch(error) { if(error.status===401){localStorage.removeItem('famimuebles-auth-token');localStorage.removeItem('famimuebles-user');throw new Error('La sesion expiro. Inicia sesion nuevamente para guardar cambios.');} throw error; } }
-const remoteDomainCollections=['customers','suppliers','purchases','credits','expenses','accountsPayable','supplierPayments','customerAccounts','returns','supplierReturns','stockCounts','reservations','warranties','damagedStock','cashSessions','cashMovements','bankAccounts','quotes','orders','deliveries','creditNotes'];
+const remoteDomainCollections=['customers','suppliers','purchases','credits','expenses','accountsPayable','supplierPayments','customerAccounts','returns','supplierReturns','stockCounts','reservations','warranties','damagedStock','cashSessions','cashMovements','bankAccounts','quotes','orders','deliveries','creditNotes','talonarios'];
 async function persistDomainRecord(collection, record){ return persistCatalogRecord(`/api/domain/${encodeURIComponent(collection)}`,{...record,tenantId:activeTenantId()}); }
+async function seedHistoricalTalonarios(state){
+	if(!Array.isArray(state.talonarios))state.talonarios=[];
+	const existing=new Set(state.talonarios.map(item=>String(item.id)));
+	const missing=[...historicalTalonarios,...historicalRecibos,...storedTalonarios].filter(item=>!existing.has(item.id));
+	if(!missing.length)return;
+	state.talonarios.push(...missing);
+	for(const item of missing){
+		try{await persistDomainRecord('talonarios',item);}catch(error){console.warn('No se pudo guardar el historial de talonarios:',error.message);}
+	}
+}
+function openTalonarioModal(itemId=''){
+	const item=(store.collection.talonarios||[]).find(entry=>String(entry.id)===String(itemId));
+	$('#modal-root').innerHTML=talonarioModal(store.collection,item);
+	$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';
+}
+async function saveTalonarioForm(form){
+	if(!Array.isArray(store.state.talonarios))store.state.talonarios=[];
+	const values=Object.fromEntries(new FormData(form));
+	const startNumber=Number(values.startNumber), endNumber=Number(values.endNumber);
+	if(!Number.isInteger(startNumber)||!Number.isInteger(endNumber)||endNumber<startNumber)throw new Error('El rango de consecutivos no es valido.');
+	let sourceId=form.dataset.talonarioId;
+	if(!sourceId){
+		const source=(store.collection.talonarios||[]).filter(item=>String(item.type).toUpperCase()===String(values.type).toUpperCase()&&String(item.storeId||'INV CRR 5 3 26')==='INV CRR 5 3 26'&&String(item.status||'ALMACENADO')==='ALMACENADO').sort((left,right)=>Number(left.startNumber)-Number(right.startNumber))[0];
+		sourceId=source?.id || '';
+	}
+	if(sourceId){
+		const source=(store.collection.talonarios||[]).find(item=>String(item.id)===String(sourceId));
+		if(!source||String(source.status||'ALMACENADO')!=='ALMACENADO')throw new Error('El talonario ya no esta disponible en el almacen central.');
+		const destinationOption=form.elements.destinationStoreId?.selectedOptions?.[0];
+		const destinationId=String(destinationOption?.value||'').trim();
+		const destinationName=String(destinationOption?.textContent||'').replace(/\s+·.*$/,'').trim();
+		if(!destinationId||!destinationName)throw new Error('Selecciona un local destino valido.');
+		source.status='ENVIADO';
+		source.sentAt=new Date().toISOString();
+		source.destinationStoreId=destinationId;
+		const destination={...source,id:`TAL-${Date.now()}-${Math.random().toString(36).slice(2,7)}`,storeId:destinationId,destinationName,status:'EN_USO',currentNumber:source.startNumber,sentFrom:'INV CRR 5 3 26',sentAt:new Date().toISOString()};
+		delete destination.destinationStoreId;
+		await persistDomainRecord('talonarios',source);
+		await persistDomainRecord('talonarios',destination);
+		store.collection.talonarios.push(destination);
+		refreshTalonarioLowStockNotification(source.type);
+	}else{
+		const destinationOption=form.elements.destinationStoreId?.selectedOptions?.[0];
+		const destinationId=String(destinationOption?.value||'').trim() || 'INV CRR 5 3 26';
+		const destinationName=String(destinationOption?.textContent||destinationId).replace(/\s+·.*$/,'').trim();
+		const sent=destinationId!=='INV CRR 5 3 26';
+		const item={id:`TAL-${Date.now()}-${Math.random().toString(36).slice(2,7)}`,type:values.type,startNumber,endNumber,currentNumber:startNumber,storeId:destinationId,destinationName,status:sent?'EN_USO':'ALMACENADO',sentFrom:sent?'INV CRR 5 3 26':'',sentAt:sent?new Date().toISOString():'',createdAt:new Date().toISOString()};
+		await persistDomainRecord('talonarios',item);
+		if(!Array.isArray(store.collection.talonarios))store.collection.talonarios=[];
+		store.collection.talonarios.push(item);
+	}
+	store.save();
+	$('#modal-root').innerHTML='';
+	render();
+	showToast(sourceId?'Talonario enviado correctamente.':'Talonario almacenado correctamente.');
+}
+function refreshTalonarioLowStockNotification(type){
+	if(!Array.isArray(store.collection.notifications))store.collection.notifications=[];
+	const available=(store.collection.talonarios||[]).filter(item=>String(item.type).toUpperCase()===String(type).toUpperCase()&&String(item.storeId||'INV CRR 5 3 26')==='INV CRR 5 3 26'&&String(item.status||'ALMACENADO')==='ALMACENADO').length;
+	const normalized=String(type).toUpperCase()==='RECIBO'?'recibos':'remisiones';
+	const key=`talonarios-bajo:${normalized}:2`;
+	store.collection.notifications=store.collection.notifications.filter(item=>item.key!==key);
+	if(available===2)store.collection.notifications.push({id:`NOT-TAL-${normalized}`,key,text:`Quedan 2 talonarios de ${normalized} disponibles en INV CRR 5 3 26.`,type:'warning',action:'talonarios',targetId:'',createdAt:new Date().toISOString(),read:false});
+}
+async function registerTalonarioSale(sale){
+	const documentNumber=Number(String(sale.invoiceNumber||'').trim());
+	if(!Number.isInteger(documentNumber)||documentNumber<=0)return;
+	const type=String(sale.documentType||'REMISION').toUpperCase()==='RECIBO'?'RECIBO':'REMISION';
+	const localId=String(sale.storeId||'').trim();
+	const local=store.collection.stores?.find(item=>String(item.id)===localId);
+	const localName=local?.name||localId;
+	const talonario=(store.collection.talonarios||[]).filter(item=>String(item.type).toUpperCase()===type&&String(item.storeId||'')===localId&&String(item.status||'').toUpperCase()==='EN_USO'&&documentNumber>=Number(item.startNumber)&&documentNumber<=Number(item.endNumber)).sort((left,right)=>Number(right.startNumber)-Number(left.startNumber))[0];
+	if(!talonario)return;
+	talonario.currentNumber=Math.max(Number(talonario.currentNumber||talonario.startNumber),documentNumber);
+	await persistDomainRecord('talonarios',talonario);
+	const remaining=Number(talonario.endNumber)-documentNumber;
+	if(remaining<=3&&remaining>=0){
+		if(!Array.isArray(store.collection.notifications))store.collection.notifications=[];
+		const key=`talonario-venta-bajo:${talonario.id}:${documentNumber}`;
+		store.collection.notifications=store.collection.notifications.filter(item=>!String(item.key||'').startsWith(`talonario-venta-bajo:${talonario.id}:`));
+		store.collection.notifications.push({id:`NOT-TAL-VENTA-${talonario.id}`,key,text:`Alerta: al talonario de ${type==='RECIBO'?'recibos':'remisiones'} ${talonario.startNumber} - ${talonario.endNumber} del local ${localName} le quedan ${remaining} documentos. Envia un talonario nuevo.`,type:'warning',action:'talonarios',targetId:talonario.id,createdAt:new Date().toISOString(),read:false});
+	}
+	store.save();
+}
+async function refreshTalonarioSalesAlerts(){
+	const sales=store.collection.sales||[];
+	for(const talonario of (store.collection.talonarios||[]).filter(item=>String(item.status||'').toUpperCase()==='EN_USO')){
+		const type=String(talonario.type||'REMISION').toUpperCase();
+		const localId=String(talonario.storeId||'');
+		const localName=String(talonario.destinationName||localId);
+		const documents=sales.map(sale=>({sale,number:Number(String(sale.invoiceNumber||sale.numero_factura||sale.invoice||'').trim())})).filter(({sale,number})=>Number.isInteger(number)&&number>=Number(talonario.startNumber)&&number<=Number(talonario.endNumber)&&(String(sale.documentType||sale.tipo_documento||'').trim()===''||String(sale.documentType||sale.tipo_documento).toUpperCase()===type)&&(String(sale.storeId||sale.local_id||sale.local||'')===localId||String(sale.storeName||sale.localName||'')===localName));
+		const latest=documents.sort((left,right)=>right.number-left.number)[0]?.number;
+		if(!latest||latest<=Number(talonario.currentNumber||talonario.startNumber))continue;
+		talonario.currentNumber=latest;
+		try{await persistDomainRecord('talonarios',talonario);}catch(error){console.warn('No se pudo actualizar el consecutivo del talonario:',error.message);}
+		const remaining=Number(talonario.endNumber)-latest;
+		if(remaining<=3&&remaining>=0){
+			if(!Array.isArray(store.collection.notifications))store.collection.notifications=[];
+			const key=`talonario-venta-bajo:${talonario.id}:${latest}`;
+			store.collection.notifications=store.collection.notifications.filter(item=>!String(item.key||'').startsWith(`talonario-venta-bajo:${talonario.id}:`));
+			store.collection.notifications.push({id:`NOT-TAL-VENTA-${talonario.id}`,key,text:`Alerta: al talonario de ${type==='RECIBO'?'recibos':'remisiones'} ${talonario.startNumber} - ${talonario.endNumber} del local ${localName} le quedan ${remaining} documentos. Envia un talonario nuevo.`,type:'warning',action:'talonarios',targetId:talonario.id,createdAt:new Date().toISOString(),read:false});
+		}
+	}
+	store.save();
+}
 async function hydrateDomainCollections(state){ await Promise.all(remoteDomainCollections.map(async collection=>{ try { const payload=await api.get(`/api/domain/${encodeURIComponent(collection)}`,{headers:{'X-Tenant-ID':activeTenantId()},cache:'no-store',timeout:15000}); const items=Array.isArray(payload.items)?payload.items:[];if(items.length||!Array.isArray(state[collection])||state[collection].length===0)state[collection]=items; } catch(error) { console.warn(`No se pudo cargar ${collection}:`,error.message); } })); return state; }
 async function hydrateUsers(state){
 	const normalize=(item,source)=>{
@@ -200,6 +307,8 @@ async function refreshSharedState(){
 		store.state=normalized;
 		await hydrateCatalog(store.state);
 		await hydrateDomainCollections(store.state);
+		repairTalonario15301().catch(error=>console.warn('No se pudo corregir el talonario 15301-15350:',error.message));
+		Promise.all([seedHistoricalTalonarios(store.state),seedConfiguredTalonariosActivos()]).then(()=>deduplicateTalonarios()).then(()=>refreshTalonarioSalesAlerts()).then(()=>{if(currentRoute()==='talonarios')render();}).catch(error=>console.warn('No se pudieron preparar los talonarios:',error.message));
 		await hydrateUsers(store.state);
 		normalizePayableSuppliers(store.state);
 		syncCustomerBalances();
@@ -337,9 +446,10 @@ async function finishSale(){
 			id: generateId('VEN', store.collection.sales),
 			requestId: globalThis.crypto?.randomUUID ? crypto.randomUUID() : `sale-${Date.now()}-${Math.random()}`,
       storeId: state.storeId,
-	customerId: state.customerId,
+      customerId: state.customerId,
 	customer: selectedCustomer?.name || selectedCustomer?.customer || '',
 	invoiceNumber: $('[data-physical-invoice]')?.value.trim() || '',
+	documentType: $('[data-document-type]')?.value || 'REMISION',
 	paymentMethod: state.payment,
       items: state.cart.map(item => ({
         productId: item.id,
@@ -356,6 +466,7 @@ async function finishSale(){
       tenantId: activeTenantId()
     };
 		await api.post('/api/catalog/sale', salePayload, { headers: { 'X-Tenant-ID': activeTenantId(), 'Idempotency-Key': salePayload.requestId } });
+		await registerTalonarioSale(salePayload);
     state.cart = [];
     showToast('Venta creada correctamente con el backend transaccional.');
     const normalized = await hydrateState();
@@ -374,6 +485,8 @@ document.addEventListener('click',event=>{const action=event.target.closest('[da
 document.addEventListener('click',event=>{if(event.target.dataset.remove){state.cart=state.cart.filter(item=>String(item.id)!==event.target.dataset.remove);render();}if(event.target.dataset.increase){const item=state.cart.find(entry=>entry.id===event.target.dataset.increase);const row=item&&inventoryEntry(store.collection,item.id,state.storeId);if(item&&row)item.quantity=Math.min(row.quantity,item.quantity+1);render();}if(event.target.dataset.decrease){const item=state.cart.find(entry=>entry.id===event.target.dataset.decrease);if(item)item.quantity=Math.max(1,item.quantity-1);render();}});
 document.addEventListener('input',event=>{if(event.target.id==='billing-product')$('#product-results').innerHTML=productResults(store.collection.products.filter(item=>`${item.name} ${item.code} ${item.reference} ${item.category}`.toLowerCase().includes(event.target.value.toLowerCase())),state.storeId,store.collection);if(event.target.id==='customer-search')$('#customer-results').innerHTML=customerResults(store.collection.customers.filter(item=>`${item.name} ${item.document} ${item.phone} ${item.id}`.toLowerCase().includes(event.target.value.toLowerCase())),state.customerId);if(event.target.matches('[data-filter="products"]')){const q=event.target.value.toLowerCase();$('#products-table').innerHTML=productTable(store.collection.products.filter(item=>`${item.name} ${item.code} ${item.reference}`.toLowerCase().includes(q)),store.collection.stores);}if(event.target.dataset.quantity){const item=state.cart.find(entry=>String(entry.id)===event.target.dataset.quantity);const row=item&&inventoryEntry(store.collection,item.id,state.storeId);const requested=Number(event.target.value)||0;if(item&&row){item.quantity=Math.max(1,requested);item.quantityInvalid=requested>row.quantity;if(item.quantityInvalid)showToast('Stock insuficiente en este local.','error');render();}}if(event.target.dataset.price){const item=state.cart.find(entry=>String(entry.id)===event.target.dataset.price);if(item)item.priceVenta=Math.max(item.minimumPrice,Number(event.target.value)||0);}});
 document.addEventListener('change',event=>{if(event.target.matches('#active-store-selector')){setActiveStore(event.target.value);return;}if(event.target.matches('[data-sale-store]')){setActiveStore(event.target.value);return;}if(event.target.matches('[data-price],[data-transport-value]')){if(event.target.dataset.transportValue!==undefined)state.transport=Math.max(0,Number(event.target.value)||0);render();}if(event.target.matches('[data-inventory-store],[data-inventory-category],[data-inventory-status],[data-inventory-sort]')){const storeId=$('[data-inventory-store]')?.value||'all',query=$('[data-filter="inventory"]')?.value.toLowerCase()||'',category=$('[data-inventory-category]')?.value||'all',status=$('[data-inventory-status]')?.value||'all',sort=$('[data-inventory-sort]')?.value||'name';$('#inventory-content').innerHTML=inventoryContent(store.collection,storeId,query,category,status,sort);}if(event.target.matches('[data-transfer-origin],[data-transfer-product]'))updateTransferAvailability();if(event.target.id==='dark-mode'){document.body.classList.toggle('dark',event.target.checked);localStorage.setItem('famimuebles-theme',event.target.checked?'dark':'light');}});
+document.addEventListener('change',event=>{if(event.target.matches('[data-talonario-filter]')){setTalonarioFilters({[event.target.dataset.talonarioFilter]:event.target.value});render();}});
+document.addEventListener('input',event=>{if(event.target.matches('[data-talonario-filter="query"]')){setTalonarioFilters({query:event.target.value});render();}});
 function updateSalesViewState(){
 	salesViewState={query:$('[data-filter="sales"]')?.value.trim()||'',store:$('[data-sales-store]')?.value||'all',payment:$('[data-sales-payment]')?.value||'all',status:$('[data-sales-status]')?.value||'all',version:salesViewState.version+1};
 	applySalesFilters();
@@ -568,6 +681,26 @@ document.addEventListener('click',event=>{
 	button.disabled=true;
 	changeWarrantyStatus(button.dataset.id,action).finally(()=>{button.disabled=false;});
 });
+document.addEventListener('click',event=>{
+	const button=event.target.closest('[data-action]');
+	if(!button)return;
+	if(button.dataset.action==='new-talonario')openTalonarioModal();
+	if(button.dataset.action==='send-talonario')openTalonarioModal(button.dataset.talonarioId);
+});
+document.addEventListener('submit',async event=>{
+	if(event.target.id!=='talonario-form')return;
+	event.preventDefault();
+	const button=event.target.querySelector('button.primary');
+	button.disabled=true;
+	try{await saveTalonarioForm(event.target);}catch(error){showToast(error.message,'error');button.disabled=false;}
+});
+document.addEventListener('change',event=>{
+	if(!event.target.matches('#talonario-form select[name="type"]'))return;
+	const form=event.target.form;
+	const type=event.target.value;
+	const source=(store.collection.talonarios||[]).filter(item=>String(item.type).toUpperCase()===type&&String(item.storeId||'INV CRR 5 3 26')==='INV CRR 5 3 26'&&String(item.status||'ALMACENADO')==='ALMACENADO').sort((left,right)=>Number(left.startNumber)-Number(right.startNumber))[0];
+	if(source){form.elements.startNumber.value=source.startNumber;form.elements.endNumber.value=source.endNumber;form.querySelector('[data-talonario-next]').textContent=`${source.startNumber} - ${source.endNumber}`;form.querySelector('button.primary').disabled=false;}else{form.elements.startNumber.value='';form.elements.endNumber.value='';form.querySelector('[data-talonario-next]').textContent='Sin talonarios disponibles';form.querySelector('button.primary').disabled=true;}
+});
 document.addEventListener('submit',async event=>{if(event.target.id!=='advanced-form')return;event.preventDefault();const values=Object.fromEntries(new FormData(event.target));const collection=values.collection;const item={...values,id:values.id.trim()||nextAdvancedId(store.collection,collection),amount:Number(values.amount||0),createdAt:new Date().toISOString(),createdBy:JSON.parse(localStorage.getItem('famimuebles-user')||'{}').username||'usuario'};delete item.collection;try{await persistDomainRecord(collection,item);if(!Array.isArray(store.collection[collection]))store.collection[collection]=[];const index=store.collection[collection].findIndex(entry=>entry.id===item.id);if(index===-1)store.collection[collection].push(item);else store.collection[collection][index]=item;$('#modal-root').innerHTML='';render();showToast('Registro guardado correctamente.');}catch(error){showToast(error.message,'error');}});
 async function parityPost(path, payload) { return api.post(path, {...payload, tenantId:activeTenantId()}, {headers:{'X-Tenant-ID':activeTenantId()}}); }
 document.addEventListener('click', async event=>{
@@ -679,6 +812,8 @@ async function boot() {
 	store.collection.demoMode = false;
 	await hydrateCatalog(store.state);
 	await hydrateDomainCollections(store.state);
+	repairTalonario15301().catch(error=>console.warn('No se pudo corregir el talonario 15301-15350:',error.message));
+	Promise.all([seedHistoricalTalonarios(store.state),seedConfiguredTalonariosActivos()]).then(()=>deduplicateTalonarios()).then(()=>refreshTalonarioSalesAlerts()).then(()=>{if(currentRoute()==='talonarios')render();}).catch(error=>console.warn('No se pudieron preparar los talonarios:',error.message));
 	await hydrateUsers(store.state);
 	const normalizedPayables=normalizePayableSuppliers(store.state);
 	for(const account of normalizedPayables){try{await persistDomainRecord('accountsPayable',account);}catch(error){console.warn('No se pudo normalizar el proveedor de una cuenta por pagar:',error.message);}}
@@ -977,4 +1112,89 @@ function normalizeRemoteTransfers() {
     return { ...item, id:String(item.id), originStoreId:String(item.originStoreId || item.local_origen_id || item.local_origen || ''), destinationStoreId:String(item.destinationStoreId || item.local_destino_id || item.local_destino || ''), createdAt:item.createdAt || item.fecha || item.creado_en || '', createdBy:String(item.createdBy || item.usuario_id || item.empleado || ''), status:status === 'COMPLETADO' ? 'RECIBIDO' : status, items:items.map(detail => ({ ...detail, productId:String(detail.productId || detail.codigo || ''), quantity:Number(detail.quantity ?? detail.cantidad ?? 0) })) };
   });
 	render();
+}
+async function repairTalonario15301(){
+	const item=(store.collection.talonarios||[]).find(entry=>String(entry.type).toUpperCase()==='REMISION'&&Number(entry.startNumber)===15301&&Number(entry.endNumber)===15350);
+	if(!item)return;
+	item.storeId='INV CRR 5 3 26';
+	item.destinationName='INV CRR 5 3 26';
+	item.status='EN_USO';
+	item.currentNumber=Math.max(Number(item.currentNumber||0),15347);
+	try{await persistDomainRecord('talonarios',item);}catch(error){console.warn('No se pudo actualizar el talonario 15301-15350:',error.message);}
+}
+async function deduplicateTalonarios(){
+	const groups=new Map();
+	for(const item of (store.collection.talonarios||[])){
+		const type=String(item.type||'').toUpperCase();
+		const start=Number(item.startNumber), end=Number(item.endNumber);
+		if(!type||!Number.isInteger(start)||!Number.isInteger(end))continue;
+		const key=`${type}:${start}:${end}`;
+		if(!groups.has(key))groups.set(key,[]);
+		groups.get(key).push(item);
+	}
+	const statusPriority={EN_USO:3,ENVIADO:2,ALMACENADO:1};
+	const duplicates=[];
+	const keepIds=new Set();
+	for(const matches of groups.values()){
+		matches.sort((left,right)=>(statusPriority[String(right.status||'').toUpperCase()]||0)-(statusPriority[String(left.status||'').toUpperCase()]||0)||Number(right.currentNumber||0)-Number(left.currentNumber||0)||String(right.sentAt||right.createdAt||'').localeCompare(String(left.sentAt||left.createdAt||''))||String(left.id).localeCompare(String(right.id)));
+		keepIds.add(matches[0].id);
+		duplicates.push(...matches.slice(1));
+	}
+	for(const duplicate of duplicates){
+		try{await persistCatalogRecord(`/api/domain/talonarios/${encodeURIComponent(duplicate.id)}`,{},'DELETE');}catch(error){console.warn('No se pudo eliminar duplicado de talonario:',error.message);}
+	}
+	if(duplicates.length)store.collection.talonarios=(store.collection.talonarios||[]).filter(item=>keepIds.has(item.id));
+}
+const configuredTalonariosActivos=[
+	{local:'INV CRR 5 3 26',type:'REMISION',startNumber:15301,endNumber:15350,currentNumber:15347},
+	{local:'INV CARTAGENITA',type:'REMISION',startNumber:15451,endNumber:15500,currentNumber:15473},
+	{local:'INV CARTAGENITA II',type:'REMISION',startNumber:15401,endNumber:15450,currentNumber:15439},
+	{local:'INV CRR 5 3 17',type:'REMISION',startNumber:14051,endNumber:14100,currentNumber:14095},
+	{local:'INV CRR 5 5 56',type:'REMISION',startNumber:15601,endNumber:15650,currentNumber:15646},
+	{local:'INV CRR 7 6A 15',type:'REMISION',startNumber:15651,endNumber:15700,currentNumber:15656},
+	{local:'INV MANABLANCA',type:'REMISION',startNumber:15551,endNumber:15600,currentNumber:15581}
+];
+const talonarioNameKey=value=>String(value||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^A-Z0-9]/gi,'').toUpperCase();
+async function seedConfiguredTalonariosActivos(){
+	if(!Array.isArray(store.collection.talonarios))store.collection.talonarios=[];
+	for(const config of configuredTalonariosActivos){
+		const local=store.collection.stores.find(item=>talonarioNameKey(item.id)===talonarioNameKey(config.local)||talonarioNameKey(item.name)===talonarioNameKey(config.local));
+		const storeId=local?.id||config.local;
+		let item=store.collection.talonarios.find(entry=>String(entry.type).toUpperCase()===config.type&&Number(entry.startNumber)===config.startNumber&&Number(entry.endNumber)===config.endNumber&&(talonarioNameKey(entry.storeId)===talonarioNameKey(storeId)||talonarioNameKey(entry.destinationName)===talonarioNameKey(config.local)));
+		if(!item){
+			item={id:`TAL-ACTIVO-${config.type}-${config.startNumber}-${talonarioNameKey(config.local)}`,...config,storeId,destinationName:local?.name||config.local,status:'EN_USO',sentFrom:'INV CRR 5 3 26',historical:false};
+			store.collection.talonarios.push(item);
+		}else{
+			item.storeId=storeId;item.destinationName=local?.name||config.local;item.status='EN_USO';item.currentNumber=config.currentNumber;
+		}
+		try{await persistDomainRecord('talonarios',item);}catch(error){console.warn('No se pudo preparar talonario activo:',error.message);}
+	}
+	const sent15701=store.collection.talonarios.filter(item=>String(item.type).toUpperCase()==='REMISION'&&Number(item.startNumber)===15701&&Number(item.endNumber)===15750);
+	let canonical15701=sent15701[0];
+	if(canonical15701){
+		canonical15701.storeId='INV CRR 5 5 56';canonical15701.destinationName='INV CRR 5 5 56';canonical15701.status='ENVIADO';
+		try{await persistDomainRecord('talonarios',canonical15701);}catch(error){console.warn('No se pudo marcar talonario enviado:',error.message);}
+		for(const duplicate of sent15701.slice(1)){
+			try{await persistCatalogRecord(`/api/domain/talonarios/${encodeURIComponent(duplicate.id)}`,{},'DELETE');}catch(error){console.warn('No se pudo eliminar duplicado de talonario:',error.message);}
+		}
+		store.collection.talonarios=store.collection.talonarios.filter(item=>item===canonical15701||!sent15701.includes(item));
+	}
+}
+async function removeActiveTalonarioDuplicates(){
+	const activeRanges=[
+		[15651,15700,'INV CRR 7 6A 15'],
+		[15601,15650,'INV CRR 5 5 56'],
+		[15551,15600,'INV MANABLANCA'],
+		[15451,15500,'INV CARTAGENITA'],
+		[15401,15450,'INV CARTAGENITA II']
+	];
+	for(const [startNumber,endNumber,localName] of activeRanges){
+		const matches=(store.collection.talonarios||[]).filter(item=>String(item.type).toUpperCase()==='REMISION'&&Number(item.startNumber)===startNumber&&Number(item.endNumber)===endNumber);
+		const active=matches.find(item=>String(item.status||'').toUpperCase()==='EN_USO');
+		if(!active||matches.length<2)continue;
+		for(const duplicate of matches.filter(item=>item!==active)){
+			try{await persistCatalogRecord(`/api/domain/talonarios/${encodeURIComponent(duplicate.id)}`,{},'DELETE');}catch(error){console.warn('No se pudo eliminar duplicado activo:',error.message);}
+		}
+		store.collection.talonarios=store.collection.talonarios.filter(item=>item===active||!matches.includes(item));
+	}
 }
