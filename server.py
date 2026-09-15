@@ -593,6 +593,43 @@ def filter_report_items(items: list[dict], date_from: str = "", date_to: str = "
     return result
 
 
+REPORT_LABELS = {
+    "inventory": "Inventario general",
+    "inventoryByStore": "Inventario general",
+    "sales": "Reporte de ventas",
+    "expenses": "Reporte de gastos",
+    "fuelRecords": "Reporte de gasolina",
+    "credits": "Reporte de cartera",
+    "accountsPayable": "Reporte de cuentas por pagar",
+}
+
+
+def report_display_payload(collection: str, items: list[dict]) -> tuple[list[str], list[list]]:
+    """Convierte registros internos en columnas estables y legibles para PDF."""
+    if collection in {"inventory", "inventoryByStore"}:
+        columns = ["Codigo", "Descripcion", "Cantidad"]
+        rows = [[item.get("productId", ""), item.get("product", item.get("productName", "")), item.get("quantity", 0)] for item in items]
+        return columns, rows
+    if collection == "sales":
+        columns = ["Fecha", "Factura", "Cliente", "Local", "Total"]
+        rows = [[item.get("date", item.get("createdAt", "")), item.get("invoiceNumber", item.get("invoiceId", item.get("id", ""))), item.get("customer", item.get("customerName", "Cliente contado")), item.get("local", item.get("storeId", "")), item.get("total", 0)] for item in items]
+        return columns, rows
+    if collection == "expenses":
+        columns = ["Fecha", "Categoria", "Detalle", "Local", "Valor"]
+        rows = [[item.get("date", item.get("fecha", item.get("createdAt", ""))), item.get("category", item.get("categoria", "General")), item.get("detail", item.get("detalle", item.get("description", ""))), item.get("local", item.get("storeId", "")), item.get("amount", item.get("valor", item.get("total", 0)))] for item in items]
+        return columns, rows
+    if collection == "fuelRecords":
+        columns = ["Fecha", "Vehiculo", "Conductor", "Local", "Valor"]
+        rows = [[item.get("date", item.get("fecha", "")), item.get("vehicle", item.get("carro", "")), item.get("driver", item.get("conductor", "")), item.get("local", item.get("storeId", "")), item.get("amount", item.get("valor", 0))] for item in items]
+        return columns, rows
+    if collection in {"credits", "accountsPayable", "accounts-payable"}:
+        columns = ["Fecha", "Cliente/Proveedor", "Factura", "Local", "Total", "Saldo"]
+        rows = [[item.get("date", item.get("fecha", item.get("createdAt", ""))), item.get("customer", item.get("cliente", item.get("supplier", item.get("proveedor", "")))), item.get("invoiceNumber", item.get("invoiceId", item.get("factura", ""))), item.get("local", item.get("storeId", "")), item.get("total", item.get("amount", item.get("valor_total", 0))), item.get("balance", item.get("saldo", item.get("saldo_pendiente", 0)))] for item in items]
+        return columns, rows
+    columns = sorted({key for item in items if isinstance(item, dict) for key in item}) or ["id"]
+    return columns, [[item.get(column, "") if isinstance(item, dict) else "" for column in columns] for item in items]
+
+
 def specialized_report_rows(database: _PostgresConnection, report_name: str, query_params: dict[str, list[str]]) -> tuple[list[str], list[list]]:
     date_from = (query_params.get("from") or [""])[0]
     date_to = (query_params.get("to") or [""])[0]
@@ -630,7 +667,7 @@ def specialized_report_rows(database: _PostgresConnection, report_name: str, que
         return ["fecha", "vendedor", "local", "valor", "metodo_pago"], [[row[key] for key in ("fecha", "vendedor", "local", "valor", "metodo_pago")] for row in rows]
     queries = {
         "disponibilidad": ("SELECT local, codigo, nombre_producto AS producto, cantidad FROM inventarios JOIN productos USING (codigo) WHERE cantidad > 0 ORDER BY nombre_producto, local", ["local", "codigo", "producto", "cantidad"]),
-        "inventario-bajo": ("SELECT local, codigo, cantidad FROM inventarios WHERE cantidad <= 2 ORDER BY cantidad, local", ["local", "codigo", "cantidad"]),
+        "inventario-bajo": ("SELECT local, codigo, cantidad FROM inventarios WHERE cantidad <= 3 ORDER BY cantidad, local", ["local", "codigo", "cantidad"]),
         "gastos": ("SELECT fecha, categoria, detalle, valor, usuario FROM gastos ORDER BY fecha DESC, id DESC", ["fecha", "categoria", "detalle", "valor", "usuario"]),
         "gasolina": ("SELECT fecha, carro, conductor, valor FROM gasolina ORDER BY fecha DESC, id DESC", ["fecha", "carro", "conductor", "valor"]),
         "historial-empleado": ("SELECT vendedor, tipo, local_origen AS local, factura, fecha, estado FROM movimientos WHERE NULLIF(BTRIM(COALESCE(vendedor, '')), '') IS NOT NULL ORDER BY fecha DESC, id DESC", ["vendedor", "tipo", "local", "factura", "fecha", "estado"]),
@@ -700,7 +737,7 @@ def _shared_catalog(database: _PostgresConnection) -> dict:
         for row in database.execute("SELECT id, nombre, activo, direccion, telefono FROM locales ORDER BY nombre").fetchall()
     ]
     products = [
-        {"id": str(row["codigo"]).strip(), "code": str(row["codigo"]).strip(), "name": row["nombre_producto"], "reference": "", "barcode": "", "category": product_category(row["nombre_producto"]), "categoryName": product_category(row["nombre_producto"]), "cost": row["precio_compra"] or 0, "salePrice": 0, "taxRate": 0, "active": str(row["activo"] or "SI").upper() != "NO"}
+        {"id": str(row["codigo"]).strip(), "code": str(row["codigo"]).strip(), "name": row["nombre_producto"], "reference": "", "barcode": "", "category": product_category(row["nombre_producto"]), "categoryName": product_category(row["nombre_producto"]), "cost": row["precio_compra"] or 0, "salePrice": 0, "taxRate": 0, "minimum": 3, "minStock": 3, "minimumStock": 3, "active": str(row["activo"] or "SI").upper() != "NO"}
         for row in database.execute("SELECT BTRIM(codigo) AS codigo, nombre_producto, precio_compra, activo FROM productos ORDER BY nombre_producto").fetchall()
     ]
     inventory_rows = database.execute(
@@ -710,23 +747,8 @@ def _shared_catalog(database: _PostgresConnection) -> dict:
         (str(row["local"]), str(row["codigo"])): float(row["cantidad"] or 0)
         for row in inventory_rows
     }
-    ledger_rows = database.execute(
-        """
-        SELECT BTRIM(COALESCE(m.local_origen, '')) AS local, BTRIM(mp.codigo) AS codigo,
-               COALESCE(SUM(COALESCE(mp.entrada, 0) - COALESCE(mp.salida, 0)), 0) AS cantidad
-        FROM movimientos m
-        JOIN movimiento_productos mp ON mp.movimiento_id = m.id
-        WHERE NULLIF(BTRIM(COALESCE(m.local_origen, '')), '') IS NOT NULL
-        GROUP BY BTRIM(COALESCE(m.local_origen, '')), BTRIM(mp.codigo)
-        """
-    ).fetchall()
-    for row in ledger_rows:
-        key = (str(row["local"]), str(row["codigo"]))
-        ledger_quantity = float(row["cantidad"] or 0)
-        if key not in inventory_by_key or (inventory_by_key[key] == 0 and ledger_quantity != 0):
-            inventory_by_key[key] = ledger_quantity
     inventory = [
-        {"productId": product_id, "storeId": store_id, "quantity": quantity, "reservedQuantity": 0, "minimumQuantity": 0}
+        {"productId": product_id, "storeId": store_id, "quantity": quantity, "reservedQuantity": 0, "minimumQuantity": 3}
         for (store_id, product_id), quantity in sorted(inventory_by_key.items())
     ]
     sales_by_id = {}
@@ -1127,16 +1149,24 @@ def _create_shared_sale(database: _PostgresConnection, payload: dict, user: dict
         raise ValueError("El local no existe en PostgreSQL")
     total = 0
     normalized = []
+    requested_by_code = {}
     for item in items:
         code = str(item.get("productId") or item.get("code") or "").strip()
         quantity = int(float(item.get("quantity", 0)))
         price = int(float(item.get("unitPrice", item.get("price", 0))))
         product = database.execute("SELECT nombre_producto FROM productos WHERE codigo = %s AND UPPER(COALESCE(activo, 'SI')) <> 'NO'", (code,)).fetchone()
-        stock = database.execute("SELECT cantidad FROM inventarios WHERE local = %s AND codigo = %s FOR UPDATE", (store_id, code)).fetchone()
-        if not product or quantity <= 0 or price < 0 or not stock or int(stock["cantidad"] or 0) < quantity:
+        if not product or quantity <= 0 or price < 0:
             raise ValueError("Producto inexistente o stock insuficiente")
         total += quantity * price
         normalized.append((code, product["nombre_producto"], quantity, price))
+        requested_by_code[code] = requested_by_code.get(code, 0) + quantity
+    for code, requested_quantity in requested_by_code.items():
+        stock = database.execute(
+            "SELECT cantidad FROM inventarios WHERE local = %s AND codigo = %s FOR UPDATE",
+            (store_id, code),
+        ).fetchone()
+        if not stock or int(stock["cantidad"] or 0) < requested_quantity:
+            raise ValueError("Producto inexistente o stock insuficiente")
     customer_name = str(payload.get("customer") or payload.get("customerId") or "").strip()
     movement_cursor = database.execute(
         "INSERT INTO movimientos (tipo, estado, local_origen, empleado, vendedor, factura, cliente, metodo_pago, fecha) VALUES ('VENTA', 'COMPLETADO', %s, %s, %s, %s, %s, %s, %s) RETURNING id",
@@ -1558,7 +1588,7 @@ class AppHandler(SimpleHTTPRequestHandler):
             return
         if path.startswith("/api/report-pdf/") and path.endswith(".pdf"):
             collection = unquote(path.removeprefix("/api/report-pdf/").removesuffix(".pdf"))
-            standard = {"sales", "customers", "stores", "inventory", "inventoryByStore", "products", "credits"}
+            standard = {"sales", "customers", "stores", "inventory", "inventoryByStore", "products", "credits", "fuelRecords"}
             if collection not in DOMAIN_COLLECTIONS and collection not in standard:
                 self.send_json(404, {"error": "Reporte no disponible"})
                 return
@@ -1571,37 +1601,75 @@ class AppHandler(SimpleHTTPRequestHandler):
                 with connection() as database:
                     items = filter_report_items(report_domain_items(database, collection, current_tenant), date_from, date_to, store_filter)
             elif collection == "sales":
-                query = "SELECT id, store_id AS storeId, customer_id AS customerId, total, payment_method AS paymentMethod, created_at AS date FROM sales WHERE tenant_id = ?"
-                params = [current_tenant]
-                if date_from:
-                    query += " AND date(created_at) >= date(?)"
-                    params.append(date_from)
-                if date_to:
-                    query += " AND date(created_at) <= date(?)"
-                    params.append(date_to)
-                if store_filter:
-                    query += " AND store_id = ?"
-                    params.append(store_filter)
-                query += " ORDER BY created_at"
                 with connection() as database:
-                    items = [dict(row) for row in database.execute(query, params).fetchall()]
+                    if _postgres_enabled() and current_tenant == DEFAULT_TENANT:
+                        items = filter_report_items(_shared_catalog(database)["sales"], date_from, date_to, store_filter)
+                    else:
+                        query = "SELECT id, store_id AS storeId, customer_id AS customerId, invoice_number AS invoiceNumber, total, payment_method AS paymentMethod, created_at AS date FROM sales WHERE tenant_id = ?"
+                        params = [current_tenant]
+                        if date_from:
+                            query += " AND date(created_at) >= date(?)"
+                            params.append(date_from)
+                        if date_to:
+                            query += " AND date(created_at) <= date(?)"
+                            params.append(date_to)
+                        if store_filter:
+                            query += " AND store_id = ?"
+                            params.append(store_filter)
+                        query += " ORDER BY created_at"
+                        items = [dict(row) for row in database.execute(query, params).fetchall()]
             elif collection in {"inventory", "inventoryByStore"}:
-                query = "SELECT product_id AS productId, store_id AS storeId, quantity, reserved_quantity AS reservedQuantity, minimum_quantity AS minimumQuantity FROM inventory WHERE tenant_id = ?"
-                params = [current_tenant]
-                if store_filter:
-                    query += " AND store_id = ?"
-                    params.append(store_filter)
-                query += " ORDER BY store_id, product_id"
                 with connection() as database:
-                    items = [dict(row) for row in database.execute(query, params).fetchall()]
+                    if _postgres_enabled() and current_tenant == DEFAULT_TENANT:
+                        catalog = _shared_catalog(database)
+                        products = {str(item["id"]): item for item in catalog["products"]}
+                        items = []
+                        for item in catalog["inventory"]:
+                            if float(item.get("quantity") or 0) == 0:
+                                continue
+                            if store_filter and str(item.get("storeId") or "") != store_filter:
+                                continue
+                            product = products.get(str(item.get("productId") or ""), {})
+                            items.append({
+                                "productId": item.get("productId"),
+                                "product": product.get("name") or item.get("productId"),
+                                "storeId": item.get("storeId"),
+                                "local": item.get("storeId"),
+                                "quantity": item.get("quantity", 0),
+                                "reservedQuantity": item.get("reservedQuantity", 0),
+                                "minimumQuantity": item.get("minimumQuantity", 0),
+                            })
+                    else:
+                        query = "SELECT product_id AS productId, store_id AS storeId, quantity, reserved_quantity AS reservedQuantity, minimum_quantity AS minimumQuantity FROM inventory WHERE tenant_id = ? AND quantity <> 0"
+                        params = [current_tenant]
+                        if store_filter:
+                            query += " AND store_id = ?"
+                            params.append(store_filter)
+                        query += " ORDER BY store_id, product_id"
+                        items = [dict(row) for row in database.execute(query, params).fetchall()]
+                if not store_filter and (filters.get("consolidated") or [""])[0] == "1":
+                    consolidated = {}
+                    for item in items:
+                        key = str(item.get("productId") or "")
+                        row = consolidated.setdefault(key, {"productId": item.get("productId"), "product": item.get("product") or item.get("productId"), "quantity": 0, "reservedQuantity": 0, "minimumQuantity": 0})
+                        row["quantity"] += float(item.get("quantity") or 0)
+                        row["reservedQuantity"] += float(item.get("reservedQuantity") or 0)
+                        row["minimumQuantity"] = max(row["minimumQuantity"], float(item.get("minimumQuantity") or 0))
+                        row["local"] = "Todos los locales"
+                    items = [item for item in consolidated.values() if float(item.get("quantity") or 0) != 0]
+            elif collection == "fuelRecords":
+                with connection() as database:
+                    items = [dict(row) for row in database.execute("SELECT fecha AS date, carro AS vehicle, conductor AS driver, valor AS amount FROM gasolina ORDER BY fecha DESC, id DESC").fetchall()]
+                items = filter_report_items(items, date_from, date_to, store_filter)
             else:
                 with connection() as database:
                     state_row = database.execute("SELECT state_json FROM tenant_states WHERE tenant_id = ?", (current_tenant,)).fetchone()
                 state = json.loads(state_row[0]) if state_row else {}
                 items = state.get(collection, []) if isinstance(state.get(collection, []), list) else []
-            columns = sorted({key for item in items if isinstance(item, dict) for key in item}) or ["id"]
-            rows = [[item.get(column, "") if isinstance(item, dict) else "" for column in columns] for item in items]
-            pdf = make_pdf(f"Reporte de {collection}", columns, rows, usuario=authenticated_user(self)["username"])
+            columns, rows = report_display_payload(collection, items)
+            report_title = REPORT_LABELS.get(collection, f"Reporte de {collection}")
+            local_label = store_filter or "Todos los locales"
+            pdf = make_pdf(report_title, columns, rows, local=local_label, usuario=authenticated_user(self)["username"])
             self.send_response(200)
             self.send_header("Content-Type", "application/pdf")
             self.send_header("Content-Disposition", f'attachment; filename="famimuebles-{collection}.pdf"')

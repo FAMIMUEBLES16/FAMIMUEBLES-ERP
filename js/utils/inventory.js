@@ -1,4 +1,4 @@
-export function getInventoryStatus(quantity, minimumStock) { if (quantity <= 0) return 'Agotado'; if (quantity <= minimumStock) return 'Bajo'; if (quantity <= minimumStock * 2) return 'Poco'; return 'Bien'; }
+export function getInventoryStatus(quantity) { if (quantity <= 0) return 'Agotado'; if (quantity === 1) return 'Bajo'; if (quantity === 2) return 'Poco'; return 'Bien'; }
 export const inventoryStatus = getInventoryStatus;
 export function inventoryEntry(state, productId, storeId) { return state.inventoryByStore.find(row => String(row.productId) === String(productId) && String(row.storeId) === String(storeId)); }
 export function inventoryRows(state, storeId = 'all') {
