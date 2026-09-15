@@ -130,6 +130,16 @@ export async function hydrateState() {
     return null;
   }
 }
+
+export async function hydrateStateWithRetry(attempts = 3) {
+  let lastResult = null;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    lastResult = await hydrateState();
+    if (lastResult) return lastResult;
+    if (attempt < attempts - 1) await new Promise(resolve => setTimeout(resolve, 800 * (attempt + 1)));
+  }
+  return lastResult;
+}
 export async function hydrateCatalog(state) {
   if (!API_BASE_URL) return state;
   try {

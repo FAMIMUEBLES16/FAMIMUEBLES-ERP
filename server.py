@@ -1351,12 +1351,20 @@ class AppHandler(SimpleHTTPRequestHandler):
     def _send_cors_headers(self) -> None:
         origin = self.headers.get("Origin", "").rstrip("/")
         parsed_origin = urlparse(origin) if origin and origin != "null" else None
+        public_origin = bool(
+            parsed_origin
+            and parsed_origin.scheme == "https"
+            and (
+                (parsed_origin.hostname or "").endswith(".github.io")
+                or (parsed_origin.hostname or "").endswith(".ngrok-free.dev")
+            )
+        )
         local_origin = origin == "null" or (
             parsed_origin is not None
             and parsed_origin.scheme in {"http", "https"}
             and parsed_origin.hostname in {"127.0.0.1", "localhost", "::1"}
         )
-        if origin in ALLOWED_ORIGINS or local_origin:
+        if origin in ALLOWED_ORIGINS or local_origin or public_origin:
             self.send_header("Access-Control-Allow-Origin", origin)
             self.send_header("Vary", "Origin")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
@@ -1799,7 +1807,7 @@ class AppHandler(SimpleHTTPRequestHandler):
                     user_id = secrets.token_hex(8)
                     database.execute("INSERT INTO auth_users (id, username, password_hash, role, store_id, tenant_id) VALUES (?, ?, ?, ?, ?, ?)", (user_id, username, password_hash(password), "ADMINISTRADOR", payload.get("storeId"), payload.get("tenantId") or DEFAULT_TENANT))
                     token = secrets.token_urlsafe(32)
-                    database.execute("INSERT INTO auth_tokens (token, user_id, expires_at) VALUES (?, ?, datetime('now', '+12 hours'))", (token, user_id))
+                    database.execute("INSERT INTO auth_tokens (token, user_id, expires_at) VALUES (?, ?, datetime('now', '+30 days'))", (token, user_id))
                 self.send_json(201, {"ok": True, "token": token, "user": {"id": user_id, "username": username, "email": str(payload.get("email", "")).strip(), "phone": str(payload.get("phone", "")).strip(), "role": "ADMINISTRADOR", "storeId": payload.get("storeId")}})
                 return
             if path == "/api/auth/login":
@@ -1811,7 +1819,7 @@ class AppHandler(SimpleHTTPRequestHandler):
                         self.send_json(401, {"error": "Credenciales invalidas"})
                         return
                     token = secrets.token_urlsafe(32)
-                    database.execute("INSERT INTO auth_tokens (token, user_id, expires_at) VALUES (?, ?, datetime('now', '+12 hours'))", (token, user["id"]))
+                    database.execute("INSERT INTO auth_tokens (token, user_id, expires_at) VALUES (?, ?, datetime('now', '+30 days'))", (token, user["id"]))
                 self.send_json(200, {"token": token, "user": {"id": user["id"], "username": user["username"], "email": user["email"], "phone": user["phone"], "role": user["role"], "storeId": user["store_id"]}})
                 return
             if path == "/api/state":
