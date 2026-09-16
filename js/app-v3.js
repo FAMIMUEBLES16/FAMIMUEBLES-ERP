@@ -712,13 +712,38 @@ async function changeWarrantyStatus(id, action){
 		showToast(action==='receive'?'Garantia recibida correctamente.':'Garantia cancelada correctamente.');
 	}catch(error){showToast(error.message,'error');}
 }
+async function showWarrantyTrace(id){
+	if(!id)return;
+	try{
+		const payload=await api.get(`/api/domain/warranties/${encodeURIComponent(id)}/trace`,{headers:{'X-Tenant-ID':activeTenantId()},cache:'no-store'});
+		const warranty=payload.warranty||{};
+		const guaranteeInventory=payload.guaranteeInventory||[];
+		const movements=payload.movements||[];
+		const history=payload.history||[];
+		const date=value=>value?new Date(value).toLocaleString('es-CO'):'-';
+		const text=value=>String(value??'-');
+		$('#modal-root').innerHTML=`<div class="modal-backdrop"><section class="modal"><button type="button" class="modal-close">x</button><p class="eyebrow">TRAZABILIDAD DE GARANTIA</p><h2>${text(warranty.descripcion_recibido||warranty.descripcion)}</h2><p class="muted">Garantia #${text(warranty.id)} · Codigo ${text(warranty.codigo_recibido||warranty.codigo)} · Recibida en ${text(warranty.local_recibido||'-')} el ${date(warranty.fecha_recibido||warranty.fecha)}</p><h3>Historial de la garantia</h3>${table(['Fecha','Evento','Estado','Local','Destino','Cantidad','Usuario','Observacion'],history.map(item=>`<tr><td>${date(item.fecha)}</td><td>${text(item.tipo)}</td><td>${text(item.estado)}</td><td>${text(item.local)}</td><td>${text(item.local_destino)}</td><td>${text(item.cantidad)}</td><td>${text(item.usuario)}</td><td>${text(item.observacion)}</td></tr>`))}<h3>Inventario independiente de garantias</h3>${table(['Local','Codigo','Cantidad','Actualizado'],guaranteeInventory.map(item=>`<tr><td>${text(item.local)}</td><td>${text(item.codigo)}</td><td><strong>${text(item.cantidad)}</strong></td><td>${date(item.actualizado)}</td></tr>`))}<h3>Movimientos registrados</h3>${table(['Fecha','Tipo','Origen','Destino','Cantidad','Responsable'],movements.map(item=>`<tr><td>${date(item.fecha)}</td><td>${text(item.tipo)}</td><td>${text(item.local_origen)}</td><td>${text(item.local_destino)}</td><td>${text(item.cantidad)}</td><td>${text(item.vendedor||item.empleado)}</td></tr>`))}</section></div>`;
+		$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';
+	}catch(error){showToast(error.message,'error');}
+}
 document.addEventListener('click',event=>{
-	const button=event.target.closest('[data-action="warranty-receive"],[data-action="warranty-cancel"]');
+	const button=event.target.closest('[data-action="warranty-receive"],[data-action="warranty-cancel"],[data-action="warranty-supplier-send"],[data-action="warranty-supplier-return"]');
 	if(!button)return;
-	const action=button.dataset.action==='warranty-receive'?'receive':'cancel';
-	if(action==='cancel'&&!window.confirm('¿Cancelar esta garantia?'))return;
+	const actionByButton={
+		'warranty-receive':'receive',
+		'warranty-cancel':'cancel',
+		'warranty-supplier-send':'supplier-send',
+		'warranty-supplier-return':'supplier-return',
+	};
+	const action=actionByButton[button.dataset.action];
+	const confirmation={cancel:'¿Cancelar esta garantia?', 'supplier-send':'¿Enviar esta garantia al proveedor?', 'supplier-return':'¿Registrar el regreso de esta garantia desde el proveedor?'}[action];
+	if(confirmation&&!window.confirm(confirmation))return;
 	button.disabled=true;
 	changeWarrantyStatus(button.dataset.id,action).finally(()=>{button.disabled=false;});
+});
+document.addEventListener('click',event=>{
+	const button=event.target.closest('[data-action="warranty-trace"]');
+	if(button)showWarrantyTrace(button.dataset.id);
 });
 document.addEventListener('click',event=>{
 	const button=event.target.closest('[data-action]');

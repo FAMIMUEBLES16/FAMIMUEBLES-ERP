@@ -34,6 +34,11 @@ function warrantyRows(data) {
     const invoice = item.invoiceNumber || item.factura || item.invoice || item.saleId || '-';
     const local = item.storeId || item.local || item.store || '-';
     const status = item.status || 'PENDIENTE';
+    const supplierAction = status === 'EN_PROVEEDOR'
+      ? `<button class="table-action" data-action="warranty-supplier-return" data-id="${item.id || ''}">Regreso proveedor</button>`
+      : status === 'RECIBIDO'
+        ? `<button class="table-action" data-action="warranty-supplier-send" data-id="${item.id || ''}">Enviar proveedor</button>`
+        : '';
     return `<tr>
       <td><strong>${item.id || '-'}</strong></td>
       <td>${productName}</td>
@@ -41,7 +46,9 @@ function warrantyRows(data) {
       <td>${local}</td>
       <td>${badge(status)}</td>
       <td>
+        <button class="table-action" data-action="warranty-trace" data-id="${item.id || ''}">Rastrear</button>
         <button class="table-action" data-action="warranty-receive" data-id="${item.id || ''}">Recibir</button>
+        ${supplierAction}
         <button class="table-action danger" data-action="warranty-cancel" data-id="${item.id || ''}">Cancelar</button>
       </td>
     </tr>`;

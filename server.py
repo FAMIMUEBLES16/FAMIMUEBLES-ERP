@@ -372,6 +372,8 @@ def _initialize_postgres_schema() -> _PostgresConnection:
         "CREATE TABLE IF NOT EXISTS products (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, code TEXT NOT NULL, name TEXT NOT NULL, reference TEXT NOT NULL DEFAULT '', barcode TEXT NOT NULL DEFAULT '', category TEXT NOT NULL DEFAULT '', cost DOUBLE PRECISION NOT NULL DEFAULT 0, sale_price DOUBLE PRECISION NOT NULL DEFAULT 0, tax_rate DOUBLE PRECISION NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE (tenant_id, code))",
         "CREATE TABLE IF NOT EXISTS inventory (tenant_id TEXT NOT NULL, product_id TEXT NOT NULL, store_id TEXT NOT NULL, quantity DOUBLE PRECISION NOT NULL DEFAULT 0, reserved_quantity DOUBLE PRECISION NOT NULL DEFAULT 0, minimum_quantity DOUBLE PRECISION NOT NULL DEFAULT 0, updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (tenant_id, product_id, store_id))",
         "CREATE TABLE IF NOT EXISTS inventory_movements (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, product_id TEXT NOT NULL, store_id TEXT NOT NULL, movement_type TEXT NOT NULL, quantity DOUBLE PRECISION NOT NULL, reference_id TEXT, note TEXT NOT NULL DEFAULT '', user_id TEXT, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)",
+        "CREATE TABLE IF NOT EXISTS garantia_historial (id BIGSERIAL PRIMARY KEY, garantia_id INTEGER NOT NULL, fecha TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, tipo TEXT NOT NULL, estado TEXT, local TEXT, local_destino TEXT, codigo TEXT, descripcion TEXT, cantidad INTEGER NOT NULL DEFAULT 0, usuario TEXT, observacion TEXT, movimiento_id INTEGER)",
+        "CREATE TABLE IF NOT EXISTS inventario_garantias (id BIGSERIAL PRIMARY KEY, local TEXT NOT NULL, codigo TEXT NOT NULL, descripcion TEXT, cantidad INTEGER NOT NULL DEFAULT 0, actualizado TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE (local, codigo))",
         "CREATE TABLE IF NOT EXISTS sales (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, store_id TEXT NOT NULL, customer_id TEXT, invoice_number TEXT NOT NULL DEFAULT '', total DOUBLE PRECISION NOT NULL DEFAULT 0, payment_method TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'COMPLETED', created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)",
         "CREATE TABLE IF NOT EXISTS sale_items (sale_id TEXT NOT NULL, product_id TEXT NOT NULL, quantity DOUBLE PRECISION NOT NULL, unit_price DOUBLE PRECISION NOT NULL, tax_rate DOUBLE PRECISION NOT NULL DEFAULT 0, PRIMARY KEY (sale_id, product_id))",
     ]
@@ -1555,6 +1557,67 @@ class AppHandler(SimpleHTTPRequestHandler):
             self.send_json(200, {"items": [dict(row) for row in rows]})
             return
         if path.startswith("/api/domain/"):
+            warranty_trace_match = re.fullmatch(r"/api/domain/warranties/([^/]+)/trace", path)
+            if warranty_trace_match:
+                warranty_id = unquote(warranty_trace_match.group(1)).strip()
+                if not _postgres_enabled():
+                    self.send_json(503, {"error": "La trazabilidad de garantias requiere PostgreSQL"})
+                    return
+                with connection() as database:
+                    warranty = database.execute(
+                        """
+                        SELECT id, fecha, local_origen, local_recibido, codigo, descripcion,
+                               cantidad, codigo_recibido, descripcion_recibido, cantidad_recibida,
+                               estado, fecha_recibido, vendedor_recibido
+                        FROM garantias
+                        WHERE id = %s
+                        """,
+                        (warranty_id,),
+                    ).fetchone()
+                    if not warranty:
+                        self.send_json(404, {"error": "Garantia no encontrada"})
+                        return
+                    code = warranty["codigo_recibido"] or warranty["codigo"]
+                    received_at = warranty["fecha_recibido"] or warranty["fecha"]
+                    guarantee_inventory = database.execute(
+                        """
+                        SELECT local, codigo, descripcion, cantidad, actualizado
+                        FROM inventario_garantias
+                        WHERE codigo = %s
+                        ORDER BY local
+                        """,
+                        (code,),
+                    ).fetchall()
+                    movements = database.execute(
+                        """
+                        SELECT m.id, m.fecha, m.tipo, m.estado, m.local_origen, m.local_destino,
+                               m.empleado, m.vendedor, mp.codigo, mp.descripcion, mp.cantidad,
+                               mp.entrada, mp.salida
+                        FROM movimientos m
+                        JOIN movimiento_productos mp ON mp.movimiento_id = m.id
+                        WHERE mp.codigo = %s AND m.fecha >= %s
+                        ORDER BY m.fecha ASC, m.id ASC, mp.id ASC
+                        """
+                        ,
+                        (code, received_at),
+                    ).fetchall()
+                    history = database.execute(
+                        """
+                        SELECT id, fecha, tipo, estado, local, local_destino, codigo,
+                               descripcion, cantidad, usuario, observacion, movimiento_id
+                        FROM garantia_historial
+                        WHERE garantia_id = %s
+                        ORDER BY fecha ASC, id ASC
+                        """,
+                        (warranty_id,),
+                    ).fetchall()
+                self.send_json(200, {
+                    "warranty": dict(warranty),
+                    "guaranteeInventory": [dict(row) for row in guarantee_inventory],
+                    "movements": [dict(row) for row in movements],
+                    "history": [dict(row) for row in history],
+                })
+                return
             collection = unquote(path.removeprefix("/api/domain/")).strip("/")
             if collection not in DOMAIN_COLLECTIONS:
                 self.send_json(404, {"error": "Coleccion no disponible"})
@@ -2254,7 +2317,12 @@ class AppHandler(SimpleHTTPRequestHandler):
                 if warranty_action_match:
                     warranty_id = unquote(warranty_action_match.group(1)).strip()
                     action = str(payload.get("action", "")).strip().lower()
-                    status_by_action = {"receive": "RECIBIDO", "cancel": "CANCELADO"}
+                    status_by_action = {
+                        "receive": "RECIBIDO",
+                        "cancel": "CANCELADO",
+                        "supplier-send": "EN_PROVEEDOR",
+                        "supplier-return": "RECIBIDO",
+                    }
                     if action not in status_by_action:
                         self.send_json(400, {"error": "Accion de garantia no valida"})
                         return
@@ -2262,7 +2330,7 @@ class AppHandler(SimpleHTTPRequestHandler):
                         if not _postgres_enabled():
                             self.send_json(503, {"error": "Las garantias compartidas requieren PostgreSQL"})
                             return
-                        existing = database.execute("SELECT id FROM garantias WHERE id = %s FOR UPDATE", (warranty_id,)).fetchone()
+                        existing = database.execute("SELECT id, estado, local_recibido, codigo_recibido, descripcion_recibido, cantidad_recibida, vendedor_recibido, codigo, descripcion, cantidad FROM garantias WHERE id = %s FOR UPDATE", (warranty_id,)).fetchone()
                         if not existing:
                             self.send_json(404, {"error": "Garantia no encontrada"})
                             return
@@ -2271,6 +2339,60 @@ class AppHandler(SimpleHTTPRequestHandler):
                             database.execute("UPDATE garantias SET estado = %s, fecha_recibido = COALESCE(fecha_recibido, CURRENT_TIMESTAMP) WHERE id = %s", (status, warranty_id))
                         else:
                             database.execute("UPDATE garantias SET estado = %s WHERE id = %s", (status, warranty_id))
+                        previous_status = str(existing["estado"] or "").upper()
+                        code = existing["codigo_recibido"] or existing["codigo"]
+                        description = existing["descripcion_recibido"] or existing["descripcion"] or ""
+                        quantity = int(existing["cantidad_recibida"] or existing["cantidad"] or 0)
+                        local = existing["local_recibido"] or ""
+                        if action == "receive" and previous_status != "RECIBIDO" and local and code and quantity > 0:
+                            database.execute(
+                                """
+                                INSERT INTO inventario_garantias (local, codigo, descripcion, cantidad)
+                                VALUES (%s, %s, %s, %s)
+                                ON CONFLICT (local, codigo) DO UPDATE SET cantidad = inventario_garantias.cantidad + EXCLUDED.cantidad, descripcion = EXCLUDED.descripcion, actualizado = CURRENT_TIMESTAMP
+                                """,
+                                (local, code, description, quantity),
+                            )
+                        if action == "supplier-send" and previous_status != "EN_PROVEEDOR" and local and code and quantity > 0:
+                            changed = database.execute(
+                                "UPDATE inventario_garantias SET cantidad = cantidad - %s, actualizado = CURRENT_TIMESTAMP WHERE local = %s AND codigo = %s AND cantidad >= %s",
+                                (quantity, local, code, quantity),
+                            ).rowcount
+                            if not changed:
+                                raise ValueError("La garantía no tiene suficiente cantidad en el inventario independiente")
+                        if action == "supplier-return" and previous_status == "EN_PROVEEDOR" and local and code and quantity > 0:
+                            database.execute(
+                                """
+                                INSERT INTO inventario_garantias (local, codigo, descripcion, cantidad)
+                                VALUES (%s, %s, %s, %s)
+                                ON CONFLICT (local, codigo) DO UPDATE SET cantidad = inventario_garantias.cantidad + EXCLUDED.cantidad, descripcion = EXCLUDED.descripcion, actualizado = CURRENT_TIMESTAMP
+                                """,
+                                (local, code, description, quantity),
+                            )
+                        if previous_status != status:
+                            database.execute(
+                                """
+                                INSERT INTO garantia_historial
+                                    (garantia_id, fecha, tipo, estado, local, codigo, descripcion, cantidad, usuario, observacion)
+                                VALUES (%s, CURRENT_TIMESTAMP, %s, %s, %s, %s, %s, %s, %s, %s)
+                                """,
+                                (
+                                    warranty_id,
+                                    "RECIBIDO" if action == "receive" else "CANCELADO",
+                                    status,
+                                    local,
+                                    code,
+                                    description,
+                                    quantity,
+                                    authenticated_user(self)["username"],
+                                    {
+                                        "receive": "Garantia recibida en inventario independiente",
+                                        "cancel": "Garantia cancelada desde ERP",
+                                        "supplier-send": "Garantia enviada al proveedor",
+                                        "supplier-return": "Garantia devuelta por el proveedor",
+                                    }[action],
+                                ),
+                            )
                     self.send_json(200, {"ok": True, "id": int(warranty_id), "status": status})
                     return
                 collection = unquote(path.removeprefix("/api/domain/")).strip("/")
