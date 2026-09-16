@@ -916,7 +916,7 @@ def _shared_domain_items(database: _PostgresConnection, collection: str) -> list
                    NULL::text AS numero_serie,
                    fecha_recibido AS fecharecepcion
             FROM garantias
-            WHERE UPPER(COALESCE(estado, '')) IN ('PENDIENTE', 'EN_ESPERA', 'RECIBIDA', 'REPARADA')
+            WHERE UPPER(COALESCE(estado, '')) IN ('PENDIENTE', 'EN_ESPERA', 'RECIBIDO', 'RECIBIDA', 'REPARADA')
             ORDER BY fecha DESC, id DESC
         """
     elif collection == "paymentMethods":

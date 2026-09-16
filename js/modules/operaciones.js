@@ -64,6 +64,9 @@ function damagedRows(data) {
     const productName = item.productName || item.product || item.productId || '-';
     const local = item.storeId || item.local || item.store || '-';
     const status = item.status || 'EN_ESPERA';
+    const supplierAction = ['RECIBIDO', 'RECIBIDA'].includes(String(status).toUpperCase())
+      ? `<button class="table-action" data-action="warranty-supplier-send" data-id="${item.id || ''}">Enviar proveedor</button>`
+      : '';
     return `<tr>
       <td><strong>${item.id || '-'}</strong></td>
       <td>${productName}</td>
@@ -71,7 +74,7 @@ function damagedRows(data) {
       <td>${local}</td>
       <td>${badge(status)}</td>
       <td>
-        <button class="table-action" data-action="damaged-receive" data-id="${item.id || ''}">Confirmar</button>
+        ${supplierAction || `<span class="muted">En espera de recepción</span>`}
       </td>
     </tr>`;
   }).join('');

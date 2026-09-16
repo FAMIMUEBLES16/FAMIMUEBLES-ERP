@@ -96,6 +96,15 @@ class BackendSafetyTests(unittest.TestCase):
         self.assertEqual(items[0]["storeId"], "INV CRR 5 3 17")
         self.assertEqual(items[0]["status"], "PENDIENTE")
 
+    def test_warranty_trace_query_uses_received_code_and_date(self):
+        source = open(server.__file__, encoding="utf-8").read()
+        self.assertIn("/api/domain/warranties/([^/]+)/trace", source)
+        self.assertIn("mp.codigo = %s AND m.fecha >= %s", source)
+
+    def test_damaged_stock_includes_received_warranties(self):
+        source = open(server.__file__, encoding="utf-8").read()
+        self.assertIn("'RECIBIDO', 'RECIBIDA'", source)
+
     def test_shared_domain_items_exposes_telegram_warranty_frontend_aliases(self):
         class FakeResult:
             def __init__(self, rows):
