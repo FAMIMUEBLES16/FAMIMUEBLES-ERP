@@ -28,7 +28,7 @@ import { renderGastos } from './modules/gastos.js?v=19';
 import { renderGasolina } from './modules/gasolina.js?v=18';
 import { renderUsuarios } from './modules/usuarios.js?v=19';
 import { renderAuditoria, setAuditFilters, clearAuditFilters } from './modules/auditoria.js?v=21';
-import { renderTalonarios, talonarioModal, setTalonarioFilters } from './modules/talonarios.js?v=2';
+import { renderTalonarios, talonarioModal, setTalonarioFilters } from './modules/talonarios.js?v=3';
 import { historicalTalonarios, historicalRecibos, storedTalonarios } from './modules/talonarios-historial.js?v=1';
 import { renderApartados } from './modules/apartados.js?v=19';
 import { createApartado, decreaseSaleInventory, registerPayment, runTransaction, addMovement } from './modules/finanzas.js?v=18';
@@ -775,7 +775,7 @@ document.addEventListener('change',event=>{
 	if(!event.target.matches('#talonario-form select[name="type"]'))return;
 	const form=event.target.form;
 	const type=event.target.value;
-	const source=(store.collection.talonarios||[]).filter(item=>String(item.type).toUpperCase()===type&&String(item.storeId||'INV CRR 5 3 26')==='INV CRR 5 3 26'&&String(item.status||'ALMACENADO')==='ALMACENADO').sort((left,right)=>Number(left.startNumber)-Number(right.startNumber))[0];
+	const source=(store.collection.talonarios||[]).filter(item=>String(item.type).toUpperCase()===type&&String(item.storeId||'').trim()==='INV CRR 5 3 26'&&String(item.status||'').toUpperCase()==='ALMACENADO').sort((left,right)=>Number(left.startNumber)-Number(right.startNumber))[0];
 	if(source){form.elements.startNumber.value=source.startNumber;form.elements.endNumber.value=source.endNumber;form.querySelector('[data-talonario-next]').textContent=`${source.startNumber} - ${source.endNumber}`;form.querySelector('button.primary').disabled=false;}else{form.elements.startNumber.value='';form.elements.endNumber.value='';form.querySelector('[data-talonario-next]').textContent='Sin talonarios disponibles';form.querySelector('button.primary').disabled=true;}
 });
 document.addEventListener('submit',async event=>{if(event.target.id!=='advanced-form')return;event.preventDefault();const values=Object.fromEntries(new FormData(event.target));const collection=values.collection;const item={...values,id:values.id.trim()||nextAdvancedId(store.collection,collection),amount:Number(values.amount||0),createdAt:new Date().toISOString(),createdBy:JSON.parse(localStorage.getItem('famimuebles-user')||'{}').username||'usuario'};delete item.collection;try{await persistDomainRecord(collection,item);if(!Array.isArray(store.collection[collection]))store.collection[collection]=[];const index=store.collection[collection].findIndex(entry=>entry.id===item.id);if(index===-1)store.collection[collection].push(item);else store.collection[collection][index]=item;$('#modal-root').innerHTML='';render();showToast('Registro guardado correctamente.');}catch(error){showToast(error.message,'error');}});

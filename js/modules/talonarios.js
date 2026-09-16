@@ -76,14 +76,14 @@ export function talonarioModal(state, item = null) {
   const centralStore = catalogStores.find(store => String(store.id).trim() === CENTRAL) || { id: CENTRAL, name: CENTRAL };
   const destinationStores = [centralStore, ...catalogStores.filter(store => String(store.id).trim() !== CENTRAL)];
   const stores = destinationStores.map(store => `<option value="${store.id}" ${String(item?.storeId || CENTRAL).trim() === String(store.id).trim() ? 'selected' : ''}>${store.name || store.id}</option>`).join('');
-  const nextRemision = (state?.talonarios || []).filter(entry => entry.type === 'REMISION' && String(entry.storeId || CENTRAL) === CENTRAL && String(entry.status || 'ALMACENADO') === 'ALMACENADO').sort((left, right) => Number(left.startNumber) - Number(right.startNumber))[0];
-  const nextRecibo = (state?.talonarios || []).filter(entry => entry.type === 'RECIBO' && String(entry.storeId || CENTRAL) === CENTRAL && String(entry.status || 'ALMACENADO') === 'ALMACENADO').sort((left, right) => Number(left.startNumber) - Number(right.startNumber))[0];
-  const next = item || nextRemision;
-  const nextRange = item ? range(item) : (nextRemision ? range(nextRemision) : 'Sin talonarios disponibles');
+  const nextRemision = (state?.talonarios || []).filter(entry => String(entry.type).toUpperCase() === 'REMISION' && String(entry.storeId || '').trim() === CENTRAL && String(entry.status || '').toUpperCase() === 'ALMACENADO').sort((left, right) => Number(left.startNumber) - Number(right.startNumber))[0];
+  const nextRecibo = (state?.talonarios || []).filter(entry => String(entry.type).toUpperCase() === 'RECIBO' && String(entry.storeId || '').trim() === CENTRAL && String(entry.status || '').toUpperCase() === 'ALMACENADO').sort((left, right) => Number(left.startNumber) - Number(right.startNumber))[0];
+  const next = item || nextRemision || nextRecibo;
+  const nextRange = item ? range(item) : (next ? range(next) : 'Sin talonarios disponibles');
   return `<div class="modal-backdrop"><form class="modal" id="talonario-form" data-talonario-id="${item?.id || ''}"><button type="button" class="modal-close">×</button><p class="eyebrow">ADMINISTRACION</p><h2>${item ? 'Enviar talonario' : 'Registrar talonario'}</h2>
     <label class="input-label">Tipo<select class="field" name="type" required><option value="REMISION" ${item?.type === 'REMISION' ? 'selected' : ''}>Remisiones</option><option value="RECIBO" ${item?.type === 'RECIBO' ? 'selected' : ''}>Recibos</option></select></label>
     <div class="input-label"><span>Proximo talonario disponible</span><strong data-talonario-next>${nextRange}</strong></div>
     <input type="hidden" name="startNumber" value="${next?.startNumber || ''}"><input type="hidden" name="endNumber" value="${next?.endNumber || ''}">
     <label class="input-label">Destino<select class="field" name="destinationStoreId" required>${stores}</select></label>
-    <button class="primary wide" ${!item && !nextRemision && !nextRecibo ? 'disabled' : ''}>${item ? 'Registrar envio' : 'Enviar'}</button></form></div>`;
+    <button class="primary wide" ${!item && !next ? 'disabled' : ''}>${item ? 'Registrar envio' : 'Enviar'}</button></form></div>`;
 }
