@@ -80,7 +80,7 @@ DOMAIN_COLLECTIONS = {
     "accountsPayable", "supplierPayments", "customerAccounts", "suppliers", "accounts-payable", "supplier-payments", "customer-accounts",
     "returns", "supplier-returns", "supplierReturns", "stock-counts", "stockCounts", "reservations", "warranties",
     "damaged-stock", "damagedStock", "cash-sessions", "cashSessions", "cash-movements", "cashMovements", "bank-accounts", "bankAccounts",
-    "quotes", "orders", "deliveries", "transfers", "credit-notes", "creditNotes", "company-settings", "companySettings", "talonarios",
+    "quotes", "orders", "deliveries", "transfers", "credit-notes", "creditNotes", "company-settings", "companySettings", "talonarios", "talonarioJustifications",
 }
 DEFAULT_TENANT = "tenant-default"
 PUBLISHABLE_FILES = ("index.html", "css/", "js/", "server.py", "report_pdf.py")
@@ -153,6 +153,7 @@ def _postgres_sql(sql: str) -> str:
     sql = sql.replace("INSERT OR IGNORE", "INSERT")
     sql = sql.replace("datetime(auth_tokens.expires_at)", "auth_tokens.expires_at")
     sql = sql.replace("datetime('now', '+12 hours')", "CURRENT_TIMESTAMP + INTERVAL '12 hours'")
+    sql = sql.replace("datetime('now', '+30 days')", "CURRENT_TIMESTAMP + INTERVAL '30 days'")
     sql = sql.replace("datetime('now')", "CURRENT_TIMESTAMP")
     output = []
     index = 0
@@ -1139,7 +1140,7 @@ def _create_shared_sale(database: _PostgresConnection, payload: dict, user: dict
     sale_id = record_id(payload)
     store_id = str(payload.get("storeId", "")).strip()
     invoice_number = str(payload.get("invoiceNumber", "")).strip()
-    sale_date = str(payload.get("date") or payload.get("fecha") or payload.get("createdAt") or "").strip()[:10]
+    sale_date = str(payload.get("date") or payload.get("fecha") or payload.get("createdAt") or datetime.now().date().isoformat()).strip()[:10]
     items = payload.get("items")
     if not store_id or not invoice_number or not isinstance(items, list) or not items:
         raise ValueError("La venta requiere local, numero de factura fisica y productos")

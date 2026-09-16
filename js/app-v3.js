@@ -4,7 +4,7 @@ function showTransferDetail(transferId){const transfer=transferRecord(transferId
 function editTransfer(transferId){const transfer=transferRecord(transferId);if(!transfer)return showToast('No se encontro el traslado.','error');$('#modal-root').innerHTML=`<div class="modal-backdrop"><form class="modal" id="transfer-edit-form"><button type="button" class="modal-close">×</button><p class="eyebrow">INVENTARIO</p><h2>Editar traslado</h2><textarea class="field" name="data" rows="12" required>${JSON.stringify(transfer,null,2)}</textarea><button class="primary wide">Guardar cambios</button></form></div>`;$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';$('#transfer-edit-form').onsubmit=async event=>{event.preventDefault();try{const updated=JSON.parse(new FormData(event.target).get('data'));if(String(updated.id)!==String(transfer.id))throw new Error('El ID no puede cambiarse.');await persistDomainRecord('transfers',updated);store.collection.transfers=[...(store.collection.transfers||[]).filter(item=>String(item.id)!==String(updated.id)),updated];$('#modal-root').innerHTML='';render();showToast('Traslado actualizado correctamente.');}catch(error){showToast(error.message,'error');}};}
 async function deleteTransferRemote(transferId){if(!window.confirm('¿Eliminar este traslado?'))return;try{await persistCatalogRecord(`/api/domain/transfers/${encodeURIComponent(transferId)}`,{},'DELETE');store.collection.transfers=(store.collection.transfers||[]).filter(item=>String(item.id)!==String(transferId));$('#modal-root').innerHTML='';render();showToast('Traslado eliminado correctamente.');}catch(error){showToast(error.message,'error');}}
 import { store } from './data/store.js?v=20';
-import { hydrateState, hydrateStateWithRetry, hydrateCatalog, saveState, authHeaders, activeTenantId, isStaticDeployment } from './data/storage.js?v=23';
+import { hydrateState, hydrateStateWithRetry, hydrateCatalog, saveState, authHeaders, activeTenantId, isStaticDeployment } from './data/storage.js?v=24';
 import { generateId } from './utils/ids.js';
 import { currentRoute, startRouter } from './router.js?v=18';
 import { navItems, navGroups } from './components/sidebar.js?v=22';
@@ -28,7 +28,7 @@ import { renderGastos } from './modules/gastos.js?v=19';
 import { renderGasolina } from './modules/gasolina.js?v=18';
 import { renderUsuarios } from './modules/usuarios.js?v=19';
 import { renderAuditoria, setAuditFilters, clearAuditFilters } from './modules/auditoria.js?v=21';
-import { renderTalonarios, talonarioModal, setTalonarioFilters } from './modules/talonarios.js?v=1';
+import { renderTalonarios, talonarioModal, setTalonarioFilters } from './modules/talonarios.js?v=2';
 import { historicalTalonarios, historicalRecibos, storedTalonarios } from './modules/talonarios-historial.js?v=1';
 import { renderApartados } from './modules/apartados.js?v=19';
 import { createApartado, decreaseSaleInventory, registerPayment, runTransaction, addMovement } from './modules/finanzas.js?v=18';
@@ -40,7 +40,7 @@ import { productDetail } from './modules/product-detail.js?v=14';
 import { importPreview, importPreviewRows, importProducts } from './modules/product-import.js?v=15';
 import { renderProveedores, supplierTable } from './modules/proveedores.js?v=15';
 import { renderCompras, purchaseTable } from './modules/compras.js?v=20';
-import { purchaseTotal, createPurchase, orderPurchase, receivePurchase, cancelPurchase } from './services/purchase-service.js?v=15';
+import { purchaseTotal, createPurchase, orderPurchase, receivePurchase, receiveTalonarioPurchase, cancelPurchase } from './services/purchase-service.js?v=16';
 import { purchaseDetail } from './modules/purchase-detail.js?v=16';
 import { renderCuentasPorPagar, payableTable } from './modules/cuentas-por-pagar.js?v=14';
 import { accountsPayableDetail } from './modules/accounts-payable-detail.js?v=14';
@@ -94,6 +94,7 @@ const actionPermissionMap = {
 	'view-supplier':['Proveedores','view'],'edit-supplier':['Proveedores','edit'],'delete-supplier':['Proveedores','delete'],'new-supplier':['Proveedores','create'],
 	'view-credit':['Creditos','view'],'edit-credit':['Creditos','edit'],'delete-credit':['Creditos','delete'],'credit-payment':['Creditos','edit'],'new-credit':['Creditos','create'],
 	'view-apartado':['Apartados','view'],'edit-apartado':['Apartados','edit'],'delete-apartado':['Apartados','delete'],
+	'justify-talonario-number':['Talonarios','edit'],
 	'view-expense':['Gastos','view'],'edit-expense':['Gastos','edit'],'delete-expense':['Gastos','delete'],'new-expense':['Gastos','create'],
 	'adjust-inventory':['Inventario','edit'],'delete-inventory':['Inventario','delete'],'report':['Reportes','view'],
 	'parity-count':['Inventario','edit'],'parity-sistecredito':['Creditos','create']
@@ -154,7 +155,7 @@ function refreshProducts(){ const query=$('[data-filter="products"]')?.value||''
 function clearProductFilters(){ const defaults={'[data-filter="products"]':'','[data-product-category]':'all','[data-product-subcategory]':'all','[data-product-brand]':'all','[data-product-status]':'all','[data-product-active]':'all','[data-product-sort]':'name','[data-product-page-size]':'50'};Object.entries(defaults).forEach(([selector,value])=>{const element=$(selector);if(element)element.value=value;});productPage=1;refreshProducts();}
 function modal(title, fields, onSubmit){ $('#modal-root').innerHTML=`<div class="modal-backdrop"><form class="modal" id="data-modal"><button type="button" class="modal-close">×</button><p class="eyebrow">FAMIMUEBLES ERP</p><h2>${title}</h2>${fields.map(field=>`<label class="input-label">${field.label}<input class="field" name="${field.name}" type="${field.type||'text'}" value="${field.value||''}" ${field.required===false?'':'required'}></label>`).join('')}<button class="primary wide">Guardar</button></form></div>`; $('.modal-close').onclick=()=>$('#modal-root').innerHTML=''; $('#data-modal').onsubmit=async event=>{event.preventDefault();const button=event.target.querySelector('button.primary');button.disabled=true;try{await onSubmit(Object.fromEntries(new FormData(event.target)));}catch(error){showToast(error.message,'error');}finally{button.disabled=false;}}; }
 async function persistCatalogRecord(path, record, method='POST'){ const requestId=method==='POST'?(record.requestId||(record.requestId=globalThis.crypto?.randomUUID?crypto.randomUUID():`${path}-${Date.now()}-${Math.random()}`)):''; const options={headers:{'X-Tenant-ID':activeTenantId(),...(requestId?{'Idempotency-Key':requestId}: {})}}; const body={...record,...(requestId?{requestId}:{}),tenantId:activeTenantId()}; try { return method==='PUT' ? await api.put(path,body,options) : method==='DELETE' ? await api.delete(path,body,options) : await api.post(path,body,options); } catch(error) { if(error.status===401){localStorage.removeItem('famimuebles-auth-token');localStorage.removeItem('famimuebles-user');throw new Error('La sesion expiro. Inicia sesion nuevamente para guardar cambios.');} throw error; } }
-const remoteDomainCollections=['customers','suppliers','purchases','credits','expenses','accountsPayable','supplierPayments','customerAccounts','returns','supplierReturns','stockCounts','reservations','warranties','damagedStock','cashSessions','cashMovements','bankAccounts','quotes','orders','deliveries','creditNotes','talonarios'];
+const remoteDomainCollections=['customers','suppliers','purchases','credits','expenses','accountsPayable','supplierPayments','customerAccounts','returns','supplierReturns','stockCounts','reservations','warranties','damagedStock','cashSessions','cashMovements','bankAccounts','quotes','orders','deliveries','creditNotes','talonarios','talonarioJustifications'];
 async function persistDomainRecord(collection, record){ return persistCatalogRecord(`/api/domain/${encodeURIComponent(collection)}`,{...record,tenantId:activeTenantId()}); }
 async function seedHistoricalTalonarios(state){
 	if(!Array.isArray(state.talonarios))state.talonarios=[];
@@ -229,7 +230,9 @@ async function registerTalonarioSale(sale){
 	const localName=local?.name||localId;
 	const talonario=(store.collection.talonarios||[]).filter(item=>String(item.type).toUpperCase()===type&&String(item.storeId||'')===localId&&String(item.status||'').toUpperCase()==='EN_USO'&&documentNumber>=Number(item.startNumber)&&documentNumber<=Number(item.endNumber)).sort((left,right)=>Number(right.startNumber)-Number(left.startNumber))[0];
 	if(!talonario)return;
-	talonario.currentNumber=Math.max(Number(talonario.currentNumber||talonario.startNumber),documentNumber);
+	const previousNumber=Number(talonario.currentNumber||talonario.startNumber);
+	if(documentNumber>previousNumber&&!Object.prototype.hasOwnProperty.call(talonario,'consecutiveBaseline'))talonario.consecutiveBaseline=previousNumber;
+	talonario.currentNumber=Math.max(previousNumber,documentNumber);
 	await persistDomainRecord('talonarios',talonario);
 	const remaining=Number(talonario.endNumber)-documentNumber;
 	if(remaining<=3&&remaining>=0){
@@ -249,6 +252,7 @@ async function refreshTalonarioSalesAlerts(){
 		const documents=sales.map(sale=>({sale,number:Number(String(sale.invoiceNumber||sale.numero_factura||sale.invoice||'').trim())})).filter(({sale,number})=>Number.isInteger(number)&&number>=Number(talonario.startNumber)&&number<=Number(talonario.endNumber)&&(String(sale.documentType||sale.tipo_documento||'').trim()===''||String(sale.documentType||sale.tipo_documento).toUpperCase()===type)&&(String(sale.storeId||sale.local_id||sale.local||'')===localId||String(sale.storeName||sale.localName||'')===localName));
 		const latest=documents.sort((left,right)=>right.number-left.number)[0]?.number;
 		if(!latest||latest<=Number(talonario.currentNumber||talonario.startNumber))continue;
+		 if(latest>Number(talonario.currentNumber||talonario.startNumber)&&!Object.prototype.hasOwnProperty.call(talonario,'consecutiveBaseline'))talonario.consecutiveBaseline=Number(talonario.currentNumber||talonario.startNumber);
 		talonario.currentNumber=latest;
 		try{await persistDomainRecord('talonarios',talonario);}catch(error){console.warn('No se pudo actualizar el consecutivo del talonario:',error.message);}
 		const remaining=Number(talonario.endNumber)-latest;
@@ -426,7 +430,31 @@ function deleteInventoryEntry(productId,storeId){if(!window.confirm('¿Eliminar 
 function openAdjustment(productId='', storeId=''){ const selectedStore=storeId || state.storeId || store.collection.stores[0]?.id; const selectedProduct=productId || store.collection.products[0]?.id; const current=inventoryEntry(store.collection,selectedProduct,selectedStore)?.quantity || 0; modal('Ajuste de inventario',[{name:'storeId',label:'Local',value:selectedStore},{name:'productId',label:'Producto',value:selectedProduct},{name:'newQuantity',label:'Nueva cantidad',type:'number',value:current},{name:'reason',label:'Motivo'}],async values=>{const target=Number(values.newQuantity);if(!Number.isInteger(target)||target<0)throw new Error('La nueva cantidad debe ser un entero mayor o igual a cero.');await persistCatalogRecord('/api/catalog/inventory-movement',{productId:values.productId,storeId:values.storeId,targetQuantity:target,movementType:'AJUSTE',note:values.reason||'Ajuste manual'});const remote=await hydrateState();if(remote){store.state=remote;await hydrateCatalog(store.state);}$('#modal-root').innerHTML='';render();showToast('Cantidad actualizada en PostgreSQL y movimiento registrado.');}); }
 function openSupplierModal(supplierId=''){ const supplier=supplierId&&store.collection.suppliers.find(item=>item.id===supplierId); modal(supplier?'Editar proveedor':'Nuevo proveedor',[{name:'code',label:'Codigo',value:supplier?.code,required:false},{name:'name',label:'Nombre o razon social',value:supplier?.name},{name:'document',label:'NIT o documento',value:supplier?.document,required:false},{name:'phone',label:'Telefono',value:supplier?.phone,required:false},{name:'whatsapp',label:'WhatsApp',value:supplier?.whatsapp,required:false},{name:'email',label:'Correo',value:supplier?.email,required:false},{name:'address',label:'Direccion',value:supplier?.address,required:false},{name:'city',label:'Ciudad',value:supplier?.city,required:false},{name:'contact',label:'Contacto',value:supplier?.contact,required:false},{name:'paymentTerms',label:'Condiciones de pago',value:supplier?.paymentTerms||'Contado',required:false},{name:'creditDays',label:'Dias de credito',type:'number',value:supplier?.creditDays||0,required:false},{name:'notes',label:'Observaciones',value:supplier?.notes,required:false}],async values=>{const payload={id:supplier?.id||generateId('SUP',store.collection.suppliers),...values,creditDays:Number(values.creditDays||0),paymentTerms:String(values.paymentTerms||'Contado'),active:supplier?.active!==false,createdAt:supplier?.createdAt||new Date().toISOString(),updatedAt:new Date().toISOString()};await persistDomainRecord('suppliers',payload);const index=store.collection.suppliers.findIndex(item=>item.id===payload.id);if(index===-1)store.collection.suppliers.push(payload);else store.collection.suppliers[index]=payload;$('#modal-root').innerHTML='';render();showToast('Proveedor guardado correctamente.');}); }
 function openPurchaseModal(){ purchaseDraft=[]; const suppliers=store.collection.suppliers.filter(item=>item.active!==false).map(item=>`<option value="${item.id}">${item.code} · ${item.name}</option>`).join(''); const stores=store.collection.stores.map(item=>`<option value="${item.id}">${item.name}</option>`).join(''); const products=store.collection.products.map(item=>`<option value="${item.id}">${item.code} · ${item.name}</option>`).join(''); $('#modal-root').innerHTML=`<div class="modal-backdrop"><form class="modal" id="purchase-modal"><button type="button" class="modal-close">×</button><p class="eyebrow">ABASTECIMIENTO</p><h2>Nueva compra</h2><label class="input-label">Proveedor<select class="field" name="supplierId" required>${suppliers}</select></label><label class="input-label">Local destino<select class="field" name="storeId" required>${stores}</select></label><label class="input-label">Factura proveedor<input class="field" name="supplierInvoice"></label><label class="input-label">Forma de pago<select class="field" name="paymentMethod"><option>Contado</option><option>Credito</option><option>Transferencia</option></select></label><label class="input-label">Producto<select class="field" data-purchase-product>${products}</select></label><div class="purchase-line-fields"><input class="field" type="number" min="1" value="1" data-purchase-quantity placeholder="Cantidad"><input class="field" type="number" min="0" value="0" data-purchase-cost placeholder="Costo unitario"><input class="field" type="number" min="0" value="0" data-purchase-iva placeholder="IVA %"><input class="field" type="number" min="0" value="0" data-purchase-discount placeholder="Descuento"></div><button type="button" class="outline wide" data-action="add-purchase-line">Agregar producto</button><div class="purchase-draft"></div><label class="input-label">Observaciones<textarea class="field" name="notes"></textarea></label><button class="primary wide">Guardar compra</button></form></div>`;$('.modal-close').onclick=()=>$('#modal-root').innerHTML=''; }
+function openPurchaseModalV2(){
+	purchaseDraft=[];
+	const suppliers=store.collection.suppliers.filter(item=>item.active!==false).map(item=>`<option value="${item.id}">${item.code} · ${item.name}</option>`).join('');
+	const stores=store.collection.stores.map(item=>`<option value="${item.id}">${item.name}</option>`).join('');
+	const products=store.collection.products.map(item=>`<option value="${item.id}">${item.code} · ${item.name}</option>`).join('');
+	$('#modal-root').innerHTML=`<div class="modal-backdrop"><form class="modal" id="purchase-modal"><button type="button" class="modal-close">×</button><p class="eyebrow">ABASTECIMIENTO</p><h2>Nueva compra</h2><label class="input-label">Tipo de compra<select class="field" name="purchaseType" data-purchase-type><option value="PRODUCTOS">Productos</option><option value="TALONARIOS">Talonarios</option></select></label><label class="input-label">Proveedor<select class="field" name="supplierId" required>${suppliers}</select></label><label class="input-label">Local destino<select class="field" name="storeId" required>${stores}</select></label><label class="input-label">Factura proveedor<input class="field" name="supplierInvoice"></label><label class="input-label">Forma de pago<select class="field" name="paymentMethod"><option>Contado</option><option>Credito</option><option>Transferencia</option></select></label><div data-talonario-purchase-fields hidden><label class="input-label">Tipo de talonario<select class="field" name="talonarioType"><option value="REMISION">Remisiones</option><option value="RECIBO">Recibos</option></select></label><label class="input-label">Cantidad de talonarios<input class="field" name="talonarioCount" type="number" min="1" step="1"></label><label class="input-label">Consecutivo inicial recibido<input class="field" name="talonarioStart" type="number" min="1" step="1"></label><label class="input-label">Consecutivo final recibido<input class="field" name="talonarioEnd" type="number" min="1" step="1"></label><label class="input-label">Valor total de la compra<input class="field" name="talonarioTotal" type="number" min="0" step="0.01"></label></div><div data-purchase-products><label class="input-label">Producto<select class="field" data-purchase-product>${products}</select></label><div class="purchase-line-fields"><input class="field" type="number" min="1" value="1" data-purchase-quantity placeholder="Cantidad"><input class="field" type="number" min="0" value="0" data-purchase-cost placeholder="Costo unitario"><input class="field" type="number" min="0" value="0" data-purchase-iva placeholder="IVA %"><input class="field" type="number" min="0" value="0" data-purchase-discount placeholder="Descuento"></div><button type="button" class="outline wide" data-action="add-purchase-line">Agregar producto</button><div class="purchase-draft"></div></div><label class="input-label">Observaciones<textarea class="field" name="notes"></textarea></label><button class="primary wide">Guardar compra</button></form></div>`;
+	$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';
+	const form=$('#purchase-modal');
+	const sync=()=>{const isTalonarios=form.elements.purchaseType.value==='TALONARIOS';form.querySelector('[data-talonario-purchase-fields]').hidden=!isTalonarios;form.querySelector('[data-purchase-products]').hidden=isTalonarios;form.elements.talonarioCount.required=isTalonarios;form.elements.talonarioStart.required=isTalonarios;form.elements.talonarioEnd.required=isTalonarios;form.elements.talonarioTotal.required=isTalonarios;};
+	form.elements.purchaseType.onchange=sync;
+	form.querySelector('[name="storeId"]').value=state.storeId||store.collection.stores[0]?.id||'';
+	sync();
+}
 function addPurchaseLine(){ const productId=$('[data-purchase-product]').value,quantity=Number($('[data-purchase-quantity]').value),unitCost=Number($('[data-purchase-cost]').value),iva=Number($('[data-purchase-iva]').value||0),discount=Number($('[data-purchase-discount]').value||0);if(!productId||!Number.isInteger(quantity)||quantity<=0||!Number.isFinite(unitCost)||unitCost<0)return showToast('Producto, cantidad y costo son obligatorios.','error');purchaseDraft.push({productId,quantity,unitCost,iva,discount});$('.purchase-draft').innerHTML=purchaseDraft.map(item=>`<p>${store.collection.products.find(product=>product.id===item.productId)?.name} · ${item.quantity} · ${money(item.unitCost)}</p>`).join('');}
+document.addEventListener('submit',async event=>{
+	if(!event.target.matches('#purchase-modal')||event.target.elements.purchaseType?.value!=='TALONARIOS')return;
+	event.preventDefault();event.stopImmediatePropagation();
+	try{
+		const values=Object.fromEntries(new FormData(event.target));
+		const count=Number(values.talonarioCount),start=Number(values.talonarioStart),end=Number(values.talonarioEnd),total=Number(values.talonarioTotal);
+		if(!Number.isInteger(count)||count<=0||!Number.isInteger(start)||!Number.isInteger(end)||end<start||!Number.isFinite(total)||total<0)throw new Error('Cantidad, rango y valor total son obligatorios y validos.');
+		const purchase={id:generateId('COM',store.collection.purchases),purchaseType:'TALONARIOS',supplierId:values.supplierId,storeId:values.storeId,supplierInvoice:String(values.supplierInvoice||''),paymentMethod:String(values.paymentMethod||'Credito'),notes:String(values.notes||''),talonarioType:values.talonarioType,talonarioCount:count,talonarioStart:start,talonarioEnd:end,talonarioTotal:total,talonarioUnitCost:total/count,items:[{productId:'TALONARIOS',quantity:count,unitCost:total/count,iva:0,discount:0}],createdAt:new Date().toISOString(),status:'BORRADOR'};
+		await persistDomainRecord('purchases',purchase);store.collection.purchases.push(purchase);$('#modal-root').innerHTML='';location.hash='#compras';render();showToast('Compra de talonarios guardada.');
+	}catch(error){showToast(error.message,'error');}
+},true);
 function openProductEditor(productId=''){ const product=productId&&store.collection.products.find(item=>item.id===productId); const fields=[['name','Nombre',product?.name],['code','Codigo',product?.code],['barcode','Codigo de barras',product?.barcode],['reference','Referencia',product?.reference],['category','Categoria',product?.category],['subcategory','Subcategoria',product?.subcategory],['brand','Marca',product?.brand],['supplierName','Proveedor',product?.supplierName],['cost','Costo',product?.cost||0,'number'],['price','Precio de venta',product?.price||0,'number'],['specialPrice','Precio especial',product?.specialPrice||0,'number'],['iva','IVA',product?.iva||0,'number'],['minimum','Stock minimo',product?.minimum||0,'number'],['maximum','Stock maximo',product?.maximum||0,'number']].map(field=>({name:field[0],label:field[1],value:field[2],type:field[3]}));modal(product?'Editar producto':'Nuevo producto',fields,async values=>{try{const normalized=product?updateProduct(store.collection,product.id,values):createProduct(store.collection,values);if(!product)ensureInventoryEntry(store.collection,normalized.id,state.storeId);await persistCatalogRecord('/api/catalog/product',{...normalized,id:normalized.id,salePrice:normalized.salePrice||normalized.price,taxRate:normalized.iva||0},product?'PUT':'POST');const remote=await hydrateState();if(remote){store.state=remote;await hydrateCatalog(store.state);}$('#modal-root').innerHTML='';render();showToast('Producto guardado correctamente.');}catch(error){showToast(error.message,'error');}}); }
 function openImportModal(){ $('#modal-root').innerHTML='<div class="modal-backdrop"><form class="modal" id="import-modal"><button type="button" class="modal-close">×</button><p class="eyebrow">PRODUCTOS</p><h2>Importar productos</h2><p class="muted">Sube un archivo Excel (.xlsx, .xls), PDF o CSV. Encabezados recomendados: codigo, nombre, referencia, categoria, costo, precio, barcode.</p><label class="input-label">Archivo de productos<input class="field" id="import-file" type="file" accept=".xlsx,.xls,.pdf,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,application/pdf,text/csv" required></label><textarea class="field import-text" rows="6" placeholder="O pega aqui un CSV: codigo,nombre,categoria,costo,precio"></textarea><div class="import-preview"></div><button type="button" class="outline" data-action="preview-import">Vista previa</button><button class="primary wide" data-action="confirm-import" disabled>Importar productos</button></form></div>';$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';$('#import-file').onchange=()=>readImportFile(); }
 async function readImportFile(){const file=$('#import-file')?.files?.[0];if(!file)return;try{const extension=file.name.toLowerCase().split('.').pop();if(extension==='csv'){$('.import-text').value=await file.text();return previewImport();}if(extension==='xlsx'||extension==='xls'){if(!globalThis.XLSX)throw new Error('No se pudo cargar el lector de Excel.');const workbook=XLSX.read(await file.arrayBuffer(),{type:'array'});const sheet=workbook.Sheets[workbook.SheetNames[0]];const rows=XLSX.utils.sheet_to_json(sheet,{defval:'',raw:false});return showImportPreview(importPreviewRows(store.collection,normalizeImportRows(rows)));}if(extension==='pdf')return showImportPreview(importPreviewRows(store.collection,await parsePdfRows(await file.arrayBuffer())));throw new Error('Formato no admitido. Usa Excel, PDF o CSV.');}catch(error){showImportPreview({rows:[],errors:[error.message]});}}
@@ -549,7 +577,7 @@ document.addEventListener('click',async event=>{
 	const action = button.dataset.action;
 	const purchaseId = button.dataset.purchaseId;
 	if(action==='new-supplier')openSupplierModal();
-	if(action==='new-purchase')openPurchaseModal();
+	if(action==='new-purchase')openPurchaseModalV2();
 	if(action==='add-purchase-line')addPurchaseLine();
 	if(action==='purchase-detail'){
 		if(!purchaseId)return;
@@ -564,9 +592,16 @@ document.addEventListener('click',async event=>{
 			const purchase=(store.collection.purchases||[]).find(item=>String(item.id)===String(purchaseId));
 			if(!purchase)throw new Error('Compra no encontrada.');
 			if(action==='receive-purchase'){
-				await persistCatalogRecord('/api/shared-purchase',{purchase,tenantId:activeTenantId()});
-				purchase.status='RECIBIDA';
-				purchase.receivedAt=purchase.receivedAt||new Date().toISOString();
+				if(purchase.purchaseType==='TALONARIOS'){
+					const result=receiveTalonarioPurchase(store.collection,purchaseId);
+					await persistDomainRecord('purchases',result.purchase);
+					for(const talonario of result.records)await persistDomainRecord('talonarios',talonario);
+					for(const account of (store.collection.accountsPayable||[]).filter(item=>item.purchaseId===purchase.id))await persistDomainRecord('accountsPayable',account);
+				}else{
+					await persistCatalogRecord('/api/shared-purchase',{purchase,tenantId:activeTenantId()});
+					purchase.status='RECIBIDA';
+					purchase.receivedAt=purchase.receivedAt||new Date().toISOString();
+				}
 			}else{
 				handlers[action](store.collection,purchaseId);
 				await persistDomainRecord('purchases',purchase);
@@ -688,6 +723,7 @@ document.addEventListener('click',event=>{
 	if(!button)return;
 	if(button.dataset.action==='new-talonario')openTalonarioModal();
 	if(button.dataset.action==='send-talonario')openTalonarioModal(button.dataset.talonarioId);
+	if(button.dataset.action==='justify-talonario-number')openTalonarioJustificationModal(button.dataset.talonarioId,button.dataset.talonarioNumber);
 });
 document.addEventListener('submit',async event=>{
 	if(event.target.id!=='talonario-form')return;
@@ -695,6 +731,12 @@ document.addEventListener('submit',async event=>{
 	const button=event.target.querySelector('button.primary');
 	button.disabled=true;
 	try{await saveTalonarioForm(event.target);}catch(error){showToast(error.message,'error');button.disabled=false;}
+});
+document.addEventListener('submit',async event=>{
+	if(event.target.id!=='talonario-justification-form')return;
+	event.preventDefault();
+	const button=event.target.querySelector('button.primary');button.disabled=true;
+	try{await saveTalonarioJustification(event.target);}catch(error){showToast(error.message,'error');button.disabled=false;}
 });
 document.addEventListener('change',event=>{
 	if(!event.target.matches('#talonario-form select[name="type"]'))return;
@@ -1199,4 +1241,21 @@ async function removeActiveTalonarioDuplicates(){
 		}
 		store.collection.talonarios=store.collection.talonarios.filter(item=>item===active||!matches.includes(item));
 	}
+}
+function openTalonarioJustificationModal(talonarioId, number){
+	const talonario=(store.collection.talonarios||[]).find(item=>String(item.id)===String(talonarioId));
+	if(!talonario)return;
+	$('#modal-root').innerHTML=`<div class="modal-backdrop"><form class="modal" id="talonario-justification-form"><button type="button" class="modal-close">×</button><p class="eyebrow">CONTROL DE CONSECUTIVOS</p><h2>Justificar ${Number(number).toLocaleString('es-CO')}</h2><p class="muted">${String(talonario.destinationName||talonario.storeId||'Sin local')} · ${String(talonario.type||'REMISION')}</p><input type="hidden" name="talonarioId" value="${talonario.id}"><input type="hidden" name="number" value="${number}"><label class="input-label">Motivo<select class="field" name="reason" required><option value="ANULADA">Anulada</option><option value="DANADA">Dañada</option><option value="PERDIDA">Perdida</option><option value="ERROR_DIGITACION">Error de digitacion</option><option value="NO_UTILIZADA">No utilizada</option><option value="OTRO">Otro</option></select></label><label class="input-label">Observacion<textarea class="field" name="notes" rows="3" required></textarea></label><button class="primary wide">Guardar justificacion</button></form></div>`;
+	$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';
+}
+async function saveTalonarioJustification(form){
+	const values=Object.fromEntries(new FormData(form));
+	const number=Number(values.number);
+	if(!Number.isInteger(number)||!String(values.notes||'').trim())throw new Error('El motivo y la observacion son obligatorios.');
+	if(!Array.isArray(store.collection.talonarioJustifications))store.collection.talonarioJustifications=[];
+	const existing=store.collection.talonarioJustifications.find(item=>String(item.talonarioId)===String(values.talonarioId)&&Number(item.number)===number&&String(item.status||'').toUpperCase()==='JUSTIFICADA');
+	if(existing)throw new Error('Este consecutivo ya tiene una justificacion.');
+	const justification={id:generateId('TJU',store.collection.talonarioJustifications),talonarioId:String(values.talonarioId),number,reason:String(values.reason),notes:String(values.notes).trim(),status:'JUSTIFICADA',createdAt:new Date().toISOString(),createdBy:'USR-00001'};
+	await persistDomainRecord('talonarioJustifications',justification);
+	store.collection.talonarioJustifications.push(justification);store.save();$('#modal-root').innerHTML='';render();showToast('Consecutivo justificado correctamente.');
 }

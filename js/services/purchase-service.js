@@ -4,6 +4,7 @@ import { createAccountPayable } from './accounts-payable-service.js?v=14';
 import { notifyCreation } from './notification-service.js';
 
 export const purchaseStatuses = ['BORRADOR', 'ORDENADA', 'RECIBIDA', 'CANCELADA'];
+const CENTRAL_TALONARIO_STORE = 'INV CRR 5 3 26';
 
 function findPurchaseRecord(state, purchaseId) {
   return (state.purchases || []).find(item => String(item.id) === String(purchaseId))
@@ -27,6 +28,59 @@ export function createPurchase(state, values) {
 
 export function purchaseTotals(state, purchase) { const items=Array.isArray(purchase?.items)?purchase.items:[]; return items.reduce((totals,item)=>{ const base=Math.max(0,Number(item.quantity||0)*Number(item.unitCost||0)-Number(item.discount||0)); totals.subtotal+=base; totals.discount+=Number(item.discount||0); totals.tax+=base*(Number(item.iva||0)/100); return totals; },{subtotal:0,discount:0,tax:0}); }
 export function purchaseTotal(state, purchase) { const totals=purchaseTotals(state,purchase); return totals.subtotal+totals.tax; }
+
+export function generateTalonariosFromPurchase(state, purchase) {
+  if (!purchase || purchase.purchaseType !== 'TALONARIOS') throw new Error('La compra no corresponde a talonarios.');
+  if (purchase.status !== 'ORDENADA') throw new Error('Solo una compra ordenada puede recibirse.');
+  const type = String(purchase.talonarioType || '').toUpperCase();
+  const count = Number(purchase.talonarioCount);
+  const startNumber = Number(purchase.talonarioStart);
+  const endNumber = Number(purchase.talonarioEnd);
+  const totalNumbers = endNumber - startNumber + 1;
+  if (!['REMISION', 'RECIBO'].includes(type)) throw new Error('El tipo de talonario no es valido.');
+  if (!Number.isInteger(count) || count <= 0 || !Number.isInteger(startNumber) || !Number.isInteger(endNumber) || endNumber < startNumber || totalNumbers % count !== 0) throw new Error('La cantidad y el rango de consecutivos no son compatibles.');
+  const size = totalNumbers / count;
+  const overlap = (state.talonarios || []).some(item => String(item.type).toUpperCase() === type && Number(item.startNumber) <= endNumber && Number(item.endNumber) >= startNumber);
+  if (overlap) throw new Error('El rango de consecutivos se cruza con un talonario existente.');
+  const createdAt = new Date().toISOString();
+  const records = Array.from({ length: count }, (_, index) => {
+    const rangeStart = startNumber + index * size;
+    const rangeEnd = rangeStart + size - 1;
+    return {
+      id: generateId('TAL', state.talonarios || []),
+      type,
+      startNumber: rangeStart,
+      endNumber: rangeEnd,
+      currentNumber: rangeStart,
+      storeId: CENTRAL_TALONARIO_STORE,
+      destinationName: CENTRAL_TALONARIO_STORE,
+      status: 'ALMACENADO',
+      supplierId: purchase.supplierId,
+      supplierName: purchase.supplierName || '',
+      purchaseId: purchase.id,
+      purchaseInvoice: purchase.supplierInvoice || '',
+      unitCost: Number(purchase.talonarioUnitCost || 0),
+      createdAt,
+      stored: true,
+    };
+  });
+  state.talonarios.push(...records);
+  purchase.talonariosGenerated = true;
+  purchase.talonarioSize = size;
+  purchase.receivedAt = createdAt;
+  purchase.status = 'RECIBIDA';
+  return records;
+}
+
+export function receiveTalonarioPurchase(state, purchaseId) {
+  const purchase = findPurchaseRecord(state, purchaseId);
+  if (!purchase) throw new Error('Compra no encontrada.');
+  if (purchase.purchaseType !== 'TALONARIOS') throw new Error('La compra no corresponde a talonarios.');
+  if (purchase.status !== 'ORDENADA') throw new Error('Solo una compra ordenada puede recibirse.');
+  const records = generateTalonariosFromPurchase(state, purchase);
+  createAccountPayable(state, purchase, { totalAmount: purchaseTotal(state, purchase), paymentTerms: purchase.paymentMethod });
+  return { purchase, records };
+}
 
 export function receivePurchase(state, purchaseId) {
   const purchase=findPurchaseRecord(state,purchaseId);

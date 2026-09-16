@@ -74,7 +74,8 @@ export function normalizeSales(items = []) {
 
 export function salesTable(data, sales = normalizeSales(data.sales || data.ventas || [])) {
   const isAdmin = String(JSON.parse(localStorage.getItem('famimuebles-user') || '{}').role || '').toUpperCase() === 'ADMINISTRADOR';
-  return table(['Factura','Factura física','Cliente','Fecha','Metodo de pago','Total','Estado','Acciones'], sales.map(sale => `<tr><td><strong>${sale.id}</strong></td><td>${sale.invoiceNumber || '-'}</td><td>${sale.customer}</td><td>${sale.date}</td><td>${sale.paymentMethod}</td><td><strong>${money(sale.total)}</strong></td><td>${badge(sale.status)}</td><td><button class="table-action" data-action="sale-detail" data-sale-id="${sale.id}">Ver</button>${isAdmin ? `<button class="table-action" data-action="edit-sale" data-sale-id="${sale.id}">Editar</button><button class="table-action danger-text" data-action="delete-sale" data-sale-id="${sale.id}">Eliminar</button>` : ''}</td></tr>`));
+  const orderedSales = [...sales].sort((left, right) => saleTimestamp(right.date) - saleTimestamp(left.date));
+  return table(['Factura','Factura física','Cliente','Fecha','Metodo de pago','Total','Estado','Acciones'], orderedSales.map(sale => `<tr><td><strong>${sale.id}</strong></td><td>${sale.invoiceNumber || '-'}</td><td>${sale.customer}</td><td>${sale.date}</td><td>${sale.paymentMethod}</td><td><strong>${money(sale.total)}</strong></td><td>${badge(sale.status)}</td><td><button class="table-action" data-action="sale-detail" data-sale-id="${sale.id}">Ver</button>${isAdmin ? `<button class="table-action" data-action="edit-sale" data-sale-id="${sale.id}">Editar</button><button class="table-action danger-text" data-action="delete-sale" data-sale-id="${sale.id}">Eliminar</button>` : ''}</td></tr>`));
 }
 
 export function renderVentas(data) {

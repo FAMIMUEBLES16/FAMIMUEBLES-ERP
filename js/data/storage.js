@@ -46,6 +46,7 @@ function createEmptyState() {
     deliveries: [],
     creditNotes: [],
     talonarios: [],
+    talonarioJustifications: [],
     companySettings: [],
     permissionMatrix: [],
     notifications: [],
@@ -85,6 +86,7 @@ function normalizeState(state) {
   base.paymentMethods = Array.isArray(base.paymentMethods) ? base.paymentMethods : [];
   base.permissionMatrix = Array.isArray(base.permissionMatrix) ? base.permissionMatrix : [];
   base.talonarios = Array.isArray(base.talonarios) ? base.talonarios : [];
+  base.talonarioJustifications = Array.isArray(base.talonarioJustifications) ? base.talonarioJustifications : [];
   base.notifications = Array.isArray(base.notifications) ? base.notifications : [];
   base.demoMode = state.demoMode === true;
   return base;
