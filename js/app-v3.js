@@ -702,10 +702,10 @@ document.addEventListener('click',event=>{const action=event.target.closest('[da
 document.addEventListener('click',event=>{const button=event.target.closest('[data-action="credit-payment"]');if(!button)return;const creditId=button.dataset.creditId;setTimeout(()=>{const form=$('#credit-payment-form');if(!form)return;form.dataset.creditId=creditId;form.onsubmit=async submitEvent=>{submitEvent.preventDefault();try{const values=Object.fromEntries(new FormData(form));await persistCatalogRecord('/api/shared-payment',{kind:'credit',id:creditId,amount:Number(values.amount),receiptNumber:values.receiptNumber,method:values.method});const normalized=await hydrateState();if(normalized){store.state=normalized;await hydrateCatalog(store.state);}$('#modal-root').innerHTML='';render();showToast('Abono registrado correctamente en PostgreSQL.');}catch(error){showToast(error.message,'error');}};},0);});
 $('#user-menu').addEventListener('click',async()=>{try{await api.post('/api/auth/logout',{});}finally{localStorage.removeItem('famimuebles-auth-token');localStorage.removeItem('famimuebles-user');location.reload();}});
 document.addEventListener('click',event=>{const action=event.target.closest('[data-action]')?.dataset.action;if(action==='report-generate'){downloadReport(reportDefinition($('#report-type')?.value||'inventory').collection);}if(action==='report'){downloadReport(event.target.closest('[data-report-collection]')?.dataset.reportCollection||'sales');}if(action==='advanced-new'){const collection=event.target.closest('[data-collection]')?.dataset.collection;$('#modal-root').innerHTML=advancedModal(collection,store.collection);$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';}if(action==='advanced-export'){const payload=Object.fromEntries(['returns','supplierReturns','stockCounts','reservations','warranties','damagedStock','cashSessions','cashMovements','bankAccounts','customerAccounts','quotes','orders','deliveries','creditNotes'].map(key=>[key,store.collection[key]||[]]));const link=document.createElement('a');link.href=URL.createObjectURL(new Blob([JSON.stringify(payload,null,2)],{type:'application/json'}));link.download='famimuebles-operaciones.json';link.click();URL.revokeObjectURL(link.href);}});
-async function changeWarrantyStatus(id, action){
+async function changeWarrantyStatus(id, action, localRecibido=''){
 	if(!id)return;
 	try{
-		await api.post(`/api/domain/warranties/${encodeURIComponent(id)}/action`,{action},{headers:{'X-Tenant-ID':activeTenantId()}});
+		await api.post(`/api/domain/warranties/${encodeURIComponent(id)}/action`,{action,localRecibido},{headers:{'X-Tenant-ID':activeTenantId()}});
 		const normalized=await hydrateState();
 		if(normalized){store.state=normalized;await hydrateCatalog(store.state);await hydrateDomainCollections(store.state);}
 		render();
@@ -722,7 +722,8 @@ async function showWarrantyTrace(id){
 		const history=payload.history||[];
 		const date=value=>value?new Date(value).toLocaleString('es-CO'):'-';
 		const text=value=>String(value??'-');
-		$('#modal-root').innerHTML=`<div class="modal-backdrop"><section class="modal"><button type="button" class="modal-close">x</button><p class="eyebrow">TRAZABILIDAD DE GARANTIA</p><h2>${text(warranty.descripcion_recibido||warranty.descripcion)}</h2><p class="muted">Garantia #${text(warranty.id)} · Codigo ${text(warranty.codigo_recibido||warranty.codigo)} · Recibida en ${text(warranty.local_recibido||'-')} el ${date(warranty.fecha_recibido||warranty.fecha)}</p><h3>Historial de la garantia</h3>${table(['Fecha','Evento','Estado','Local','Destino','Cantidad','Usuario','Observacion'],history.map(item=>`<tr><td>${date(item.fecha)}</td><td>${text(item.tipo)}</td><td>${text(item.estado)}</td><td>${text(item.local)}</td><td>${text(item.local_destino)}</td><td>${text(item.cantidad)}</td><td>${text(item.usuario)}</td><td>${text(item.observacion)}</td></tr>`))}<h3>Inventario independiente de garantias</h3>${table(['Local','Codigo','Cantidad','Actualizado'],guaranteeInventory.map(item=>`<tr><td>${text(item.local)}</td><td>${text(item.codigo)}</td><td><strong>${text(item.cantidad)}</strong></td><td>${date(item.actualizado)}</td></tr>`))}<h3>Movimientos registrados</h3>${table(['Fecha','Tipo','Origen','Destino','Cantidad','Responsable'],movements.map(item=>`<tr><td>${date(item.fecha)}</td><td>${text(item.tipo)}</td><td>${text(item.local_origen)}</td><td>${text(item.local_destino)}</td><td>${text(item.cantidad)}</td><td>${text(item.vendedor||item.empleado)}</td></tr>`))}</section></div>`;
+		const emptyRows=(columns,message)=>`<tr><td colspan="${columns}" class="muted">${message}</td></tr>`;
+		$('#modal-root').innerHTML=`<div class="modal-backdrop"><section class="modal"><button type="button" class="modal-close">x</button><p class="eyebrow">TRAZABILIDAD DE GARANTIA</p><h2>${text(warranty.descripcion_recibido||warranty.descripcion)}</h2><p class="muted">Garantia #${text(warranty.id)} · Codigo ${text(warranty.codigo_recibido||warranty.codigo)} · Recibida en ${text(warranty.local_recibido||'-')} el ${date(warranty.fecha_recibido||warranty.fecha)}</p><h3>Historial de la garantia</h3>${table(['Fecha','Evento','Estado','Local','Destino','Cantidad','Usuario','Observacion'],history.length?history.map(item=>`<tr><td>${date(item.fecha)}</td><td>${text(item.tipo)}</td><td>${text(item.estado)}</td><td>${text(item.local)}</td><td>${text(item.local_destino)}</td><td>${text(item.cantidad)}</td><td>${text(item.usuario)}</td><td>${text(item.observacion)}</td></tr>`):emptyRows(8,'No hay eventos registrados') )}<h3>Inventario independiente de garantias</h3>${table(['Local','Codigo','Cantidad','Actualizado'],guaranteeInventory.length?guaranteeInventory.map(item=>`<tr><td>${text(item.local)}</td><td>${text(item.codigo)}</td><td><strong>${text(item.cantidad)}</strong></td><td>${date(item.actualizado)}</td></tr>`):emptyRows(4,'No hay existencias en inventario de garantias') )}<h3>Movimientos registrados</h3>${table(['Fecha','Tipo','Origen','Destino','Cantidad','Responsable'],movements.length?movements.map(item=>`<tr><td>${date(item.fecha)}</td><td>${text(item.tipo)}</td><td>${text(item.local_origen)}</td><td>${text(item.local_destino)}</td><td>${text(item.cantidad)}</td><td>${text(item.vendedor||item.empleado)}</td></tr>`):emptyRows(6,'No hay movimientos generales relacionados') )}</section></div>`;
 		$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';
 	}catch(error){showToast(error.message,'error');}
 }
@@ -738,8 +739,13 @@ document.addEventListener('click',event=>{
 	const action=actionByButton[button.dataset.action];
 	const confirmation={cancel:'¿Cancelar esta garantia?', 'supplier-send':'¿Enviar esta garantia al proveedor?', 'supplier-return':'¿Registrar el regreso de esta garantia desde el proveedor?'}[action];
 	if(confirmation&&!window.confirm(confirmation))return;
+	let localRecibido='';
+	if(action==='receive'){
+		localRecibido=window.prompt('Escribe el local donde se recibe la garantia:', button.closest('tr')?.querySelector('td:nth-child(4)')?.textContent?.trim()||'');
+		if(localRecibido===null||!localRecibido.trim()){showToast('Debes indicar el local de recepcion.','error');return;}
+	}
 	button.disabled=true;
-	changeWarrantyStatus(button.dataset.id,action).finally(()=>{button.disabled=false;});
+	changeWarrantyStatus(button.dataset.id,action,localRecibido.trim()).finally(()=>{button.disabled=false;});
 });
 document.addEventListener('click',event=>{
 	const button=event.target.closest('[data-action="warranty-trace"]');

@@ -374,6 +374,8 @@ def _initialize_postgres_schema() -> _PostgresConnection:
         "CREATE TABLE IF NOT EXISTS inventory_movements (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, product_id TEXT NOT NULL, store_id TEXT NOT NULL, movement_type TEXT NOT NULL, quantity DOUBLE PRECISION NOT NULL, reference_id TEXT, note TEXT NOT NULL DEFAULT '', user_id TEXT, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)",
         "CREATE TABLE IF NOT EXISTS garantia_historial (id BIGSERIAL PRIMARY KEY, garantia_id INTEGER NOT NULL, fecha TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, tipo TEXT NOT NULL, estado TEXT, local TEXT, local_destino TEXT, codigo TEXT, descripcion TEXT, cantidad INTEGER NOT NULL DEFAULT 0, usuario TEXT, observacion TEXT, movimiento_id INTEGER)",
         "CREATE TABLE IF NOT EXISTS inventario_garantias (id BIGSERIAL PRIMARY KEY, local TEXT NOT NULL, codigo TEXT NOT NULL, descripcion TEXT, cantidad INTEGER NOT NULL DEFAULT 0, actualizado TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE (local, codigo))",
+        "INSERT INTO garantia_historial (garantia_id, fecha, tipo, estado, local, codigo, descripcion, cantidad, usuario, observacion) SELECT g.id, COALESCE(g.fecha, CURRENT_TIMESTAMP), 'SALIDA_GARANTIA', g.estado, g.local_origen, g.codigo, g.descripcion, g.cantidad, g.vendedor, 'Historial inicial reconstruido' FROM garantias g WHERE NOT EXISTS (SELECT 1 FROM garantia_historial h WHERE h.garantia_id = g.id AND h.tipo = 'SALIDA_GARANTIA')",
+        "INSERT INTO garantia_historial (garantia_id, fecha, tipo, estado, local, codigo, descripcion, cantidad, usuario, observacion) SELECT g.id, COALESCE(g.fecha_recibido, CURRENT_TIMESTAMP), 'RECIBIDO', g.estado, g.local_recibido, COALESCE(g.codigo_recibido, g.codigo), COALESCE(g.descripcion_recibido, g.descripcion), COALESCE(g.cantidad_recibida, g.cantidad, 0), g.vendedor_recibido, 'Recepcion historica reconstruida' FROM garantias g WHERE UPPER(COALESCE(g.estado, '')) = 'RECIBIDO' AND NOT EXISTS (SELECT 1 FROM garantia_historial h WHERE h.garantia_id = g.id AND h.tipo = 'RECIBIDO')",
         "CREATE TABLE IF NOT EXISTS sales (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, store_id TEXT NOT NULL, customer_id TEXT, invoice_number TEXT NOT NULL DEFAULT '', total DOUBLE PRECISION NOT NULL DEFAULT 0, payment_method TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'COMPLETED', created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)",
         "CREATE TABLE IF NOT EXISTS sale_items (sale_id TEXT NOT NULL, product_id TEXT NOT NULL, quantity DOUBLE PRECISION NOT NULL, unit_price DOUBLE PRECISION NOT NULL, tax_rate DOUBLE PRECISION NOT NULL DEFAULT 0, PRIMARY KEY (sale_id, product_id))",
     ]
@@ -2335,15 +2337,18 @@ class AppHandler(SimpleHTTPRequestHandler):
                             self.send_json(404, {"error": "Garantia no encontrada"})
                             return
                         status = status_by_action[action]
+                        received_local = str(payload.get("localRecibido") or existing["local_recibido"] or "").strip()
+                        if action == "receive" and not received_local:
+                            raise ValueError("Debes indicar el local donde se recibe la garantia")
                         if action == "receive":
-                            database.execute("UPDATE garantias SET estado = %s, fecha_recibido = COALESCE(fecha_recibido, CURRENT_TIMESTAMP) WHERE id = %s", (status, warranty_id))
+                            database.execute("UPDATE garantias SET estado = %s, local_recibido = %s, fecha_recibido = COALESCE(fecha_recibido, CURRENT_TIMESTAMP) WHERE id = %s", (status, received_local, warranty_id))
                         else:
                             database.execute("UPDATE garantias SET estado = %s WHERE id = %s", (status, warranty_id))
                         previous_status = str(existing["estado"] or "").upper()
                         code = existing["codigo_recibido"] or existing["codigo"]
                         description = existing["descripcion_recibido"] or existing["descripcion"] or ""
                         quantity = int(existing["cantidad_recibida"] or existing["cantidad"] or 0)
-                        local = existing["local_recibido"] or ""
+                        local = received_local if action == "receive" else existing["local_recibido"] or ""
                         if action == "receive" and previous_status != "RECIBIDO" and local and code and quantity > 0:
                             database.execute(
                                 """
