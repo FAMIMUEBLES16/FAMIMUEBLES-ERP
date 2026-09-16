@@ -63,11 +63,20 @@ body.dark { --ink:#e8f0f5; --muted:#aabac4; --line:#355163; --surface:#17384e; -
 .modal-backdrop { overflow-y:auto; align-items:start; }
 .modal { max-height:calc(100vh - 40px); overflow-y:auto; }
 .product-results,.customer-results { max-height:clamp(220px, 52vh, 560px); overflow-y:auto; overscroll-behavior:contain; scrollbar-gutter:stable; padding-right:4px; }
+.product-picker-section { padding:16px; }
+.product-picker-section .section-heading { margin-bottom:10px; }
+.product-picker-section .product-results { max-height:214px; }
+.availability-toggle { margin-left:auto; display:flex; align-items:center; gap:6px; color:var(--muted); font-size:11px; white-space:nowrap; }
+.availability-toggle input { accent-color:var(--fm-blue); }
+.billing-main { gap:12px; }
+.billing-section { padding:16px; }
+.billing-summary { padding:16px; }
 .app-main { min-width:0; overflow:hidden; }
 @media(max-width:800px) {
 	.table-wrap { max-height:58vh; margin-right:-2px; }
 	.table-wrap table { min-width:680px; }
 	.product-results,.customer-results { max-height:46vh; }
+	.product-picker-section .product-results { max-height:214px; }
 	.content { min-width:0; overflow:hidden; }
 }
 
