@@ -3,7 +3,6 @@ export const inventoryStatus = getInventoryStatus;
 export function inventoryEntry(state, productId, storeId) { return state.inventoryByStore.find(row => String(row.productId) === String(productId) && String(row.storeId) === String(storeId)); }
 export function inventoryRows(state, storeId = 'all') {
 	const stores = storeId === 'all' ? state.stores : state.stores.filter(store => String(store.id) === String(storeId));
-	if (state.demoMode) return stores.flatMap(store => state.products.map(product => ({ productId:product.id, storeId:store.id, quantity:0, minimumStock:0, minimum:0, product, store, status:'Agotado' })));
 	const inventoryByKey = new Map((state.inventoryByStore || []).map(row => [`${row.productId}::${row.storeId}`, row]));
 	return stores.flatMap(store => state.products.map(product => {
 		const row = inventoryByKey.get(`${product.id}::${store.id}`) || { productId:product.id, storeId:store.id, quantity:0, minimumStock:product.minimum || 0, minimum:product.minimum || 0 };
