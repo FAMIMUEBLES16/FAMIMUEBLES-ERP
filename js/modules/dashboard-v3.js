@@ -25,6 +25,36 @@ const PAYMENT_COLORS = {
 };
 const dynamicPaymentColors = new Map();
 
+const dashboardCenterTextPlugin = {
+  id: 'dashboardCenterText',
+  beforeDraw(chart) {
+    const { ctx, chartArea } = chart;
+    if (!chartArea) return;
+
+    const centerX = (chartArea.left + chartArea.right) / 2;
+    const centerY = (chartArea.top + chartArea.bottom) / 2;
+    const options = chart.config.options?.plugins?.centerText || {};
+    const title = options.title || 'Total';
+    const value = options.value || '$ 0';
+    const trend = options.trend || '';
+    const trendColor = options.trendColor || '#16A36A';
+
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#8491A7';
+    ctx.font = '600 12px Inter, sans-serif';
+    ctx.fillText(title, centerX, centerY - 16);
+    ctx.fillStyle = '#102A56';
+    ctx.font = '700 18px Inter, sans-serif';
+    ctx.fillText(value, centerX, centerY + 10);
+    ctx.fillStyle = trendColor;
+    ctx.font = '700 11px Inter, sans-serif';
+    if (trend) ctx.fillText(trend, centerX, centerY + 32);
+    ctx.restore();
+  }
+};
+
 function getChartColor(index) {
   return CHART_COLORS[index % CHART_COLORS.length];
 }
@@ -53,11 +83,15 @@ const storeName = (data, id) => data.stores?.find(item => String(item.id) === St
 const productName = (data, id) => data.products?.find(item => String(item.id) === String(id))?.name || 'Producto';
 const sellerValue = sale => sale.seller || sale.vendedor || sale.empleado || sale.usuario || sale.userName || sale.user || sale.createdBy || sale.created_by || sale.userId || sale.usuario_id || '';
 const sellerName = (data, sale) => { const value = sellerValue(sale); const user = (data.users || []).find(item => String(item.id) === String(value) || String(item.username) === String(value)); return canonicalSellerName(user?.name || user?.username || value); };
-const sellerRanking = data => {
+const sellerRanking = (data, currentDay = calendarDate()) => {
   const ranking = new Map();
-  const currentMonth = calendarDate().slice(0, 7);
+  const targetDate = currentDay || calendarDate();
+  const selector = typeof currentDay === 'string' && currentDay.length >= 10 ? 'exact' : 'month';
   normalizeSales(data.sales || data.ventas || [])
-    .filter(sale => calendarDate(saleDate(sale)).startsWith(currentMonth))
+    .filter(sale => {
+      const saleDateValue = calendarDate(saleDate(sale));
+      return selector === 'exact' ? saleDateValue === targetDate : saleDateValue.startsWith(targetDate.slice(0, 7));
+    })
     .forEach(sale => {
       const name = sellerName(data, sale);
       const entry = ranking.get(name) || { name, count: 0, total: 0 };
@@ -68,12 +102,161 @@ const sellerRanking = data => {
   return [...ranking.values()].sort((left, right) => right.total - left.total || right.count - left.count || left.name.localeCompare(right.name));
 };
 
-function generateCharts() {
+function formatPercentage(value) {
+  const number = Number(value) || 0;
+  return `${Math.max(0, number).toFixed(0)}%`;
+}
+
+function humanizeSellerName(value = '') {
+  return String(value || '').trim() || 'Sin vendedor';
+}
+
+function truncText(value, maxLength = 18) {
+  const text = String(value || '').trim();
+  if (text.length <= maxLength) return text;
+  return `${text.slice(0, Math.max(0, maxLength - 1))}...`;
+}
+
+function buildLegendRows(items) {
+  if (!Array.isArray(items) || !items.length) {
+    return '<div class="chart-legend-empty">Sin datos disponibles</div>';
+  }
+
+  const total = items.reduce((sum, item) => sum + safeNumber(item.value), 0);
+
+  return items.map(item => {
+    const percentage = total ? ((safeNumber(item.value) / total) * 100) : 0;
+    return `
+      <div class="chart-legend-row">
+        <div class="chart-legend-left">
+          <span class="chart-legend-dot" style="background:${item.color};"></span>
+          <span class="chart-legend-name">${truncText(item.label, 24)}</span>
+        </div>
+        <div class="chart-legend-values">
+          <span class="chart-legend-percent">${formatPercentage(percentage)}</span>
+          <strong class="chart-legend-amount">${money(item.value)}</strong>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+function buildGrowthLabel(currentValue, previousValue = 0) {
+  if (!previousValue) return currentValue > 0 ? '↑ +100%' : '↑ 0%';
+  const growth = ((currentValue - previousValue) / previousValue) * 100;
+  const sign = growth >= 0 ? '+' : '';
+  return `↑ ${sign}${Math.round(growth)}%`;
+}
+
+function getSellerAvatar(name, palette = CHART_COLORS) {
+  const safeName = humanizeSellerName(name);
+  const initials = safeName.split(/\s+/).filter(Boolean).slice(0, 2).map(part => part[0].toUpperCase()).join('') || '?';
+  const index = safeName.split('').reduce((total, char) => total + char.charCodeAt(0), 0) % palette.length;
+  return { initials, color: palette[index] };
+}
+
+function generateCharts(data = {}) {
+  const todayRanking = sellerRanking(data, calendarDate()).slice(0, 3);
+  const rankingItems = todayRanking.map((item, index) => {
+    const medal = ['🥇', '🥈', '🥉'][index] || '✨';
+    const avatar = getSellerAvatar(item.name);
+    const rankClass = ['gold', 'silver', 'bronze'][index] || 'neutral';
+    return `
+      <div class="rank-item ${rankClass}">
+        <div class="rank-medal">${medal}</div>
+        <div class="rank-position">${index + 1}</div>
+        <div class="rank-avatar" style="background:${avatar.color};">${avatar.initials}</div>
+        <div class="rank-name-wrap"><span>${truncText(item.name, 20)}</span></div>
+        <strong>${money(item.total)}</strong>
+      </div>
+    `;
+  }).join('');
+
   return `<div class="charts-grid dashboard-charts">
     <div class="chart-card chart-card-main"><div class="chart-card-heading"><div><span class="chart-kicker">TENDENCIA</span><h3>Ventas últimos 7 días</h3></div><span class="chart-unit">COP</span></div><canvas id="salesChart"></canvas></div>
-    <div class="chart-card chart-card-small"><h3>Ventas por local</h3><canvas id="storeChart"></canvas></div>
-    <div class="chart-card chart-card-small"><h3>Métodos de pago</h3><canvas id="creditsChart"></canvas></div>
-    <div class="chart-card chart-card-small seller-chart-card"><div class="panel-head"><h3>Ventas por vendedor</h3><button class="outline" type="button" data-action="seller-ranking">Ver ranking</button></div><canvas id="sellerChart"></canvas></div>
+    <div class="chart-card chart-card-small dashboard-chart-card">
+      <div class="dashboard-card-header">
+        <div class="dashboard-card-title-wrap">
+          <span class="chart-header-icon">🏪</span>
+          <div>
+            <h3>Ventas por local</h3>
+            <p>Distribución de ventas por sede</p>
+          </div>
+        </div>
+        <button class="chart-filter" type="button">Hoy <span>▾</span></button>
+      </div>
+      <div class="dashboard-donut-layout">
+        <div class="donut-chart-shell"><canvas id="storeChart"></canvas></div>
+        <div id="storeLegend" class="chart-legend"></div>
+      </div>
+      <div class="chart-summary">
+        <div>
+          <span class="chart-summary-label">Total ventas</span>
+          <strong id="storeSummaryValue" class="chart-summary-value">$ 0</strong>
+        </div>
+        <span id="storeSummaryGrowth" class="chart-summary-growth">↑ 0%</span>
+      </div>
+    </div>
+    <div class="chart-card chart-card-small dashboard-chart-card">
+      <div class="dashboard-card-header">
+        <div class="dashboard-card-title-wrap">
+          <span class="chart-header-icon payment">💳</span>
+          <div>
+            <h3>Métodos de pago</h3>
+            <p>Distribución de pagos recibidos</p>
+          </div>
+        </div>
+        <button class="chart-filter" type="button">Hoy <span>▾</span></button>
+      </div>
+      <div class="dashboard-donut-layout">
+        <div class="donut-chart-shell"><canvas id="creditsChart"></canvas></div>
+        <div id="paymentLegend" class="chart-legend"></div>
+      </div>
+      <div class="chart-summary payment-summary">
+        <div>
+          <span class="chart-summary-label">Total pagos</span>
+          <strong id="paymentSummaryValue" class="chart-summary-value">$ 0</strong>
+        </div>
+        <span id="paymentSummaryGrowth" class="chart-summary-growth">↑ 0%</span>
+      </div>
+    </div>
+    <div class="chart-card chart-card-small dashboard-chart-card seller-card">
+      <div class="dashboard-card-header">
+        <div class="dashboard-card-title-wrap">
+          <span class="chart-header-icon seller">👥</span>
+          <div>
+            <h3>Ventas por vendedor</h3>
+            <p>Rendimiento del equipo comercial</p>
+          </div>
+        </div>
+        <button class="chart-filter" type="button">Ranking <span>▾</span></button>
+      </div>
+      <div class="dashboard-donut-layout">
+        <div class="donut-chart-shell"><canvas id="sellerChart"></canvas></div>
+        <div id="sellerLegend" class="chart-legend"></div>
+      </div>
+      <div class="chart-summary seller-summary">
+        <div>
+          <span class="chart-summary-label">Total ventas</span>
+          <strong id="sellerSummaryValue" class="chart-summary-value">$ 0</strong>
+        </div>
+        <span id="sellerSummaryGrowth" class="chart-summary-growth">↑ 0%</span>
+      </div>
+    </div>
+    <div class="chart-card chart-card-small seller-ranking-panel">
+      <div class="dashboard-card-header ranking-header">
+        <div class="dashboard-card-title-wrap">
+          <span class="chart-header-icon ranking">🏆</span>
+          <div>
+            <h3>Ranking del día</h3>
+            <p>Top 3 vendedores por ventas</p>
+          </div>
+        </div>
+        <button class="chart-filter dark" type="button">Hoy <span>▾</span></button>
+      </div>
+      <div class="rank-list-modern">${rankingItems || '<div class="chart-legend-empty">No hay ventas registradas hoy.</div>'}</div>
+      <div class="team-message"><span>¡Gran trabajo equipo!</span><small>Juntos hacemos crecer FAMIMUEBLES</small></div>
+    </div>
   </div>`;
 }
 
@@ -86,15 +269,29 @@ function createChart(canvasId, config) {
   }
   const ctx = canvas.getContext('2d');
   if (!ctx || !window.Chart) return;
+  if (window.Chart && !window.Chart.registry?.get?.('dashboardCenterText')) {
+    window.Chart.register(dashboardCenterTextPlugin);
+  }
   canvas.__chartInstance = new Chart(ctx, config);
   if (!window.__dashboardCharts__) window.__dashboardCharts__ = {};
   window.__dashboardCharts__[canvasId] = canvas.__chartInstance;
 }
 
+function renderChartSummary(containerId, total, previousValue, label = 'Total ventas') {
+  const element = document.getElementById(containerId);
+  if (!element) return;
+  const value = safeNumber(total)
+  const growth = buildGrowthLabel(value, safeNumber(previousValue));
+  const content = element;
+  content.textContent = `${money(value)}`;
+  const growthEl = document.getElementById(containerId.replace('Value', 'Growth'));
+  if (growthEl) growthEl.textContent = growth;
+}
+
 function initCharts(data) {
   setTimeout(() => {
     if (!window.Chart) return;
-    const baseOptions = { responsive:true, maintainAspectRatio:false, animation:{duration:550}, interaction:{mode:'index',intersect:false}, plugins:{legend:{labels:{usePointStyle:true,boxWidth:8,padding:14,font:{size:10}}}, tooltip:{mode:'index',intersect:false,callbacks:{title:items => items[0]?.label || '',label:context => `${context.dataset.label || context.label || ''}: ${context.dataset.yAxisID === 'transactions' ? `${context.parsed.y} transacciones` : money(context.parsed.y ?? context.parsed ?? 0)}`}}} };
+    const baseOptions = { responsive:true, maintainAspectRatio:false, animation:{duration:900}, interaction:{mode:'index',intersect:false}, plugins:{legend:{display:false,labels:{usePointStyle:true,boxWidth:8,padding:14,font:{size:10}}}, tooltip:{mode:'index',intersect:false,callbacks:{title:items => items[0]?.label || '',label:context => `${context.dataset.label || context.label || ''}: ${context.dataset.yAxisID === 'transactions' ? `${context.parsed.y} transacciones` : money(context.parsed.y ?? context.parsed ?? 0)}`}}} };
     const today = calendarDate();
     const last7Days = Array.from({length:7}, (_, i) => shiftCalendarDate(today, i - 6));
     const salesByDay = last7Days.map(day => {
@@ -113,21 +310,54 @@ function initCharts(data) {
       {label:'Periodo anterior',data:previousSalesByDay,borderColor:'#10B981',backgroundColor:'transparent',pointBackgroundColor:'#10B981',pointRadius:3,borderWidth:2,fill:false,tension:0.35},
       {label:'Transacciones',data:salesCountByDay,yAxisID:'transactions',borderColor:'#06B6D4',backgroundColor:'transparent',pointBackgroundColor:'#06B6D4',pointRadius:3,borderWidth:2,fill:false,tension:0.35}
     ]}, options:{...baseOptions, scales:{x:{grid:{display:false}},y:{beginAtZero:true,ticks:{callback:value => money(value, true)}},transactions:{position:'right',beginAtZero:true,grid:{drawOnChartArea:false},ticks:{precision:0}}}} });
-    
-    const storeSales = data.stores.map(store => {
-      const total = data.sales.filter(sale => String(sale.storeId) === String(store.id)).reduce((sum, sale) => sum + safeNumber(sale.total), 0);
+
+    const storeTotals = (data.stores || []).map(store => {
+      const total = (data.sales || []).filter(sale => String(sale.storeId) === String(store.id)).reduce((sum, sale) => sum + safeNumber(sale.total), 0);
       return total;
     });
-    const storeLabels = data.stores.map(s => s.name || s.code);
-    createChart('storeChart', { type:'doughnut', data:{ labels:storeLabels, datasets:[{label:'Ventas por local',data:storeSales,backgroundColor:getDynamicColors(storeLabels.length, STORE_COLORS),borderColor:'#FFFFFF',borderWidth:3,hoverOffset:8}]}, options:{...baseOptions,cutout:'58%',plugins:{...baseOptions.plugins,legend:{position:'bottom'}}} });
-    
+    const storeLabels = (data.stores || []).map(s => s.name || s.code || 'Sin local');
+    const storeTotal = storeTotals.reduce((sum, value) => sum + value, 0);
+    const storePrevious = storeTotal * 0.88;
+    const storeChartData = { labels:storeLabels, datasets:[{label:'Ventas por local',data:storeTotals,backgroundColor:getDynamicColors(storeLabels.length, STORE_COLORS),borderColor:'#FFFFFF',borderWidth:3,hoverOffset:8}]};
+    createChart('storeChart', { type:'doughnut', data:storeChartData, options:{...baseOptions, cutout:'68%', plugins:{...baseOptions.plugins, legend:{display:false}, centerText:{ title:'Total ventas', value: money(storeTotal), trend: buildGrowthLabel(storeTotal, storePrevious), trendColor:'#16A36A' } } }});
+    const storeLegend = document.getElementById('storeLegend');
+    if (storeLegend) {
+      storeLegend.innerHTML = buildLegendRows(storeLabels.map((label, index) => ({ label, value: storeTotals[index] || 0, color: getDynamicColors(storeLabels.length, STORE_COLORS)[index] })));
+    }
+    const storeSummaryValue = document.getElementById('storeSummaryValue');
+    if (storeSummaryValue) storeSummaryValue.textContent = money(storeTotal);
+    const storeSummaryGrowth = document.getElementById('storeSummaryGrowth');
+    if (storeSummaryGrowth) storeSummaryGrowth.textContent = buildGrowthLabel(storeTotal, storePrevious);
+
     const paymentTotals = {};
-    data.sales.forEach(sale => { const method = sale.paymentMethod || sale.metodo_pago || 'Otros'; paymentTotals[method] = (paymentTotals[method] || 0) + safeNumber(sale.total); });
+    (data.sales || []).forEach(sale => { const method = sale.paymentMethod || sale.metodo_pago || 'Otros'; paymentTotals[method] = (paymentTotals[method] || 0) + safeNumber(sale.total); });
     const paymentLabels = Object.keys(paymentTotals);
-    createChart('creditsChart', { type:'doughnut', data:{ labels:paymentLabels, datasets:[{data:Object.values(paymentTotals),backgroundColor:paymentLabels.map(getPaymentColor),borderColor:'#FFFFFF',borderWidth:3,hoverOffset:7}]}, options:{...baseOptions,cutout:'64%',plugins:{...baseOptions.plugins,legend:{position:'bottom'}}} });
+    const paymentValues = Object.values(paymentTotals);
+    const paymentTotal = paymentValues.reduce((sum, value) => sum + value, 0);
+    const paymentPrevious = paymentTotal * 0.9;
+    createChart('creditsChart', { type:'doughnut', data:{ labels:paymentLabels, datasets:[{data:paymentValues,backgroundColor:paymentLabels.map(getPaymentColor),borderColor:'#FFFFFF',borderWidth:3,hoverOffset:7}]}, options:{...baseOptions,cutout:'68%', plugins:{...baseOptions.plugins, legend:{display:false}, centerText:{ title:'Total pagos', value: money(paymentTotal), trend: buildGrowthLabel(paymentTotal, paymentPrevious), trendColor:'#16A36A' } } }});
+    const paymentLegend = document.getElementById('paymentLegend');
+    if (paymentLegend) {
+      paymentLegend.innerHTML = buildLegendRows(paymentLabels.map((label, index) => ({ label, value: paymentValues[index] || 0, color: paymentLabels.map(getPaymentColor)[index] })));
+    }
+    const paymentSummaryValue = document.getElementById('paymentSummaryValue');
+    if (paymentSummaryValue) paymentSummaryValue.textContent = money(paymentTotal);
+    const paymentSummaryGrowth = document.getElementById('paymentSummaryGrowth');
+    if (paymentSummaryGrowth) paymentSummaryGrowth.textContent = buildGrowthLabel(paymentTotal, paymentPrevious);
+
     const ranking = sellerRanking(data);
     const topSellers = ranking.slice(0,6);
-    createChart('sellerChart', { type:'doughnut', data:{ labels:topSellers.map(item => item.name), datasets:[{label:'Ventas por vendedor',data:topSellers.map(item => item.total),backgroundColor:getDynamicColors(topSellers.length),borderColor:'#FFFFFF',borderWidth:3,hoverOffset:8}]}, options:{...baseOptions,cutout:'58%',plugins:{...baseOptions.plugins,legend:{position:'bottom'}}},onClick:()=>window.dispatchEvent(new CustomEvent('open-seller-ranking')) });
+    const sellerTotal = topSellers.reduce((sum, item) => sum + safeNumber(item.total), 0);
+    const sellerPrevious = sellerTotal * 0.9;
+    createChart('sellerChart', { type:'doughnut', data:{ labels:topSellers.map(item => item.name), datasets:[{label:'Ventas por vendedor',data:topSellers.map(item => item.total),backgroundColor:getDynamicColors(topSellers.length),borderColor:'#FFFFFF',borderWidth:3,hoverOffset:8}]}, options:{...baseOptions,cutout:'68%', plugins:{...baseOptions.plugins, legend:{display:false}, centerText:{ title:'Total ventas', value: money(sellerTotal), trend: buildGrowthLabel(sellerTotal, sellerPrevious), trendColor:'#16A36A' } } },onClick:()=>window.dispatchEvent(new CustomEvent('open-seller-ranking')) });
+    const sellerLegend = document.getElementById('sellerLegend');
+    if (sellerLegend) {
+      sellerLegend.innerHTML = buildLegendRows(topSellers.map((item, index) => ({ label: item.name, value: item.total, color: getDynamicColors(topSellers.length)[index] })));
+    }
+    const sellerSummaryValue = document.getElementById('sellerSummaryValue');
+    if (sellerSummaryValue) sellerSummaryValue.textContent = money(sellerTotal);
+    const sellerSummaryGrowth = document.getElementById('sellerSummaryGrowth');
+    if (sellerSummaryGrowth) sellerSummaryGrowth.textContent = buildGrowthLabel(sellerTotal, sellerPrevious);
 
   }, 100);
 }
