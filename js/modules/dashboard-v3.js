@@ -86,9 +86,10 @@ const sellerName = (data, sale) => { const value = sellerValue(sale); const user
 const sellerRanking = (data, currentDay = calendarDate()) => {
   const ranking = new Map();
   const targetDate = currentDay || calendarDate();
-  const selector = typeof currentDay === 'string' && currentDay.length >= 10 ? 'exact' : 'month';
+  const selector = currentDay === null ? 'all' : typeof currentDay === 'string' && currentDay.length >= 10 ? 'exact' : 'month';
   normalizeSales(data.sales || data.ventas || [])
     .filter(sale => {
+      if (selector === 'all') return true;
       const saleDateValue = calendarDate(saleDate(sale));
       return selector === 'exact' ? saleDateValue === targetDate : saleDateValue.startsWith(targetDate.slice(0, 7));
     })
@@ -155,6 +156,22 @@ function getSellerAvatar(name, palette = CHART_COLORS) {
   return { initials, color: palette[index] };
 }
 
+function periodOptions(selected = 'today') {
+  return `<select class="chart-filter" data-chart-filter="true" aria-label="Filtrar periodo">
+    <option value="today" ${selected === 'today' ? 'selected' : ''}>Hoy</option>
+    <option value="week" ${selected === 'week' ? 'selected' : ''}>Semana</option>
+    <option value="month" ${selected === 'month' ? 'selected' : ''}>Mes</option>
+  </select>`;
+}
+
+function periodSales(sales, period, today = calendarDate()) {
+  const start = period === 'today' ? today : period === 'week' ? shiftCalendarDate(today, -6) : `${today.slice(0, 7)}-01`;
+  return sales.filter(sale => {
+    const date = calendarDate(saleDate(sale));
+    return date >= start && date <= today;
+  });
+}
+
 function generateCharts(data = {}) {
   const todayRanking = sellerRanking(data, calendarDate()).slice(0, 3);
   const rankingItems = todayRanking.map((item, index) => {
@@ -183,7 +200,7 @@ function generateCharts(data = {}) {
             <p>Distribución de ventas por sede</p>
           </div>
         </div>
-        <button class="chart-filter" type="button">Hoy <span>▾</span></button>
+        ${periodOptions()}
       </div>
       <div class="dashboard-donut-layout">
         <div class="donut-chart-shell"><canvas id="storeChart"></canvas></div>
@@ -206,7 +223,7 @@ function generateCharts(data = {}) {
             <p>Distribución de pagos recibidos</p>
           </div>
         </div>
-        <button class="chart-filter" type="button">Hoy <span>▾</span></button>
+        ${periodOptions()}
       </div>
       <div class="dashboard-donut-layout">
         <div class="donut-chart-shell"><canvas id="creditsChart"></canvas></div>
@@ -229,7 +246,7 @@ function generateCharts(data = {}) {
             <p>Rendimiento del equipo comercial</p>
           </div>
         </div>
-        <button class="chart-filter" type="button">Ranking <span>▾</span></button>
+        ${periodOptions()}
       </div>
       <div class="dashboard-donut-layout">
         <div class="donut-chart-shell"><canvas id="sellerChart"></canvas></div>
@@ -252,9 +269,9 @@ function generateCharts(data = {}) {
             <p>Top 3 vendedores por ventas</p>
           </div>
         </div>
-        <button class="chart-filter dark" type="button">Hoy <span>▾</span></button>
+        ${periodOptions()}
       </div>
-      <div class="rank-list-modern">${rankingItems || '<div class="chart-legend-empty">No hay ventas registradas hoy.</div>'}</div>
+      <div class="rank-list-modern" data-ranking-list="true">${rankingItems || '<div class="chart-legend-empty">No hay ventas registradas hoy.</div>'}</div>
       <div class="team-message"><span>¡Gran trabajo equipo!</span><small>Juntos hacemos crecer FAMIMUEBLES</small></div>
     </div>
   </div>`;
@@ -311,53 +328,73 @@ function initCharts(data) {
       {label:'Transacciones',data:salesCountByDay,yAxisID:'transactions',borderColor:'#06B6D4',backgroundColor:'transparent',pointBackgroundColor:'#06B6D4',pointRadius:3,borderWidth:2,fill:false,tension:0.35}
     ]}, options:{...baseOptions, scales:{x:{grid:{display:false}},y:{beginAtZero:true,ticks:{callback:value => money(value, true)}},transactions:{position:'right',beginAtZero:true,grid:{drawOnChartArea:false},ticks:{precision:0}}}} });
 
-    const storeTotals = (data.stores || []).map(store => {
-      const total = (data.sales || []).filter(sale => String(sale.storeId) === String(store.id)).reduce((sum, sale) => sum + safeNumber(sale.total), 0);
-      return total;
-    });
     const storeLabels = (data.stores || []).map(s => s.name || s.code || 'Sin local');
-    const storeTotal = storeTotals.reduce((sum, value) => sum + value, 0);
-    const storePrevious = storeTotal * 0.88;
-    const storeChartData = { labels:storeLabels, datasets:[{label:'Ventas por local',data:storeTotals,backgroundColor:getDynamicColors(storeLabels.length, STORE_COLORS),borderColor:'#FFFFFF',borderWidth:3,hoverOffset:8}]};
-    createChart('storeChart', { type:'doughnut', data:storeChartData, options:{...baseOptions, cutout:'68%', plugins:{...baseOptions.plugins, legend:{display:false}, centerText:{ title:'Total ventas', value: money(storeTotal), trend: buildGrowthLabel(storeTotal, storePrevious), trendColor:'#16A36A' } } }});
-    const storeLegend = document.getElementById('storeLegend');
-    if (storeLegend) {
-      storeLegend.innerHTML = buildLegendRows(storeLabels.map((label, index) => ({ label, value: storeTotals[index] || 0, color: getDynamicColors(storeLabels.length, STORE_COLORS)[index] })));
-    }
-    const storeSummaryValue = document.getElementById('storeSummaryValue');
-    if (storeSummaryValue) storeSummaryValue.textContent = money(storeTotal);
-    const storeSummaryGrowth = document.getElementById('storeSummaryGrowth');
-    if (storeSummaryGrowth) storeSummaryGrowth.textContent = buildGrowthLabel(storeTotal, storePrevious);
+    const allSales = data.sales || [];
+    const renderRanking = period => {
+      const filtered = periodSales(allSales, period, today);
+      const ranking = sellerRanking({ ...data, sales: filtered }, null).slice(0, 3);
+      const rankingList = document.querySelector('[data-ranking-list]');
+      if (!rankingList) return;
+      rankingList.innerHTML = ranking.map((item, index) => {
+        const medal = ['🥇', '🥈', '🥉'][index] || '✨';
+        const avatar = getSellerAvatar(item.name);
+        const rankClass = ['gold', 'silver', 'bronze'][index] || 'neutral';
+        return `<div class="rank-item ${rankClass}"><div class="rank-medal">${medal}</div><div class="rank-position">${index + 1}</div><div class="rank-avatar" style="background:${avatar.color};">${avatar.initials}</div><div class="rank-name-wrap"><span>${truncText(item.name, 20)}</span></div><strong>${money(item.total)}</strong></div>`;
+      }).join('') || '<div class="chart-legend-empty">No hay ventas en este periodo.</div>';
+    };
+    const renderPeriod = (period, target = 'all') => {
+      const filteredSales = periodSales(allSales, period, today);
+      const previousStart = period === 'today' ? shiftCalendarDate(today, -1) : period === 'week' ? shiftCalendarDate(today, -13) : shiftCalendarDate(`${today.slice(0, 7)}-01`, -1);
+      const previousSales = period === 'month'
+        ? allSales.filter(sale => calendarDate(saleDate(sale)).startsWith(previousStart.slice(0, 7)))
+        : allSales.filter(sale => calendarDate(saleDate(sale)) >= previousStart && calendarDate(saleDate(sale)) < (period === 'today' ? today : shiftCalendarDate(today, -6)));
+      const previousTotal = previousSales.reduce((sum, sale) => sum + safeNumber(sale.total), 0);
+      if (target === 'all' || target === 'store') {
+      const storeTotals = (data.stores || []).map(store => filteredSales.filter(sale => String(sale.storeId) === String(store.id)).reduce((sum, sale) => sum + safeNumber(sale.total), 0));
+      const storeTotal = storeTotals.reduce((sum, value) => sum + value, 0);
+      createChart('storeChart', { type:'doughnut', data:{ labels:storeLabels, datasets:[{label:'Ventas por local',data:storeTotals,backgroundColor:getDynamicColors(storeLabels.length, STORE_COLORS),borderColor:'#FFFFFF',borderWidth:3,hoverOffset:8}]}, options:{...baseOptions,cutout:'68%',plugins:{...baseOptions.plugins,legend:{display:false},centerText:{title:'Total ventas',value:money(storeTotal),trend:buildGrowthLabel(storeTotal, previousTotal),trendColor:'#16A36A'}}}});
+      const storeLegend = document.getElementById('storeLegend');
+      if (storeLegend) storeLegend.innerHTML = buildLegendRows(storeLabels.map((label, index) => ({ label, value: storeTotals[index] || 0, color: getDynamicColors(storeLabels.length, STORE_COLORS)[index] })));
+      const storeSummaryValue = document.getElementById('storeSummaryValue');
+      if (storeSummaryValue) storeSummaryValue.textContent = money(storeTotal);
+      const storeSummaryGrowth = document.getElementById('storeSummaryGrowth');
+      if (storeSummaryGrowth) storeSummaryGrowth.textContent = buildGrowthLabel(storeTotal, previousTotal);
+      }
 
-    const paymentTotals = {};
-    (data.sales || []).forEach(sale => { const method = sale.paymentMethod || sale.metodo_pago || 'Otros'; paymentTotals[method] = (paymentTotals[method] || 0) + safeNumber(sale.total); });
-    const paymentLabels = Object.keys(paymentTotals);
-    const paymentValues = Object.values(paymentTotals);
-    const paymentTotal = paymentValues.reduce((sum, value) => sum + value, 0);
-    const paymentPrevious = paymentTotal * 0.9;
-    createChart('creditsChart', { type:'doughnut', data:{ labels:paymentLabels, datasets:[{data:paymentValues,backgroundColor:paymentLabels.map(getPaymentColor),borderColor:'#FFFFFF',borderWidth:3,hoverOffset:7}]}, options:{...baseOptions,cutout:'68%', plugins:{...baseOptions.plugins, legend:{display:false}, centerText:{ title:'Total pagos', value: money(paymentTotal), trend: buildGrowthLabel(paymentTotal, paymentPrevious), trendColor:'#16A36A' } } }});
-    const paymentLegend = document.getElementById('paymentLegend');
-    if (paymentLegend) {
-      paymentLegend.innerHTML = buildLegendRows(paymentLabels.map((label, index) => ({ label, value: paymentValues[index] || 0, color: paymentLabels.map(getPaymentColor)[index] })));
-    }
-    const paymentSummaryValue = document.getElementById('paymentSummaryValue');
-    if (paymentSummaryValue) paymentSummaryValue.textContent = money(paymentTotal);
-    const paymentSummaryGrowth = document.getElementById('paymentSummaryGrowth');
-    if (paymentSummaryGrowth) paymentSummaryGrowth.textContent = buildGrowthLabel(paymentTotal, paymentPrevious);
+      if (target === 'all' || target === 'payment') {
+      const paymentTotals = {};
+      filteredSales.forEach(sale => { const method = sale.paymentMethod || sale.metodo_pago || 'Otros'; paymentTotals[method] = (paymentTotals[method] || 0) + safeNumber(sale.total); });
+      const paymentLabels = Object.keys(paymentTotals);
+      const paymentValues = Object.values(paymentTotals);
+      const paymentTotal = paymentValues.reduce((sum, value) => sum + value, 0);
+      createChart('creditsChart', { type:'doughnut', data:{labels:paymentLabels,datasets:[{data:paymentValues,backgroundColor:paymentLabels.map(getPaymentColor),borderColor:'#FFFFFF',borderWidth:3,hoverOffset:7}]}, options:{...baseOptions,cutout:'68%',plugins:{...baseOptions.plugins,legend:{display:false},centerText:{title:'Total pagos',value:money(paymentTotal),trend:buildGrowthLabel(paymentTotal,previousTotal),trendColor:'#16A36A'}}}});
+      const paymentLegend = document.getElementById('paymentLegend');
+      if (paymentLegend) paymentLegend.innerHTML = buildLegendRows(paymentLabels.map((label, index) => ({ label, value: paymentValues[index] || 0, color: paymentLabels.map(getPaymentColor)[index] })));
+      const paymentSummaryValue = document.getElementById('paymentSummaryValue');
+      if (paymentSummaryValue) paymentSummaryValue.textContent = money(paymentTotal);
+      const paymentSummaryGrowth = document.getElementById('paymentSummaryGrowth');
+      if (paymentSummaryGrowth) paymentSummaryGrowth.textContent = buildGrowthLabel(paymentTotal, previousTotal);
+      }
 
-    const ranking = sellerRanking(data);
-    const topSellers = ranking.slice(0,6);
-    const sellerTotal = topSellers.reduce((sum, item) => sum + safeNumber(item.total), 0);
-    const sellerPrevious = sellerTotal * 0.9;
-    createChart('sellerChart', { type:'doughnut', data:{ labels:topSellers.map(item => item.name), datasets:[{label:'Ventas por vendedor',data:topSellers.map(item => item.total),backgroundColor:getDynamicColors(topSellers.length),borderColor:'#FFFFFF',borderWidth:3,hoverOffset:8}]}, options:{...baseOptions,cutout:'68%', plugins:{...baseOptions.plugins, legend:{display:false}, centerText:{ title:'Total ventas', value: money(sellerTotal), trend: buildGrowthLabel(sellerTotal, sellerPrevious), trendColor:'#16A36A' } } },onClick:()=>window.dispatchEvent(new CustomEvent('open-seller-ranking')) });
-    const sellerLegend = document.getElementById('sellerLegend');
-    if (sellerLegend) {
-      sellerLegend.innerHTML = buildLegendRows(topSellers.map((item, index) => ({ label: item.name, value: item.total, color: getDynamicColors(topSellers.length)[index] })));
-    }
-    const sellerSummaryValue = document.getElementById('sellerSummaryValue');
-    if (sellerSummaryValue) sellerSummaryValue.textContent = money(sellerTotal);
-    const sellerSummaryGrowth = document.getElementById('sellerSummaryGrowth');
-    if (sellerSummaryGrowth) sellerSummaryGrowth.textContent = buildGrowthLabel(sellerTotal, sellerPrevious);
+      if (target === 'all' || target === 'seller') {
+      const ranking = sellerRanking({ ...data, sales: filteredSales }, null);
+      const topSellers = ranking.slice(0, 6);
+      const sellerTotal = topSellers.reduce((sum, item) => sum + safeNumber(item.total), 0);
+      createChart('sellerChart', { type:'doughnut', data:{labels:topSellers.map(item => item.name),datasets:[{label:'Ventas por vendedor',data:topSellers.map(item => item.total),backgroundColor:getDynamicColors(topSellers.length),borderColor:'#FFFFFF',borderWidth:3,hoverOffset:8}]}, options:{...baseOptions,cutout:'68%',plugins:{...baseOptions.plugins,legend:{display:false},centerText:{title:'Total ventas',value:money(sellerTotal),trend:buildGrowthLabel(sellerTotal,previousTotal),trendColor:'#16A36A'}}},onClick:()=>window.dispatchEvent(new CustomEvent('open-seller-ranking'))});
+      const sellerLegend = document.getElementById('sellerLegend');
+      if (sellerLegend) sellerLegend.innerHTML = buildLegendRows(topSellers.map((item, index) => ({label:item.name,value:item.total,color:getDynamicColors(topSellers.length)[index]})));
+      const sellerSummaryValue = document.getElementById('sellerSummaryValue');
+      if (sellerSummaryValue) sellerSummaryValue.textContent = money(sellerTotal);
+      const sellerSummaryGrowth = document.getElementById('sellerSummaryGrowth');
+      if (sellerSummaryGrowth) sellerSummaryGrowth.textContent = buildGrowthLabel(sellerTotal, previousTotal);
+      }
+      if (target === 'all' || target === 'ranking') renderRanking(period);
+    };
+    renderPeriod('today');
+    document.querySelectorAll('[data-chart-filter]').forEach((filter, index) => {
+      const targets = ['store', 'payment', 'seller', 'ranking'];
+      filter.addEventListener('change', event => renderPeriod(event.target.value, targets[index] || 'all'));
+    });
 
   }, 100);
 }
