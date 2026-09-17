@@ -100,7 +100,7 @@ def publish_public_version() -> dict:
     status = run_git("status", "--porcelain", "--", *PUBLISHABLE_FILES)
     if not status:
         return {"ok": True, "published": False, "message": "No hay cambios funcionales pendientes."}
-    run_git("add", "-u", "--", *PUBLISHABLE_FILES)
+    run_git("add", "--", *PUBLISHABLE_FILES)
     changed = run_git("diff", "--cached", "--name-only")
     if not changed:
         return {"ok": True, "published": False, "message": "No hay archivos funcionales para publicar."}
