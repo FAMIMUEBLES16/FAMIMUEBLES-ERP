@@ -2,6 +2,8 @@ $ErrorActionPreference = 'Stop'
 
 $ngrok = 'C:\Users\mijad\AppData\Local\Microsoft\WinGet\Packages\Ngrok.Ngrok_Microsoft.Winget.Source_8wekyb3d8bbwe\ngrok.exe'
 $publicUrl = 'https://crouch-untitled-harness.ngrok-free.dev/api/health'
+$root = 'C:\Users\mijad\OneDrive\Documentos\FAMIMUEBLES ERP'
+$serverLauncher = Join-Path $root 'start-erp-server.cmd'
 $log = 'C:\Users\mijad\OneDrive\Documentos\FAMIMUEBLES ERP\logs\ngrok-watchdog.log'
 $env:NGROK_AUTHTOKEN = $env:NGROK_AUTHTOKEN
 
@@ -32,12 +34,26 @@ function StartNgrok {
     Start-Sleep -Seconds 5
 }
 
+function EnsureServer {
+    $listener = Get-NetTCPConnection -LocalPort 8024 -State Listen -ErrorAction SilentlyContinue
+    if (-not $listener) {
+        Start-Process -FilePath $serverLauncher -WorkingDirectory $root -WindowStyle Hidden
+        for ($i = 0; $i -lt 30; $i++) {
+            if (Get-NetTCPConnection -LocalPort 8024 -State Listen -ErrorAction SilentlyContinue) { return }
+            Start-Sleep -Seconds 1
+        }
+        throw 'El servidor ERP no inicio en el puerto 8024.'
+    }
+}
+
 EnsureLogDirectory
 
 while ($true) {
     try {
-        $response = Invoke-WebRequest -Uri $publicUrl -UseBasicParsing -TimeoutSec 15
-        if ($response.StatusCode -ge 200 -and $response.StatusCode -lt 400) {
+        EnsureServer
+        $response = Invoke-WebRequest -Uri $publicUrl -Headers @{'ngrok-skip-browser-warning' = 'true'} -UseBasicParsing -TimeoutSec 15
+        $health = $response.Content | ConvertFrom-Json
+        if ($response.StatusCode -eq 200 -and $health.ok -eq $true -and $health.backend -eq 'postgres') {
             Write-Host "[$((Get-Date).ToString('yyyy-MM-dd HH:mm:ss'))] URL publica OK"
         }
         else {
