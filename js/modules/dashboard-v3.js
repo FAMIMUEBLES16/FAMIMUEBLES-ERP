@@ -2,6 +2,7 @@ import { money, page } from '../components/tables.js';
 import { icons } from '../components/sidebar.js';
 import { calendarDate, formatDate, shiftCalendarDate } from '../utils/dates.js';
 import { canonicalSellerName, normalizeSales } from './ventas.js';
+import { renderTalonariosSummary } from './talonarios.js?v=4';
 
 const CHART_COLORS = [
   '#2563EB', '#10B981', '#F59E0B', '#EF4444',
@@ -416,7 +417,12 @@ export function renderDashboard(data) {
   sales.forEach(sale => (sale.items || []).forEach(item => { const id = item.productId || item.producto_id; topProducts[id] = (topProducts[id] || 0) + safeNumber(item.quantity); }));
   const best = Object.entries(topProducts).sort((a, b) => b[1] - a[1]).slice(0, 5);
   const recent = [...sales].sort((a, b) => saleDate(b).localeCompare(saleDate(a))).slice(0, 5);
-  const due = (data.installments || []).filter(item => item.status !== 'PAGADA').slice(0, 4);
+  const due = (data.installments || []).filter(item => {
+    if (item.status === 'PAGADA') return false;
+    const customer = String(item.customerName || item.customer || item.cliente || '').trim();
+    const amount = safeNumber(item.amount || item.installmentAmount || item.valor_programado);
+    return customer && customer !== 'Cliente' && amount > 0;
+  }).slice(0, 4);
   const chartsHtml = generateCharts(data);
   initCharts({...data, sales});
   return page('RESUMEN GENERAL','Dashboard','<button class="primary" data-action="new-sale">＋ Nueva venta</button>',`<p class="date-line">${formatDate()} · Resumen operativo de FAMIMUEBLES</p>
@@ -432,6 +438,7 @@ export function renderDashboard(data) {
     <div class="dashboard-lower-grid">
       <section class="panel dashboard-panel"><div class="panel-head"><div><h3>Productos más vendidos</h3><p class="muted">Unidades vendidas acumuladas</p></div><a href="#productos">Ver productos →</a></div><div class="dashboard-list">${best.length ? best.map(([id, quantity], index) => `<div class="dashboard-list-row"><b>${index + 1}</b><span>${productName(data, id)}</span><strong>${quantity}</strong></div>`).join('') : '<p class="muted">Aún no hay ventas registradas.</p>'}</div></section>
       <section class="panel dashboard-panel"><div class="panel-head"><div><h3>Próximos vencimientos</h3><p class="muted">Cuotas pendientes</p></div><a href="#cartera">Ver cartera →</a></div><div class="dashboard-list">${due.length ? due.map(item => `<div class="dashboard-list-row"><span>${item.customerName || item.customer || 'Cliente'}</span><strong>${money(item.amount || item.installmentAmount || 0)}</strong></div>`).join('') : '<p class="muted">No hay vencimientos pendientes.</p>'}</div></section>
+      ${renderTalonariosSummary(data)}
     </div>
     <div class="dashboard-lower-grid dashboard-bottom-grid">
       <section class="panel dashboard-panel"><div class="panel-head"><div><h3>Ventas recientes</h3><p class="muted">Últimas transacciones reales</p></div><a href="#ventas">Ver todas →</a></div>${recent.length ? `<div class="table-wrap"><table><thead><tr><th>Factura</th><th>Local</th><th>Total</th><th>Pago</th><th>Fecha</th></tr></thead><tbody>${recent.map(sale => `<tr><td>${sale.id || sale.invoiceId || '-'}</td><td>${storeName(data, sale.storeId)}</td><td>${money(safeNumber(sale.total))}</td><td>${sale.paymentMethod || sale.metodo_pago || '-'}</td><td>${saleDate(sale).slice(0, 10) || '-'}</td></tr>`).join('')}</tbody></table></div>` : '<p class="muted">No hay ventas registradas.</p>'}</section>

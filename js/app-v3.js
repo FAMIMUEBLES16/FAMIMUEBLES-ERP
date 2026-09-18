@@ -11,7 +11,7 @@ import { navItems, navGroups } from './components/sidebar.js?v=22';
 import { showToast } from './components/toast.js';
 import { table } from './components/tables.js';
 import { renderNotifications } from './components/notifications.js';
-import { renderDashboard } from './modules/dashboard-v3.js?v=26';
+import { renderDashboard } from './modules/dashboard-v3.js?v=27';
 import { canonicalSellerName, renderVentas, salesTable, normalizeSales, saleTimestamp } from './modules/ventas.js?v=23';
 import { renderFacturacion, cartTotal, productResults, customerResults } from './modules/facturacion.js?v=23';
 import { renderProductos, productTable, productMatches } from './modules/productos.js?v=22';
@@ -28,7 +28,7 @@ import { renderGastos } from './modules/gastos.js?v=19';
 import { renderGasolina } from './modules/gasolina.js?v=18';
 import { renderUsuarios } from './modules/usuarios.js?v=19';
 import { renderAuditoria, setAuditFilters, clearAuditFilters } from './modules/auditoria.js?v=21';
-import { renderTalonarios, talonarioModal, setTalonarioFilters } from './modules/talonarios.js?v=3';
+import { renderTalonarios, talonarioModal, setTalonarioFilters } from './modules/talonarios.js?v=4';
 import { historicalTalonarios, historicalRecibos, storedTalonarios } from './modules/talonarios-historial.js?v=1';
 import { renderApartados } from './modules/apartados.js?v=19';
 import { createApartado, decreaseSaleInventory, registerPayment, runTransaction, addMovement } from './modules/finanzas.js?v=18';
@@ -40,7 +40,7 @@ import { createProduct, updateProduct, setProductActive, generateTestProducts, s
 import { productDetail } from './modules/product-detail.js?v=14';
 import { importPreview, importPreviewRows, importProducts } from './modules/product-import.js?v=15';
 import { renderProveedores, supplierTable } from './modules/proveedores.js?v=15';
-import { renderCompras, purchaseTable } from './modules/compras.js?v=20';
+import { renderCompras, purchaseTable } from './modules/compras.js?v=21';
 import { purchaseTotal, createPurchase, orderPurchase, receivePurchase, receiveTalonarioPurchase, cancelPurchase } from './services/purchase-service.js?v=16';
 import { purchaseDetail } from './modules/purchase-detail.js?v=16';
 import { renderCuentasPorPagar, payableTable } from './modules/cuentas-por-pagar.js?v=14';
@@ -193,7 +193,9 @@ async function saveTalonarioForm(form){
 		source.status='ENVIADO';
 		source.sentAt=new Date().toISOString();
 		source.destinationStoreId=destinationId;
-		const destination={...source,id:`TAL-${Date.now()}-${Math.random().toString(36).slice(2,7)}`,storeId:destinationId,destinationName,status:'EN_USO',currentNumber:source.startNumber,sentFrom:'INV CRR 5 3 26',sentAt:new Date().toISOString()};
+		const previousActive=(store.collection.talonarios||[]).filter(item=>String(item.type).toUpperCase()===String(source.type).toUpperCase()&&String(item.storeId||'')===destinationId&&String(item.status||'').toUpperCase()==='EN_USO').sort((left,right)=>Number(right.currentNumber||0)-Number(left.currentNumber||0))[0];
+		const previousLastNumber=Number(previousActive?.currentNumber||source.startNumber-1);
+		const destination={...source,id:`TAL-${Date.now()}-${Math.random().toString(36).slice(2,7)}`,storeId:destinationId,destinationName,status:'EN_USO',currentNumber:source.startNumber-1,lastUsedNumber:previousLastNumber,consecutiveBaseline:source.startNumber-1,sentFrom:'INV CRR 5 3 26',sentAt:new Date().toISOString()};
 		delete destination.destinationStoreId;
 		await persistDomainRecord('talonarios',source);
 		await persistDomainRecord('talonarios',destination);
@@ -230,10 +232,16 @@ async function registerTalonarioSale(sale){
 	const local=store.collection.stores?.find(item=>String(item.id)===localId);
 	const localName=local?.name||localId;
 	const talonario=(store.collection.talonarios||[]).filter(item=>String(item.type).toUpperCase()===type&&String(item.storeId||'')===localId&&String(item.status||'').toUpperCase()==='EN_USO'&&documentNumber>=Number(item.startNumber)&&documentNumber<=Number(item.endNumber)).sort((left,right)=>Number(right.startNumber)-Number(left.startNumber))[0];
-	if(!talonario)return;
+	if(!talonario){
+		const localTalonarios=(store.collection.talonarios||[]).filter(item=>String(item.type).toUpperCase()===type&&String(item.storeId||'')===localId&&String(item.status||'').toUpperCase()==='EN_USO');
+		const ranges=localTalonarios.map(item=>`${item.startNumber} - ${item.endNumber}`).join(', ');
+		console.warn(`La venta ${documentNumber} no coincide con un talonario ${type} activo de ${localName}. Rangos: ${ranges||'ninguno'}`);
+		return;
+	}
 	const previousNumber=Number(talonario.currentNumber||talonario.startNumber);
 	if(documentNumber>previousNumber&&!Object.prototype.hasOwnProperty.call(talonario,'consecutiveBaseline'))talonario.consecutiveBaseline=previousNumber;
 	talonario.currentNumber=Math.max(previousNumber,documentNumber);
+	talonario.lastUsedNumber=talonario.currentNumber;
 	await persistDomainRecord('talonarios',talonario);
 	const remaining=Number(talonario.endNumber)-documentNumber;
 	if(remaining<=3&&remaining>=0){
@@ -246,24 +254,34 @@ async function registerTalonarioSale(sale){
 }
 async function refreshTalonarioSalesAlerts(){
 	const sales=store.collection.sales||[];
+	if(!Array.isArray(store.collection.notifications))store.collection.notifications=[];
+	const activeAlertIds=new Set();
 	for(const talonario of (store.collection.talonarios||[]).filter(item=>String(item.status||'').toUpperCase()==='EN_USO')){
 		const type=String(talonario.type||'REMISION').toUpperCase();
 		const localId=String(talonario.storeId||'');
 		const localName=String(talonario.destinationName||localId);
 		const documents=sales.map(sale=>({sale,number:Number(String(sale.invoiceNumber||sale.numero_factura||sale.invoice||'').trim())})).filter(({sale,number})=>Number.isInteger(number)&&number>=Number(talonario.startNumber)&&number<=Number(talonario.endNumber)&&(String(sale.documentType||sale.tipo_documento||'').trim()===''||String(sale.documentType||sale.tipo_documento).toUpperCase()===type)&&(String(sale.storeId||sale.local_id||sale.local||'')===localId||String(sale.storeName||sale.localName||'')===localName));
 		const latest=documents.sort((left,right)=>right.number-left.number)[0]?.number;
-		if(!latest||latest<=Number(talonario.currentNumber||talonario.startNumber))continue;
-		 if(latest>Number(talonario.currentNumber||talonario.startNumber)&&!Object.prototype.hasOwnProperty.call(talonario,'consecutiveBaseline'))talonario.consecutiveBaseline=Number(talonario.currentNumber||talonario.startNumber);
-		talonario.currentNumber=latest;
-		try{await persistDomainRecord('talonarios',talonario);}catch(error){console.warn('No se pudo actualizar el consecutivo del talonario:',error.message);}
-		const remaining=Number(talonario.endNumber)-latest;
+		const current=Number(talonario.currentNumber ?? Number(talonario.startNumber)-1);
+		if(latest && latest>current){
+			if(!Object.prototype.hasOwnProperty.call(talonario,'consecutiveBaseline'))talonario.consecutiveBaseline=current;
+			talonario.currentNumber=latest;
+			talonario.lastUsedNumber=latest;
+			try{await persistDomainRecord('talonarios',talonario);}catch(error){console.warn('No se pudo actualizar el consecutivo del talonario:',error.message);}
+		}
+		const remaining=Number(talonario.endNumber)-Number(talonario.lastUsedNumber ?? talonario.currentNumber ?? Number(talonario.startNumber)-1);
 		if(remaining<=3&&remaining>=0){
-			if(!Array.isArray(store.collection.notifications))store.collection.notifications=[];
 			const key=`talonario-venta-bajo:${talonario.id}:${latest}`;
 			store.collection.notifications=store.collection.notifications.filter(item=>!String(item.key||'').startsWith(`talonario-venta-bajo:${talonario.id}:`));
 			store.collection.notifications.push({id:`NOT-TAL-VENTA-${talonario.id}`,key,text:`Alerta: al talonario de ${type==='RECIBO'?'recibos':'remisiones'} ${talonario.startNumber} - ${talonario.endNumber} del local ${localName} le quedan ${remaining} documentos. Envia un talonario nuevo.`,type:'warning',action:'talonarios',targetId:talonario.id,createdAt:new Date().toISOString(),read:false});
+			activeAlertIds.add(String(talonario.id));
 		}
 	}
+	store.collection.notifications=store.collection.notifications.filter(item=>{
+		const key=String(item.key||'');
+		if(!key.startsWith('talonario-venta-bajo:'))return true;
+		return activeAlertIds.has(key.split(':')[1]||'');
+	});
 	store.save();
 }
 async function hydrateDomainCollections(state){ await Promise.all(remoteDomainCollections.map(async collection=>{ try { const payload=await api.get(`/api/domain/${encodeURIComponent(collection)}`,{headers:{'X-Tenant-ID':activeTenantId()},cache:'no-store',timeout:15000}); const items=Array.isArray(payload.items)?payload.items:[];if(items.length||!Array.isArray(state[collection])||state[collection].length===0)state[collection]=items; } catch(error) { console.warn(`No se pudo cargar ${collection}:`,error.message); } })); return state; }
@@ -1251,7 +1269,7 @@ async function seedConfiguredTalonariosActivos(){
 	const sent15701=store.collection.talonarios.filter(item=>String(item.type).toUpperCase()==='REMISION'&&Number(item.startNumber)===15701&&Number(item.endNumber)===15750);
 	let canonical15701=sent15701[0];
 	if(canonical15701){
-		canonical15701.storeId='INV CRR 5 5 56';canonical15701.destinationName='INV CRR 5 5 56';canonical15701.status='ENVIADO';
+		canonical15701.storeId='INV CRR 5 5 56';canonical15701.destinationName='INV CRR 5 5 56';canonical15701.status=String(canonical15701.status||'').toUpperCase()==='COMPLETADO'?'COMPLETADO':'EN_USO';
 		try{await persistDomainRecord('talonarios',canonical15701);}catch(error){console.warn('No se pudo marcar talonario enviado:',error.message);}
 		for(const duplicate of sent15701.slice(1)){
 			try{await persistCatalogRecord(`/api/domain/talonarios/${encodeURIComponent(duplicate.id)}`,{},'DELETE');}catch(error){console.warn('No se pudo eliminar duplicado de talonario:',error.message);}
