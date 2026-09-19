@@ -61,10 +61,9 @@ export function renderTalonariosSummary(state) {
   });
   const summaryRows = [...summaryMap.values()].sort((left, right) => localLabel(left[0]).localeCompare(localLabel(right[0]), 'es') || String(left[0].type).localeCompare(String(right[0].type))).map(group => {
     const item = [...group].sort((left, right) => Number(right.startNumber || 0) - Number(left.startNumber || 0))[0];
-    const allLocalItems = items.filter(entry => localKey(localLabel(entry)) === localKey(localLabel(item)) && String(entry.type || '').toUpperCase() === String(item.type || '').toUpperCase());
-    const remaining = group.reduce((total, entry) => total + progress.get(String(entry.id)).remaining, 0);
-    const usedNumbers = allLocalItems.map(entry => progress.get(String(entry.id)).lastUsed).filter(number => number !== null);
-    const lastUsedNumber = usedNumbers.length ? Math.max(...usedNumbers) : Math.max(...allLocalItems.map(entry => progress.get(String(entry.id)).last));
+    const currentProgress = progress.get(String(item.id));
+    const remaining = currentProgress.remaining;
+    const lastUsedNumber = currentProgress.last;
     const missing = missingTalonarioNumbers(item, sales, state?.talonarioJustifications || []);
     const missingHtml = missing.length ? `<div class="talonario-missing-list">${missing.map(number => `<button type="button" class="table-action danger-text" data-action="justify-talonario-number" data-talonario-id="${item.id}" data-talonario-number="${number}">${numberLabel(number)}</button>`).join(' ')}</div>` : '<span class="muted">Ninguna</span>';
     return `<tr><td><strong>${localLabel(item)}</strong></td><td>${labelType(item.type)}</td><td>${range(item)}</td><td>${lastUsedNumber}</td><td><strong>${remaining}</strong></td><td>${missingHtml}</td></tr>`;
