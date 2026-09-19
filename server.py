@@ -2561,8 +2561,8 @@ class AppHandler(SimpleHTTPRequestHandler):
             if _postgres_enabled():
                 with connection() as database:
                     sale = database.execute(
-                        "SELECT id, local_origen, tipo FROM movimientos WHERE id = %s AND UPPER(COALESCE(tipo, '')) = 'VENTA' FOR UPDATE",
-                        (identifier,),
+                        "SELECT id, local_origen, tipo FROM movimientos WHERE (CAST(id AS TEXT) = %s OR BTRIM(COALESCE(factura, '')) = %s) AND UPPER(COALESCE(tipo, '')) = 'VENTA' ORDER BY CASE WHEN CAST(id AS TEXT) = %s THEN 0 ELSE 1 END, id DESC LIMIT 1 FOR UPDATE",
+                        (identifier, identifier, identifier),
                     ).fetchone()
                     if not sale:
                         self.send_json(404, {"error": "Venta no encontrada"})
@@ -2576,11 +2576,11 @@ class AppHandler(SimpleHTTPRequestHandler):
                             "UPDATE inventarios SET cantidad = cantidad + %s, actualizado = CURRENT_TIMESTAMP WHERE local = %s AND codigo = %s",
                             (line["cantidad"], sale["local_origen"], line["codigo"]),
                         )
-                    database.execute("DELETE FROM movimiento_productos WHERE movimiento_id = %s", (identifier,))
-                    database.execute("DELETE FROM movimientos WHERE id = %s", (identifier,))
+                    database.execute("DELETE FROM movimiento_productos WHERE movimiento_id = %s", (sale["id"],))
+                    database.execute("DELETE FROM movimientos WHERE id = %s", (sale["id"],))
                     database.execute(
                         "INSERT INTO audit_events (user_id, action, collection, record_id, data_json) VALUES (%s, %s, %s, %s, %s)",
-                        (user["id"], "DELETE", "sales", identifier, "{}"),
+                        (user["id"], "DELETE", "sales", str(sale["id"]), "{}"),
                     )
                 self.send_json(200, {"ok": True, "deleted": True})
                 return
