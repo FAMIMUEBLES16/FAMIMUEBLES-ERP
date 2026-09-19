@@ -224,6 +224,7 @@ function refreshTalonarioLowStockNotification(type){
 	store.collection.notifications=store.collection.notifications.filter(item=>item.key!==key);
 	if(available===2)store.collection.notifications.push({id:`NOT-TAL-${normalized}`,key,text:`Quedan 2 talonarios de ${normalized} disponibles en INV CRR 5 3 26.`,type:'warning',action:'talonarios',targetId:'',createdAt:new Date().toISOString(),read:false});
 }
+function talonarioAlertDate(){return new Date().toISOString().slice(0,10);}
 async function registerTalonarioSale(sale){
 	const documentNumber=Number(String(sale.invoiceNumber||'').trim());
 	if(!Number.isInteger(documentNumber)||documentNumber<=0)return;
@@ -246,16 +247,16 @@ async function registerTalonarioSale(sale){
 	const remaining=Number(talonario.endNumber)-documentNumber;
 	if(remaining<=3&&remaining>=0){
 		if(!Array.isArray(store.collection.notifications))store.collection.notifications=[];
-		const key=`talonario-venta-bajo:${talonario.id}:${documentNumber}`;
-		store.collection.notifications=store.collection.notifications.filter(item=>!String(item.key||'').startsWith(`talonario-venta-bajo:${talonario.id}:`));
-		store.collection.notifications.push({id:`NOT-TAL-VENTA-${talonario.id}`,key,text:`Alerta: al talonario de ${type==='RECIBO'?'recibos':'remisiones'} ${talonario.startNumber} - ${talonario.endNumber} del local ${localName} le quedan ${remaining} documentos. Envia un talonario nuevo.`,type:'warning',action:'talonarios',targetId:talonario.id,createdAt:new Date().toISOString(),read:false});
+		const key=`talonario-venta-bajo:${talonario.id}:${talonarioAlertDate()}`;
+		store.collection.notifications=store.collection.notifications.filter(item=>!String(item.key||'').startsWith(`talonario-venta-bajo:${talonario.id}:`)||String(item.key)===key);
+		if(!store.collection.notifications.some(item=>item.key===key))store.collection.notifications.push({id:`NOT-TAL-VENTA-${talonario.id}-${talonarioAlertDate()}`,key,text:`Alerta: al talonario de ${type==='RECIBO'?'recibos':'remisiones'} ${talonario.startNumber} - ${talonario.endNumber} del local ${localName} le quedan ${remaining} documentos. Envia un talonario nuevo.`,type:'warning',action:'talonarios',targetId:talonario.id,createdAt:new Date().toISOString(),read:false});
 	}
 	store.save();
 }
 async function refreshTalonarioSalesAlerts(){
 	const sales=store.collection.sales||[];
 	if(!Array.isArray(store.collection.notifications))store.collection.notifications=[];
-	const activeAlertIds=new Set();
+	const activeAlertKeys=new Set();
 	for(const talonario of (store.collection.talonarios||[]).filter(item=>String(item.status||'').toUpperCase()==='EN_USO')){
 		const type=String(talonario.type||'REMISION').toUpperCase();
 		const localId=String(talonario.storeId||'');
@@ -271,16 +272,15 @@ async function refreshTalonarioSalesAlerts(){
 		}
 		const remaining=Number(talonario.endNumber)-Number(talonario.lastUsedNumber ?? talonario.currentNumber ?? Number(talonario.startNumber)-1);
 		if(remaining<=3&&remaining>=0){
-			const key=`talonario-venta-bajo:${talonario.id}:${latest}`;
-			store.collection.notifications=store.collection.notifications.filter(item=>!String(item.key||'').startsWith(`talonario-venta-bajo:${talonario.id}:`));
-			store.collection.notifications.push({id:`NOT-TAL-VENTA-${talonario.id}`,key,text:`Alerta: al talonario de ${type==='RECIBO'?'recibos':'remisiones'} ${talonario.startNumber} - ${talonario.endNumber} del local ${localName} le quedan ${remaining} documentos. Envia un talonario nuevo.`,type:'warning',action:'talonarios',targetId:talonario.id,createdAt:new Date().toISOString(),read:false});
-			activeAlertIds.add(String(talonario.id));
+			const key=`talonario-venta-bajo:${talonario.id}:${talonarioAlertDate()}`;
+			activeAlertKeys.add(key);
+			if(!store.collection.notifications.some(item=>item.key===key))store.collection.notifications.push({id:`NOT-TAL-VENTA-${talonario.id}-${talonarioAlertDate()}`,key,text:`Alerta: al talonario de ${type==='RECIBO'?'recibos':'remisiones'} ${talonario.startNumber} - ${talonario.endNumber} del local ${localName} le quedan ${remaining} documentos. Envia un talonario nuevo.`,type:'warning',action:'talonarios',targetId:talonario.id,createdAt:new Date().toISOString(),read:false});
 		}
 	}
 	store.collection.notifications=store.collection.notifications.filter(item=>{
 		const key=String(item.key||'');
 		if(!key.startsWith('talonario-venta-bajo:'))return true;
-		return activeAlertIds.has(key.split(':')[1]||'');
+		return activeAlertKeys.has(key);
 	});
 	store.save();
 }
