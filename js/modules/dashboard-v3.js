@@ -191,7 +191,7 @@ function generateCharts(data = {}) {
   }).join('');
 
   return `<div class="charts-grid dashboard-charts">
-    <div class="chart-card chart-card-main"><div class="chart-card-heading"><div><span class="chart-kicker">TENDENCIA</span><h3>Ventas últimos 7 días</h3></div><span class="chart-unit">COP</span></div><canvas id="salesChart"></canvas></div>
+    <div class="chart-card chart-card-main"><div class="chart-card-heading"><div><span class="chart-kicker">TENDENCIA</span><h3>Ventas del mes</h3></div><span class="chart-unit">COP</span></div><canvas id="salesChart"></canvas></div>
     <div class="chart-card chart-card-small dashboard-chart-card">
       <div class="dashboard-card-header">
         <div class="dashboard-card-title-wrap">
@@ -311,18 +311,23 @@ function initCharts(data) {
     if (!window.Chart) return;
     const baseOptions = { responsive:true, maintainAspectRatio:false, animation:{duration:900}, interaction:{mode:'index',intersect:false}, plugins:{legend:{display:false,labels:{usePointStyle:true,boxWidth:8,padding:14,font:{size:10}}}, tooltip:{mode:'index',intersect:false,callbacks:{title:items => items[0]?.label || '',label:context => `${context.dataset.label || context.label || ''}: ${context.dataset.yAxisID === 'transactions' ? `${context.parsed.y} transacciones` : money(context.parsed.y ?? context.parsed ?? 0)}`}}} };
     const today = calendarDate();
-    const last7Days = Array.from({length:7}, (_, i) => shiftCalendarDate(today, i - 6));
-    const salesByDay = last7Days.map(day => {
+    const currentMonthStart = `${today.slice(0, 7)}-01`;
+    const elapsedDays = Number(today.slice(8, 10));
+    const currentMonthDays = Array.from({length:elapsedDays}, (_, i) => shiftCalendarDate(currentMonthStart, i));
+    const previousMonthEnd = shiftCalendarDate(currentMonthStart, -1);
+    const previousMonthDaysInMonth = Number(previousMonthEnd.slice(8, 10));
+    const previousMonthStart = shiftCalendarDate(previousMonthEnd, -(previousMonthDaysInMonth - 1));
+    const previousMonthDays = currentMonthDays.map((_, i) => shiftCalendarDate(previousMonthStart, Math.min(i, previousMonthDaysInMonth - 1)));
+    const salesByDay = currentMonthDays.map(day => {
       return data.sales.filter(s => calendarDate(saleDate(s)) === day).reduce((sum,s) => sum + safeNumber(s.total), 0);
     });
-    const salesCountByDay = last7Days.map(day => data.sales.filter(sale => calendarDate(saleDate(sale)) === day).length);
-    const previous7Days = last7Days.map(day => shiftCalendarDate(day, -7));
-    const previousSalesByDay = previous7Days.map(day => data.sales.filter(sale => calendarDate(saleDate(sale)) === day).reduce((sum,sale) => sum + safeNumber(sale.total), 0));
+    const salesCountByDay = currentMonthDays.map(day => data.sales.filter(sale => calendarDate(saleDate(sale)) === day).length);
+    const previousSalesByDay = previousMonthDays.map(day => data.sales.filter(sale => calendarDate(saleDate(sale)) === day).reduce((sum,sale) => sum + safeNumber(sale.total), 0));
     const movingAverage = salesByDay.map((value,index) => {
       const window = salesByDay.slice(Math.max(0,index - 2), index + 1);
       return window.reduce((sum,item) => sum + item, 0) / window.length;
     });
-    createChart('salesChart', { type:'line', data:{ labels:last7Days.map(d => d.slice(5).replace('-', '/')), datasets:[
+    createChart('salesChart', { type:'line', data:{ labels:currentMonthDays.map(d => d.slice(5).replace('-', '/')), datasets:[
       {label:'Ventas actuales',data:salesByDay,borderColor:SALES_COLOR,backgroundColor:'rgba(37, 99, 235, 0.12)',pointBackgroundColor:SALES_COLOR,pointBorderColor:'#FFFFFF',pointBorderWidth:2,pointRadius:4,fill:true,tension:0.35},
       {label:'Promedio móvil',data:movingAverage,borderColor:'#F59E0B',backgroundColor:'transparent',pointBackgroundColor:'#F59E0B',pointRadius:3,borderWidth:2,borderDash:[6,4],fill:false,tension:0.35},
       {label:'Periodo anterior',data:previousSalesByDay,borderColor:'#10B981',backgroundColor:'transparent',pointBackgroundColor:'#10B981',pointRadius:3,borderWidth:2,fill:false,tension:0.35},
