@@ -2558,6 +2558,32 @@ class AppHandler(SimpleHTTPRequestHandler):
                 self.send_json(403, {"error": "Solo el administrador puede eliminar ventas"})
                 return
             identifier = unquote(path.removeprefix("/api/catalog/sale/")).strip()
+            if _postgres_enabled():
+                with connection() as database:
+                    sale = database.execute(
+                        "SELECT id, local_origen, tipo FROM movimientos WHERE id = %s AND UPPER(COALESCE(tipo, '')) = 'VENTA' FOR UPDATE",
+                        (identifier,),
+                    ).fetchone()
+                    if not sale:
+                        self.send_json(404, {"error": "Venta no encontrada"})
+                        return
+                    lines = database.execute(
+                        "SELECT codigo, cantidad FROM movimiento_productos WHERE movimiento_id = %s",
+                        (identifier,),
+                    ).fetchall()
+                    for line in lines:
+                        database.execute(
+                            "UPDATE inventarios SET cantidad = cantidad + %s, actualizado = CURRENT_TIMESTAMP WHERE local = %s AND codigo = %s",
+                            (line["cantidad"], sale["local_origen"], line["codigo"]),
+                        )
+                    database.execute("DELETE FROM movimiento_productos WHERE movimiento_id = %s", (identifier,))
+                    database.execute("DELETE FROM movimientos WHERE id = %s", (identifier,))
+                    database.execute(
+                        "INSERT INTO audit_events (user_id, action, collection, record_id, data_json) VALUES (%s, %s, %s, %s, %s)",
+                        (user["id"], "DELETE", "sales", identifier, "{}"),
+                    )
+                self.send_json(200, {"ok": True, "deleted": True})
+                return
             with connection() as database:
                 sale = database.execute("SELECT store_id FROM sales WHERE tenant_id = ? AND id = ?", (tenant_id(self), identifier)).fetchone()
                 if not sale:
