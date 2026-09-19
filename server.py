@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import gzip
 import os
 import csv
 import hashlib
@@ -1339,9 +1340,16 @@ class AppHandler(SimpleHTTPRequestHandler):
 
     def send_json(self, status: int, payload: dict) -> None:
         body = json.dumps(payload, ensure_ascii=False, default=_json_default).encode("utf-8")
+        compressed = False
+        if len(body) >= 1024 and "gzip" in self.headers.get("Accept-Encoding", "").lower():
+            body = gzip.compress(body, compresslevel=6)
+            compressed = True
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
+        if compressed:
+            self.send_header("Content-Encoding", "gzip")
+            self.send_header("Vary", "Accept-Encoding")
         self._send_cors_headers()
         self.send_header("Cache-Control", "no-store")
         self.end_headers()

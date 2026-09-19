@@ -9,8 +9,8 @@
   <link rel="apple-touch-icon" sizes="192x192" href="assets/icons/apple-touch-icon.png">
   <link rel="stylesheet" href="css/main.css?v=47">
   <link rel="stylesheet" href="css/parity-report-fixes.css?v=3">
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
   <title>FAMIMUEBLES ERP</title>
 </head>
 <body>
@@ -54,10 +54,7 @@
   <script type="module" src="js/app-v3.js?v=39"></script>
   <script>
     if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.getRegistrations().then(registrations => registrations.forEach(reg => reg.unregister())).catch(() => {});
-    }
-    if ('caches' in window) {
-      caches.keys().then(keys => keys.forEach(key => caches.delete(key))).catch(() => {});
+      window.addEventListener('load', () => navigator.serviceWorker.register('./service-worker.js?v=44').catch(() => {}));
     }
   </script>
 </body>
