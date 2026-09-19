@@ -916,6 +916,7 @@ async function boot() {
 	render();
 	Promise.resolve().then(async()=>{
 		await hydrateDomainCollections(store.state);
+		if(currentRoute()==='talonarios')render();
 		repairTalonario15301().catch(error=>console.warn('No se pudo corregir el talonario 15301-15350:',error.message));
 		Promise.all([seedHistoricalTalonarios(store.state),seedConfiguredTalonariosActivos()]).then(()=>deduplicateTalonarios()).then(()=>refreshTalonarioSalesAlerts()).then(()=>{if(currentRoute()==='talonarios')render();}).catch(error=>console.warn('No se pudieron preparar los talonarios:',error.message));
 		await hydrateUsers(store.state);
