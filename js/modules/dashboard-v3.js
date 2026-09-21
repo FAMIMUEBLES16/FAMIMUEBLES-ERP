@@ -2,7 +2,7 @@ import { money, page } from '../components/tables.js';
 import { icons } from '../components/sidebar.js';
 import { calendarDate, formatDate, shiftCalendarDate } from '../utils/dates.js';
 import { canonicalSellerName, normalizeSales } from './ventas.js';
-import { renderTalonariosSummary } from './talonarios.js?v=4';
+import { renderTalonariosSummary } from './talonarios.js?v=6';
 
 const CHART_COLORS = [
   '#2563EB', '#10B981', '#F59E0B', '#EF4444',

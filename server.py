@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import json
-import gzip
 import os
 import csv
 import hashlib
 import io
+import msvcrt
 import re
 import secrets
 import shutil
@@ -24,6 +24,26 @@ from urllib.parse import urlparse, unquote, parse_qs
 from report_pdf import make_pdf
 
 ROOT = Path(__file__).resolve().parent
+INSTANCE_LOCK_FILE = ROOT / "logs" / "server-instance.lock"
+INSTANCE_LOCK_HANDLE = None
+
+
+def acquire_instance_lock() -> bool:
+    global INSTANCE_LOCK_HANDLE
+    INSTANCE_LOCK_FILE.parent.mkdir(exist_ok=True)
+    INSTANCE_LOCK_HANDLE = INSTANCE_LOCK_FILE.open("a+b")
+    INSTANCE_LOCK_HANDLE.seek(0)
+    try:
+        msvcrt.locking(INSTANCE_LOCK_HANDLE.fileno(), msvcrt.LK_NBLCK, 1)
+    except OSError:
+        INSTANCE_LOCK_HANDLE.close()
+        INSTANCE_LOCK_HANDLE = None
+        return False
+    INSTANCE_LOCK_HANDLE.seek(0)
+    INSTANCE_LOCK_HANDLE.truncate()
+    INSTANCE_LOCK_HANDLE.write(str(os.getpid()).encode("ascii"))
+    INSTANCE_LOCK_HANDLE.flush()
+    return True
 
 if sys.stdout is None or sys.stderr is None:
     (ROOT / "logs").mkdir(exist_ok=True)
@@ -101,7 +121,7 @@ def publish_public_version() -> dict:
     status = run_git("status", "--porcelain", "--", *PUBLISHABLE_FILES)
     if not status:
         return {"ok": True, "published": False, "message": "No hay cambios funcionales pendientes."}
-    run_git("add", "--", *PUBLISHABLE_FILES)
+    run_git("add", "-u", "--", *PUBLISHABLE_FILES)
     changed = run_git("diff", "--cached", "--name-only")
     if not changed:
         return {"ok": True, "published": False, "message": "No hay archivos funcionales para publicar."}
@@ -1340,16 +1360,9 @@ class AppHandler(SimpleHTTPRequestHandler):
 
     def send_json(self, status: int, payload: dict) -> None:
         body = json.dumps(payload, ensure_ascii=False, default=_json_default).encode("utf-8")
-        compressed = False
-        if len(body) >= 1024 and "gzip" in self.headers.get("Accept-Encoding", "").lower():
-            body = gzip.compress(body, compresslevel=6)
-            compressed = True
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
-        if compressed:
-            self.send_header("Content-Encoding", "gzip")
-            self.send_header("Vary", "Accept-Encoding")
         self._send_cors_headers()
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
@@ -2558,32 +2571,6 @@ class AppHandler(SimpleHTTPRequestHandler):
                 self.send_json(403, {"error": "Solo el administrador puede eliminar ventas"})
                 return
             identifier = unquote(path.removeprefix("/api/catalog/sale/")).strip()
-            if _postgres_enabled():
-                with connection() as database:
-                    sale = database.execute(
-                        "SELECT id, local_origen, tipo FROM movimientos WHERE (CAST(id AS TEXT) = %s OR BTRIM(COALESCE(factura, '')) = %s) AND UPPER(COALESCE(tipo, '')) = 'VENTA' ORDER BY CASE WHEN CAST(id AS TEXT) = %s THEN 0 ELSE 1 END, id DESC LIMIT 1 FOR UPDATE",
-                        (identifier, identifier, identifier),
-                    ).fetchone()
-                    if not sale:
-                        self.send_json(404, {"error": "Venta no encontrada"})
-                        return
-                    lines = database.execute(
-                        "SELECT codigo, cantidad FROM movimiento_productos WHERE movimiento_id = %s",
-                        (identifier,),
-                    ).fetchall()
-                    for line in lines:
-                        database.execute(
-                            "UPDATE inventarios SET cantidad = cantidad + %s, actualizado = CURRENT_TIMESTAMP WHERE local = %s AND codigo = %s",
-                            (line["cantidad"], sale["local_origen"], line["codigo"]),
-                        )
-                    database.execute("DELETE FROM movimiento_productos WHERE movimiento_id = %s", (sale["id"],))
-                    database.execute("DELETE FROM movimientos WHERE id = %s", (sale["id"],))
-                    database.execute(
-                        "INSERT INTO audit_events (user_id, action, collection, record_id, data_json) VALUES (%s, %s, %s, %s, %s)",
-                        (user["id"], "DELETE", "sales", str(sale["id"]), "{}"),
-                    )
-                self.send_json(200, {"ok": True, "deleted": True})
-                return
             with connection() as database:
                 sale = database.execute("SELECT store_id FROM sales WHERE tenant_id = ? AND id = ?", (tenant_id(self), identifier)).fetchone()
                 if not sale:
@@ -2939,6 +2926,9 @@ class AppHandler(SimpleHTTPRequestHandler):
 
 
 if __name__ == "__main__":
+    if not acquire_instance_lock():
+        print("FAMIMUEBLES ERP ya esta ejecutandose; se cierra esta instancia.")
+        raise SystemExit(0)
     with connection():
         print(f"PostgreSQL verificado: {POSTGRES_CONFIG['host']}:{POSTGRES_CONFIG['port']}/{POSTGRES_CONFIG['dbname']}")
     server = ThreadingHTTPServer((HOST, PORT), AppHandler)
@@ -2950,3 +2940,5 @@ if __name__ == "__main__":
         print("\nServidor detenido")
     finally:
         server.server_close()
+        if INSTANCE_LOCK_HANDLE is not None:
+            INSTANCE_LOCK_HANDLE.close()

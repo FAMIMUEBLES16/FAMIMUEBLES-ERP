@@ -4,14 +4,14 @@ function showTransferDetail(transferId){const transfer=transferRecord(transferId
 function editTransfer(transferId){const transfer=transferRecord(transferId);if(!transfer)return showToast('No se encontro el traslado.','error');$('#modal-root').innerHTML=`<div class="modal-backdrop"><form class="modal" id="transfer-edit-form"><button type="button" class="modal-close">×</button><p class="eyebrow">INVENTARIO</p><h2>Editar traslado</h2><textarea class="field" name="data" rows="12" required>${JSON.stringify(transfer,null,2)}</textarea><button class="primary wide">Guardar cambios</button></form></div>`;$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';$('#transfer-edit-form').onsubmit=async event=>{event.preventDefault();try{const updated=JSON.parse(new FormData(event.target).get('data'));if(String(updated.id)!==String(transfer.id))throw new Error('El ID no puede cambiarse.');await persistDomainRecord('transfers',updated);store.collection.transfers=[...(store.collection.transfers||[]).filter(item=>String(item.id)!==String(updated.id)),updated];$('#modal-root').innerHTML='';render();showToast('Traslado actualizado correctamente.');}catch(error){showToast(error.message,'error');}};}
 async function deleteTransferRemote(transferId){if(!window.confirm('¿Eliminar este traslado?'))return;try{await persistCatalogRecord(`/api/domain/transfers/${encodeURIComponent(transferId)}`,{},'DELETE');store.collection.transfers=(store.collection.transfers||[]).filter(item=>String(item.id)!==String(transferId));$('#modal-root').innerHTML='';render();showToast('Traslado eliminado correctamente.');}catch(error){showToast(error.message,'error');}}
 import { store } from './data/store.js?v=20';
-import { hydrateState, hydrateStateWithRetry, hydrateCatalog, saveState, authHeaders, activeTenantId, isStaticDeployment } from './data/storage.js?v=24';
+import { hydrateState, hydrateStateWithRetry, hydrateCatalog, saveState, authHeaders, activeTenantId, isStaticDeployment } from './data/storage.js?v=26';
 import { generateId } from './utils/ids.js';
 import { currentRoute, startRouter } from './router.js?v=18';
 import { navItems, navGroups } from './components/sidebar.js?v=22';
 import { showToast } from './components/toast.js';
 import { table } from './components/tables.js';
 import { renderNotifications } from './components/notifications.js';
-import { renderDashboard } from './modules/dashboard-v3.js?v=28';
+import { renderDashboard } from './modules/dashboard-v3.js?v=26';
 import { canonicalSellerName, renderVentas, salesTable, normalizeSales, saleTimestamp } from './modules/ventas.js?v=23';
 import { renderFacturacion, cartTotal, productResults, customerResults } from './modules/facturacion.js?v=23';
 import { renderProductos, productTable, productMatches } from './modules/productos.js?v=22';
@@ -27,23 +27,25 @@ import { renderConfiguracion } from './modules/configuracion.js?v=18';
 import { renderGastos } from './modules/gastos.js?v=19';
 import { renderGasolina } from './modules/gasolina.js?v=18';
 import { renderUsuarios } from './modules/usuarios.js?v=19';
-import { renderAuditoria, setAuditFilters, clearAuditFilters } from './modules/auditoria.js?v=21';
-import { renderTalonarios, talonarioModal, setTalonarioFilters } from './modules/talonarios.js?v=7';
+import { renderAuditoria, setAuditFilters } from './modules/auditoria.js?v=23';
+import { renderTalonarios, talonarioModal, setTalonarioFilters, currentTalonarioNumber, normalizeActiveTalonarios } from './modules/talonarios.js?v=12';
+	<script type="module" src="js/app-v3.js?v=58"></script>
 import { historicalTalonarios, historicalRecibos, storedTalonarios } from './modules/talonarios-historial.js?v=1';
 import { renderApartados } from './modules/apartados.js?v=19';
 import { createApartado, decreaseSaleInventory, registerPayment, runTransaction, addMovement } from './modules/finanzas.js?v=18';
 import { formatCurrency as money } from './utils/currency.js?v=18';
-import { averageSalePrices } from './utils/pricing.js';
+
+let appHydrating = true;
 import { adjustStock, increaseStock, decreaseStock } from './services/inventory-service.js?v=18';
 import { createTransfer } from './services/transfer-service.js?v=18';
 import { createProduct, updateProduct, setProductActive, generateTestProducts, searchProducts, categoryFromProductName } from './services/product-service.js?v=21';
 import { productDetail } from './modules/product-detail.js?v=14';
 import { importPreview, importPreviewRows, importProducts } from './modules/product-import.js?v=15';
 import { renderProveedores, supplierTable } from './modules/proveedores.js?v=15';
-import { renderCompras, purchaseTable } from './modules/compras.js?v=21';
+import { renderCompras, purchaseTable } from './modules/compras.js?v=20';
 import { purchaseTotal, createPurchase, orderPurchase, receivePurchase, receiveTalonarioPurchase, cancelPurchase } from './services/purchase-service.js?v=16';
 import { purchaseDetail } from './modules/purchase-detail.js?v=16';
-import { renderCuentasPorPagar, payableTable } from './modules/cuentas-por-pagar.js?v=14';
+import { renderCuentasPorPagar, payableTable } from './modules/cuentas-por-pagar.js?v=15';
 import { accountsPayableDetail } from './modules/accounts-payable-detail.js?v=14';
 import { calculateBalance, registerPayment as registerSupplierPayment, updateAccountPayableStatus } from './services/accounts-payable-service.js?v=14';
 import { renderOperaciones, advancedModal, nextAdvancedId } from './modules/operaciones.js?v=2';
@@ -147,17 +149,29 @@ function restoreViewState(snapshot){
 	window.scrollTo(0,snapshot.scrollY);
 }
 function ensureViewActions(){document.querySelectorAll('.table-wrap tbody tr').forEach(row=>{const action=row.querySelector('[data-action^="edit-"],[data-action^="delete-"]');if(!action)return;const actions=action.parentElement;if(row.querySelector('[data-action="edit-credit"]')&&!row.querySelector('[data-action="credit-payment"]')){const payment=document.createElement('button');payment.className='table-action';payment.textContent='Registrar abono';payment.dataset.action='credit-payment';payment.dataset.creditId=action.dataset.creditId;actions.prepend(payment);}if(row.querySelector('[data-action^="view-"],[data-action="sale-detail"],[data-action="purchase-detail"],[data-action="product-detail"]'))return;const view=document.createElement('button');view.className='table-action';view.textContent='Ver';view.dataset.action=action.dataset.action.replace(/^edit-|^delete-/,'view-');Object.keys(action.dataset).filter(key=>key.endsWith('Id')).forEach(key=>{view.dataset[key]=action.dataset[key];});actions.prepend(view);});}
-function render(){ const route=currentRoute(); $('#section-title').textContent=navItems.find(item=>item.id===route)?.label||'Dashboard'; $('#app-content').innerHTML=views[route](); if(route==='facturacion'){syncBillingSummary();syncCreditFlow();syncInvoiceField();} if(route==='ventas')applySalesFilters(); if(route==='productos'){const filters=$('.product-filters');if(filters&&!filters.querySelector('[data-action="clear-product-filters"]')){const button=document.createElement('button');button.className='outline';button.type='button';button.dataset.action='clear-product-filters';button.textContent='Limpiar filtros';filters.append(button);} refreshProducts();} applyUserPermissions(); applyShellMode(); renderNav(); syncActiveStoreSelector(); const notificationCount=$('#notification-count'); if(notificationCount){const pending=store.collection.notifications.filter(item=>!item.read).length;notificationCount.textContent=pending;notificationCount.hidden=pending===0;} setMobileSidebar(false); }
+function render(){ const route=currentRoute(); $('#section-title').textContent=navItems.find(item=>item.id===route)?.label||'Dashboard'; $('#app-content').innerHTML=views[route](); if(route==='facturacion'){syncBillingSummary();syncCreditFlow();syncInvoiceField();} if(route==='ventas')applySalesFilters(); if(route==='productos'){const filters=$('.product-filters');if(filters&&!filters.querySelector('[data-action="clear-product-filters"]')){const button=document.createElement('button');button.className='outline';button.type='button';button.dataset.action='clear-product-filters';button.textContent='Limpiar filtros';filters.append(button);}} applyUserPermissions(); applyShellMode(); renderNav(); syncActiveStoreSelector(); const notificationCount=$('#notification-count'); if(notificationCount){const pending=store.collection.notifications.filter(item=>!item.read).length;notificationCount.textContent=pending;notificationCount.hidden=pending===0;} setMobileSidebar(false); }
 /* Código histórico de integración remota eliminado del flujo local.
 async function loadRemoteCatalogLegacy(){ try { const catalog=await fetchCatalog(); if(catalog?.modo_demo!==false||!Array.isArray(catalog.locales)||!Array.isArray(catalog.productos))return; store.collection.remoteMode=true; globalThis.famimueblesDemoMode=false; store.collection.stores=catalog.locales.map(item=>({ ...item, id:String(item.id), code:String(item.codigo || item.id), name:String(item.nombre || ''), status:item.activo === false || String(item.activo).toUpperCase() === 'NO' ? 'Inactivo' : 'Activo' })); store.collection.products=catalog.productos.map(item=>({ ...item, id:String(item.id), code:String(item.codigo || item.id), reference:String(item.referencia || item.codigo || item.id), name:String(item.nombre || ''), category:String(item.categoria || 'General'), categoryName:String(item.categoria || 'General'), brand:String(item.marca || ''), price:Number(item.precio_venta ?? item.precio ?? 0), salePrice:Number(item.precio_venta ?? item.precio ?? 0), cost:Number(item.precio_compra || 0), active:item.activo !== false, activo:item.activo !== false, estado:item.activo === false ? 'Inactivo' : 'Activo' })); const productByCode=new Map(store.collection.products.map(product=>[product.code,product.id])); const storeByName=new Map(store.collection.stores.map(store=>[store.name.toUpperCase(),store.id])); store.collection.inventoryByStore=(catalog.inventarios || []).map(item=>{const productId=item.producto_id || productByCode.get(String(item.codigo || '').trim());const storeId=item.local_id || storeByName.get(String(item.local || '').toUpperCase());return { id:String(item.id), productId:productId ? String(productId) : '', storeId:storeId ? String(storeId) : '', quantity:Number(item.stock ?? item.cantidad ?? 0), minimumStock:0, minimum:0, updatedAt:item.actualizado || new Date().toISOString() }; }).filter(item=>item.productId&&item.storeId); store.collection.customers=(catalog.clientes || []).map(item=>({ ...item, id:String(item.id), name:String(item.nombre || ''), document:String(item.documento || ''), phone:String(item.telefono || ''), email:String(item.email || ''), purchases:0, credits:0, balance:0, status:'Activo' })); store.collection.sales=(catalog.ventas || []).map(item=>({ ...item, id:String(item.id), invoiceId:String(item.numero_factura || item.id), customer:String(item.cliente_nombre || ''), customerId:item.cliente_id ? String(item.cliente_id) : '', storeId:item.local_id ? String(item.local_id) : '', date:item.fecha_venta, total:Number(item.total_venta || 0), paymentMethod:String(item.metodo_pago || ''), status:'Completada', items:[] })); store.collection.apartados=catalog.apartados || []; store.collection.credits=catalog.creditos || []; store.collection.payments=catalog.abonos || []; store.collection.transfers=catalog.traslados || []; store.collection.inventoryMovements=catalog.movimientos || []; render(); } catch (error) { console.warn(error.message); } }
 async function loadRemoteCatalog(){ try { const catalog=await fetchOperationalData(); if(catalog?.modo_demo!==false||!Array.isArray(catalog.locales)||!Array.isArray(catalog.productos))return; store.collection.remoteMode=true; globalThis.famimueblesDemoMode=false; store.collection.stores=catalog.locales.map(item=>({ ...item, id:String(item.id), code:String(item.codigo || item.id), name:String(item.nombre || ''), status:item.activo === false || String(item.activo).toUpperCase() === 'NO' ? 'Inactivo' : 'Activo' })); store.collection.products=catalog.productos.map(item=>({ ...item, id:String(item.id), code:String(item.codigo || item.id), reference:String(item.referencia || item.codigo || item.id), name:String(item.nombre || ''), category:String(item.categoria || 'General'), categoryName:String(item.categoria || 'General'), brand:String(item.marca || ''), price:Number(item.precio_venta ?? item.precio ?? 0), salePrice:Number(item.precio_venta ?? item.precio ?? 0), cost:Number(item.precio_compra || 0), active:item.activo !== false, activo:item.activo !== false, estado:item.activo === false ? 'Inactivo' : 'Activo' })); store.collection.customers = Array.isArray(catalog.clientes) ? catalog.clientes.map(item => ({ ...item, id:String(item.id ?? item.cliente_id ?? ''), name:String(item.nombre ?? item.name ?? 'Cliente'), document:String(item.documento ?? item.document ?? ''), phone:String(item.telefono ?? item.phone ?? ''), email:String(item.email ?? ''), status:String(item.estado ?? item.status ?? 'Activo') })).filter(item => item.id || item.name) : []; const userSources = [catalog.usuarios, catalog.users, catalog.empleados, catalog.administradores, catalog.admins]; const remoteUsers = userSources.flatMap(items => Array.isArray(items) ? items : []); const userMap = new Map(); remoteUsers.forEach((user) => { const record = { ...user }; const rawId = record.id ?? record.id_telegram ?? record.telegram_id ?? record.usuario_id ?? record.user_id ?? ''; const id = String(rawId ?? '').trim(); const name = String(record.name ?? record.nombre ?? record.usuario ?? record.username ?? 'Sin nombre').trim(); const username = String(record.usuario ?? record.username ?? '').trim(); const email = String(record.email ?? record.correo ?? '').trim(); const role = String(record.role ?? record.rol ?? 'Usuario').trim() || 'Usuario'; const status = String(record.status ?? record.estado ?? (record.activo === false ? 'Inactivo' : 'Activo')).trim(); const normalizedStatus = status === 'true' || status === 'TRUE' || status === 'SI' ? 'Activo' : status === 'false' || status === 'FALSE' || status === 'NO' ? 'Inactivo' : status || 'Activo'; const key = id || name || username || `${userMap.size + 1}`; if (!key || (!name && !username && !email)) return; const existing = userMap.get(key) || {}; userMap.set(key, { ...existing, ...record, id: id || existing.id || key, name: name || existing.name || 'Sin nombre', username: username || existing.username || '', email: email || existing.email || '', role: role || existing.role || 'Usuario', status: normalizedStatus || existing.status || 'Activo' }); }); store.collection.users = Array.from(userMap.values()).map(item => ({ ...item, id:String(item.id || item.user_id || item.id_telegram || item.telegram_id || ''), name:String(item.name || item.nombre || item.usuario || item.username || 'Sin nombre'), email:String(item.email || item.correo || ''), role:String(item.role || item.rol || 'Usuario'), status:String(item.status || item.estado || (item.activo === false ? 'Inactivo' : 'Activo')), username:String(item.usuario || item.username || '') })).filter(item => item.name || item.username || item.id); store.collection.sales = Array.isArray(catalog.ventas) ? catalog.ventas : []; store.collection.ventas = Array.isArray(catalog.ventas) ? catalog.ventas : []; store.collection.gastos = Array.isArray(catalog.gastos) ? catalog.gastos : []; store.collection.gasolina = Array.isArray(catalog.gasolina) ? catalog.gasolina : []; store.collection.expenses = Array.isArray(catalog.gastos) ? catalog.gastos : []; store.collection.fuelRecords = Array.isArray(catalog.gasolina) ? catalog.gasolina : []; store.collection.credits = Array.isArray(catalog.creditos) ? catalog.creditos : []; store.collection.apartados = Array.isArray(catalog.apartados) ? catalog.apartados : []; store.collection.payments = Array.isArray(catalog.abonos) ? catalog.abonos : []; store.collection.transfers = Array.isArray(catalog.traslados) ? catalog.traslados : []; store.collection.movements = Array.isArray(catalog.movimientos) ? catalog.movimientos : []; store.collection.movimiento_productos = Array.isArray(catalog.movimiento_productos) ? catalog.movimiento_productos : []; store.collection.movementProducts = Array.isArray(catalog.movimiento_productos) ? catalog.movimiento_productos : []; const productByCode=new Map(store.collection.products.map(product=>[product.code,product.id])); const storeByName=new Map(store.collection.stores.map(store=>[store.name.toUpperCase(),store.id])); store.collection.inventoryByStore=(catalog.inventarios || []).map(item=>{const productId=item.producto_id || productByCode.get(String(item.codigo || '').trim());const storeId=item.local_id || storeByName.get(String(item.local || '').toUpperCase());return { id:String(item.id), productId:productId ? String(productId) : '', storeId:storeId ? String(storeId) : '', quantity:Number(item.stock ?? item.cantidad ?? 0), minimumStock:0, minimum:0, updatedAt:item.actualizado || new Date().toISOString() }; }).filter(item=>item.productId&&item.storeId); const frequency=new Map(); (catalog.ventas_detalles || []).forEach(detail=>{const name=String(detail.producto_nombre || '').trim().toLocaleLowerCase();const product=store.collection.products.find(candidate=>candidate.name.toLocaleLowerCase()===name);if(product)frequency.set(product.id,(frequency.get(product.id)||0)+Number(detail.cantidad||0));}); store.collection.frequentProductIds=[...frequency.entries()].sort((a,b)=>b[1]-a[1]).slice(0,4).map(entry=>entry[0]); store.collection.customers=(catalog.clientes || []).map(item=>({ ...item, id:String(item.id), name:String(item.nombre || ''), document:String(item.documento || ''), phone:String(item.telefono || ''), email:String(item.email || ''), purchases:0, credits:0, balance:0, status:'Activo' })); store.collection.sales=(catalog.ventas || []).map(item=>({ ...item, id:String(item.id), invoiceId:String(item.numero_factura || item.id), customer:String(item.cliente_nombre || ''), customerId:item.cliente_id ? String(item.cliente_id) : '', storeId:item.local_id ? String(item.local_id) : '', date:item.fecha_venta, total:Number(item.total_venta || 0), paymentMethod:String(item.metodo_pago || ''), status:'Completada', items:[] })); store.collection.apartados=catalog.apartados || []; store.collection.credits=catalog.creditos || []; store.collection.payments=catalog.abonos || []; store.collection.transfers=catalog.traslados || []; store.collection.inventoryMovements=catalog.movimientos || []; render(); } catch (error) { console.warn(error.message); } }
 */
-function refreshProducts(){ const query=$('[data-filter="products"]')?.value||'',storeId=$('[data-product-store]')?.value||'all',active=$('[data-product-active]')?.value||'all',limit=50,stockMap=new Map(); (store.collection.inventoryByStore||[]).forEach(row=>{if(storeId==='all'||String(row.storeId)===String(storeId))stockMap.set(row.productId,(stockMap.get(row.productId)||0)+Number(row.quantity||0));}); let items=store.collection.products.filter(product=>productMatches(product,{query,active,stockMap}));const pages=Math.max(1,Math.ceil(items.length/limit));productPage=Math.min(productPage,pages);if($('#products-table'))$('#products-table').innerHTML=productTable(items,store.collection.stores,limit,productPage,store.collection,storeId);if($('[data-product-count]'))$('[data-product-count]').textContent=`${items.length} productos`;if($('[data-product-page-label]'))$('[data-product-page-label]').textContent=`Pagina ${productPage} de ${pages}`;}
+function refreshProducts(){ const query=$('[data-filter="products"]')?.value||'',storeId=$('[data-product-store]')?.value||'all',active=$('[data-product-active]')?.value||'all',limit=50,stockMap=new Map(store.collection.products.map(product=>[product.id,store.collection.inventoryByStore.filter(row=>row.productId===product.id&&(storeId==='all'||String(row.storeId)===String(storeId))).reduce((sum,row)=>sum+Number(row.quantity||0),0)]));let items=store.collection.products.filter(product=>productMatches(product,{query,active,stockMap}));const pages=Math.max(1,Math.ceil(items.length/limit));productPage=Math.min(productPage,pages);if($('#products-table'))$('#products-table').innerHTML=productTable(items,store.collection.stores,limit,productPage,store.collection,storeId);if($('[data-product-count]'))$('[data-product-count]').textContent=`${items.length} productos`;if($('[data-product-page-label]'))$('[data-product-page-label]').textContent=`Pagina ${productPage} de ${pages}`;}
 function clearProductFilters(){ const defaults={'[data-filter="products"]':'','[data-product-store]':'all','[data-product-active]':'active'};Object.entries(defaults).forEach(([selector,value])=>{const element=$(selector);if(element)element.value=value;});productPage=1;refreshProducts();}
 function modal(title, fields, onSubmit){ $('#modal-root').innerHTML=`<div class="modal-backdrop"><form class="modal" id="data-modal"><button type="button" class="modal-close">×</button><p class="eyebrow">FAMIMUEBLES ERP</p><h2>${title}</h2>${fields.map(field=>`<label class="input-label">${field.label}<input class="field" name="${field.name}" type="${field.type||'text'}" value="${field.value||''}" ${field.required===false?'':'required'}></label>`).join('')}<button class="primary wide">Guardar</button></form></div>`; $('.modal-close').onclick=()=>$('#modal-root').innerHTML=''; $('#data-modal').onsubmit=async event=>{event.preventDefault();const button=event.target.querySelector('button.primary');button.disabled=true;try{await onSubmit(Object.fromEntries(new FormData(event.target)));}catch(error){showToast(error.message,'error');}finally{button.disabled=false;}}; }
 async function persistCatalogRecord(path, record, method='POST'){ const requestId=method==='POST'?(globalThis.crypto?.randomUUID?crypto.randomUUID():`${path}-${Date.now()}-${Math.random()}`):''; const options={headers:{'X-Tenant-ID':activeTenantId(),...(requestId?{'Idempotency-Key':requestId}: {})}}; const body={...record,...(requestId?{requestId}:{}),tenantId:activeTenantId()}; try { return method==='PUT' ? await api.put(path,body,options) : method==='DELETE' ? await api.delete(path,body,options) : await api.post(path,body,options); } catch(error) { if(error.status===401){localStorage.removeItem('famimuebles-auth-token');localStorage.removeItem('famimuebles-user');throw new Error('La sesion expiro. Inicia sesion nuevamente para guardar cambios.');} throw error; } }
 const remoteDomainCollections=['customers','suppliers','purchases','credits','expenses','accountsPayable','supplierPayments','customerAccounts','returns','supplierReturns','stockCounts','reservations','warranties','damagedStock','cashSessions','cashMovements','bankAccounts','quotes','orders','deliveries','creditNotes','talonarios','talonarioJustifications'];
-async function persistDomainRecord(collection, record){ return persistCatalogRecord(`/api/domain/${encodeURIComponent(collection)}`,{...record,tenantId:activeTenantId()}); }
+async function persistDomainRecord(collection, record){
+	const path=`/api/domain/${encodeURIComponent(collection)}`;
+	const payload={...record,tenantId:activeTenantId()};
+	try {
+		return await persistCatalogRecord(path,payload);
+	} catch(error) {
+		if(error.status!==400 || !String(error.message||'').toLowerCase().includes('cambio mientras'))throw error;
+		const retry={...payload};
+		delete retry.version;
+		delete retry._version;
+		return persistCatalogRecord(path,retry);
+	}
+}
 async function seedHistoricalTalonarios(state){
 	if(!Array.isArray(state.talonarios))state.talonarios=[];
 	const existing=new Set(state.talonarios.map(item=>String(item.id)));
@@ -193,9 +207,7 @@ async function saveTalonarioForm(form){
 		source.status='ENVIADO';
 		source.sentAt=new Date().toISOString();
 		source.destinationStoreId=destinationId;
-		const previousActive=(store.collection.talonarios||[]).filter(item=>String(item.type).toUpperCase()===String(source.type).toUpperCase()&&String(item.storeId||'')===destinationId&&String(item.status||'').toUpperCase()==='EN_USO').sort((left,right)=>Number(right.currentNumber||0)-Number(left.currentNumber||0))[0];
-		const previousLastNumber=Number(previousActive?.currentNumber||source.startNumber-1);
-		const destination={...source,id:`TAL-${Date.now()}-${Math.random().toString(36).slice(2,7)}`,storeId:destinationId,destinationName,status:'EN_USO',currentNumber:source.startNumber-1,lastUsedNumber:previousLastNumber,consecutiveBaseline:source.startNumber-1,sentFrom:'INV CRR 5 3 26',sentAt:new Date().toISOString()};
+		const destination={...source,id:`TAL-${Date.now()}-${Math.random().toString(36).slice(2,7)}`,storeId:destinationId,destinationName,status:'EN_USO',currentNumber:source.startNumber,sentFrom:'INV CRR 5 3 26',sentAt:new Date().toISOString()};
 		delete destination.destinationStoreId;
 		await persistDomainRecord('talonarios',source);
 		await persistDomainRecord('talonarios',destination);
@@ -224,7 +236,6 @@ function refreshTalonarioLowStockNotification(type){
 	store.collection.notifications=store.collection.notifications.filter(item=>item.key!==key);
 	if(available===2)store.collection.notifications.push({id:`NOT-TAL-${normalized}`,key,text:`Quedan 2 talonarios de ${normalized} disponibles en INV CRR 5 3 26.`,type:'warning',action:'talonarios',targetId:'',createdAt:new Date().toISOString(),read:false});
 }
-function talonarioAlertDate(){return new Date().toISOString().slice(0,10);}
 async function registerTalonarioSale(sale){
 	const documentNumber=Number(String(sale.invoiceNumber||'').trim());
 	if(!Number.isInteger(documentNumber)||documentNumber<=0)return;
@@ -233,58 +244,58 @@ async function registerTalonarioSale(sale){
 	const local=store.collection.stores?.find(item=>String(item.id)===localId);
 	const localName=local?.name||localId;
 	const talonario=(store.collection.talonarios||[]).filter(item=>String(item.type).toUpperCase()===type&&String(item.storeId||'')===localId&&String(item.status||'').toUpperCase()==='EN_USO'&&documentNumber>=Number(item.startNumber)&&documentNumber<=Number(item.endNumber)).sort((left,right)=>Number(right.startNumber)-Number(left.startNumber))[0];
-	if(!talonario){
-		const localTalonarios=(store.collection.talonarios||[]).filter(item=>String(item.type).toUpperCase()===type&&String(item.storeId||'')===localId&&String(item.status||'').toUpperCase()==='EN_USO');
-		const ranges=localTalonarios.map(item=>`${item.startNumber} - ${item.endNumber}`).join(', ');
-		console.warn(`La venta ${documentNumber} no coincide con un talonario ${type} activo de ${localName}. Rangos: ${ranges||'ninguno'}`);
-		return;
-	}
+	if(!talonario)return;
 	const previousNumber=Number(talonario.currentNumber||talonario.startNumber);
 	if(documentNumber>previousNumber&&!Object.prototype.hasOwnProperty.call(talonario,'consecutiveBaseline'))talonario.consecutiveBaseline=previousNumber;
 	talonario.currentNumber=Math.max(previousNumber,documentNumber);
-	talonario.lastUsedNumber=talonario.currentNumber;
 	await persistDomainRecord('talonarios',talonario);
 	const remaining=Number(talonario.endNumber)-documentNumber;
 	if(remaining<=3&&remaining>=0){
 		if(!Array.isArray(store.collection.notifications))store.collection.notifications=[];
-		const key=`talonario-venta-bajo:${talonario.id}:${talonarioAlertDate()}`;
-		store.collection.notifications=store.collection.notifications.filter(item=>!String(item.key||'').startsWith(`talonario-venta-bajo:${talonario.id}:`)||String(item.key)===key);
-		if(!store.collection.notifications.some(item=>item.key===key))store.collection.notifications.push({id:`NOT-TAL-VENTA-${talonario.id}-${talonarioAlertDate()}`,key,text:`Alerta: al talonario de ${type==='RECIBO'?'recibos':'remisiones'} ${talonario.startNumber} - ${talonario.endNumber} del local ${localName} le quedan ${remaining} documentos. Envia un talonario nuevo.`,type:'warning',action:'talonarios',targetId:talonario.id,createdAt:new Date().toISOString(),read:false});
+		const key=`talonario-venta-bajo:${talonario.id}:${documentNumber}`;
+		store.collection.notifications=store.collection.notifications.filter(item=>!String(item.key||'').startsWith(`talonario-venta-bajo:${talonario.id}:`));
+		store.collection.notifications.push({id:`NOT-TAL-VENTA-${talonario.id}`,key,text:`Alerta: al talonario de ${type==='RECIBO'?'recibos':'remisiones'} ${talonario.startNumber} - ${talonario.endNumber} del local ${localName} le quedan ${remaining} documentos. Envia un talonario nuevo.`,type:'warning',action:'talonarios',targetId:talonario.id,createdAt:new Date().toISOString(),read:false});
 	}
 	store.save();
 }
 async function refreshTalonarioSalesAlerts(){
 	const sales=store.collection.sales||[];
-	if(!Array.isArray(store.collection.notifications))store.collection.notifications=[];
-	const activeAlertKeys=new Set();
 	for(const talonario of (store.collection.talonarios||[]).filter(item=>String(item.status||'').toUpperCase()==='EN_USO')){
 		const type=String(talonario.type||'REMISION').toUpperCase();
-		const localId=String(talonario.storeId||'');
-		const localName=String(talonario.destinationName||localId);
-		const documents=sales.map(sale=>({sale,number:Number(String(sale.invoiceNumber||sale.numero_factura||sale.invoice||'').trim())})).filter(({sale,number})=>Number.isInteger(number)&&number>=Number(talonario.startNumber)&&number<=Number(talonario.endNumber)&&(String(sale.documentType||sale.tipo_documento||'').trim()===''||String(sale.documentType||sale.tipo_documento).toUpperCase()===type)&&(String(sale.storeId||sale.local_id||sale.local||'')===localId||String(sale.storeName||sale.localName||'')===localName));
-		const latest=documents.sort((left,right)=>right.number-left.number)[0]?.number;
-		const current=Number(talonario.currentNumber ?? Number(talonario.startNumber)-1);
-		if(latest && latest>current){
-			if(!Object.prototype.hasOwnProperty.call(talonario,'consecutiveBaseline'))talonario.consecutiveBaseline=current;
-			talonario.currentNumber=latest;
-			talonario.lastUsedNumber=latest;
-			try{await persistDomainRecord('talonarios',talonario);}catch(error){console.warn('No se pudo actualizar el consecutivo del talonario:',error.message);}
-		}
-		const remaining=Number(talonario.endNumber)-Number(talonario.lastUsedNumber ?? talonario.currentNumber ?? Number(talonario.startNumber)-1);
+		const alertLocalName=String(talonario.destinationName||talonario.storeId||'Sin local');
+		const latest=currentTalonarioNumber(talonario, sales);
+		const previous=Number(talonario.currentNumber||talonario.startNumber);
+		if(latest===previous)continue;
+		if(latest>previous&&!Object.prototype.hasOwnProperty.call(talonario,'consecutiveBaseline'))talonario.consecutiveBaseline=previous;
+		talonario.currentNumber=latest;
+		try{await persistDomainRecord('talonarios',talonario);}catch(error){console.warn('No se pudo actualizar el consecutivo del talonario:',error.message);}
+		const remaining=Number(talonario.endNumber)-latest;
 		if(remaining<=3&&remaining>=0){
-			const key=`talonario-venta-bajo:${talonario.id}:${talonarioAlertDate()}`;
-			activeAlertKeys.add(key);
-			if(!store.collection.notifications.some(item=>item.key===key))store.collection.notifications.push({id:`NOT-TAL-VENTA-${talonario.id}-${talonarioAlertDate()}`,key,text:`Alerta: al talonario de ${type==='RECIBO'?'recibos':'remisiones'} ${talonario.startNumber} - ${talonario.endNumber} del local ${localName} le quedan ${remaining} documentos. Envia un talonario nuevo.`,type:'warning',action:'talonarios',targetId:talonario.id,createdAt:new Date().toISOString(),read:false});
+			if(!Array.isArray(store.collection.notifications))store.collection.notifications=[];
+			const key=`talonario-venta-bajo:${talonario.id}:${latest}`;
+			store.collection.notifications=store.collection.notifications.filter(item=>!String(item.key||'').startsWith(`talonario-venta-bajo:${talonario.id}:`));
+			store.collection.notifications.push({id:`NOT-TAL-VENTA-${talonario.id}`,key,text:`Alerta: al talonario de ${type==='RECIBO'?'recibos':'remisiones'} ${talonario.startNumber} - ${talonario.endNumber} del local ${alertLocalName} le quedan ${remaining} documentos. Envia un talonario nuevo.`,type:'warning',action:'talonarios',targetId:talonario.id,createdAt:new Date().toISOString(),read:false});
 		}
 	}
-	store.collection.notifications=store.collection.notifications.filter(item=>{
-		const key=String(item.key||'');
-		if(!key.startsWith('talonario-venta-bajo:'))return true;
-		return activeAlertKeys.has(key);
-	});
 	store.save();
 }
-async function hydrateDomainCollections(state){ await Promise.all(remoteDomainCollections.map(async collection=>{ try { const payload=await api.get(`/api/domain/${encodeURIComponent(collection)}`,{headers:{'X-Tenant-ID':activeTenantId()},cache:'no-store',timeout:15000}); const items=Array.isArray(payload.items)?payload.items:[];if(items.length||!Array.isArray(state[collection])||state[collection].length===0)state[collection]=items; } catch(error) { console.warn(`No se pudo cargar ${collection}:`,error.message); } })); return state; }
+const criticalDomainCollections = new Set(['customers','suppliers','purchases','accountsPayable','supplierPayments','talonarios','talonarioJustifications','credits','expenses']);
+async function loadDomainCollection(state, collection, timeout=5000){
+	try {
+		const payload=await api.get(`/api/domain/${encodeURIComponent(collection)}`,{headers:{'X-Tenant-ID':activeTenantId()},cache:'no-store',timeout});
+		const items=Array.isArray(payload.items)?payload.items:[];
+		if(items.length||!Array.isArray(state[collection])||state[collection].length===0)state[collection]=items;
+	} catch(error) {
+		console.warn(`No se pudo cargar ${collection}:`,error.message);
+	}
+}
+async function hydrateDomainCollections(state){
+	const critical=remoteDomainCollections.filter(collection=>criticalDomainCollections.has(collection));
+	const secondary=remoteDomainCollections.filter(collection=>!criticalDomainCollections.has(collection));
+	await Promise.all(critical.map(collection=>loadDomainCollection(state,collection,5000)));
+	Promise.all(secondary.map(collection=>loadDomainCollection(state,collection,3000))).then(()=>{if(currentRoute()!=='dashboard')render();});
+	return state;
+}
 async function hydrateUsers(state){
 	const normalize=(item,source)=>{
 		const name=String(item?.name||item?.nombre||item?.username||item?.usuario||item?.empleado||'').trim();
@@ -305,8 +316,8 @@ async function hydrateUsers(state){
 	};
 	const localUsers=Array.isArray(state.users)?state.users:[];
 	const results=await Promise.allSettled([
-		api.get('/api/users',{headers:{'X-Tenant-ID':activeTenantId()},cache:'no-store',timeout:15000}),
-		api.get('/api/domain/users',{headers:{'X-Tenant-ID':activeTenantId()},cache:'no-store',timeout:15000})
+		api.get('/api/users',{headers:{'X-Tenant-ID':activeTenantId()},cache:'no-store',timeout:5000}),
+		api.get('/api/domain/users',{headers:{'X-Tenant-ID':activeTenantId()},cache:'no-store',timeout:5000})
 	]);
 	const authPayload=results[0].status==='fulfilled'?results[0].value:null;
 	const employeePayload=results[1].status==='fulfilled'?results[1].value:null;
@@ -332,7 +343,7 @@ async function refreshSharedState(){
 		await hydrateCatalog(store.state);
 		await hydrateDomainCollections(store.state);
 		repairTalonario15301().catch(error=>console.warn('No se pudo corregir el talonario 15301-15350:',error.message));
-		Promise.all([seedHistoricalTalonarios(store.state),seedConfiguredTalonariosActivos()]).then(()=>deduplicateTalonarios()).then(()=>refreshTalonarioSalesAlerts()).then(()=>{if(currentRoute()==='talonarios')render();}).catch(error=>console.warn('No se pudieron preparar los talonarios:',error.message));
+		refreshTalonarioSalesAlerts().then(()=>{if(currentRoute()==='talonarios')render();}).catch(error=>console.warn('No se pudieron actualizar las alertas de talonarios:',error.message));
 		await hydrateUsers(store.state);
 		normalizePayableSuppliers(store.state);
 		syncCustomerBalances();
@@ -383,7 +394,7 @@ function openEditUserModal(userId){ const user=store.collection.users.find(item=
 function openNotifications(){ const pending=store.collection.notifications.filter(item=>!item.read); $('#modal-root').innerHTML='<div class="modal-backdrop"><section class="modal notification-modal"><button type="button" class="modal-close">×</button><p class="eyebrow">CENTRO DE AVISOS</p><h2>Notificaciones</h2><div class="notification-list">'+renderNotifications(pending)+'</div><button class="outline wide" data-action="mark-notifications-read" '+(!pending.length?'disabled':'')+'>Marcar como leidas</button></section></div>'; $('.modal-close').onclick=()=>$('#modal-root').innerHTML=''; }
 function creditPaymentModal(creditId){ const credit=store.collection.credits.find(item=>item.id===creditId); if(!credit)return; const balance=Math.max(0,Number(credit.total||credit.originalAmount||0)-Number(credit.initial||credit.downPayment||0)-Number(credit.paid||0)); $('#modal-root').innerHTML=`<div class="modal-backdrop"><form class="modal" id="credit-payment-form"><button type="button" class="modal-close">×</button><p class="eyebrow">CARTERA</p><h2>Registrar abono</h2><p>Cliente: <strong>${credit.customer||credit.cliente||'Sin nombre'}</strong></p><p>Saldo pendiente: <strong>${money(balance)}</strong></p><label class="input-label">Monto<input class="field" name="amount" type="number" min="1" max="${balance}" required></label><label class="input-label">Numero de recibo<input class="field" name="receiptNumber" required placeholder="Recibo del abono"></label><label class="input-label">Metodo<select class="field" name="method"><option>Efectivo</option><option>Transferencia</option><option>Consignacion</option><option>Tarjeta</option></select></label><button class="primary wide">Guardar abono</button></form></div>`; $('.modal-close').onclick=()=>$('#modal-root').innerHTML=''; $('#credit-payment-form').onsubmit=event=>{event.preventDefault();try{const values=Object.fromEntries(new FormData(event.target));registerPayment(store.collection,{kind:'credit',id:creditId,receiptNumber:values.receiptNumber},values.amount,values.method);store.save();$('#modal-root').innerHTML='';render();showToast('Abono registrado correctamente.');}catch(error){showToast(error.message,'error');}}; }
 function apartadoPaymentModal(apartadoId){const apartado=store.collection.apartados.find(item=>String(item.id)===String(apartadoId));if(!apartado)return;const balance=Math.max(0,Number(apartado.saldoPendiente ?? apartado.saldo_pendiente ?? apartado.total ?? 0));$('#modal-root').innerHTML=`<div class="modal-backdrop"><form class="modal" id="apartado-payment-form"><button type="button" class="modal-close">×</button><p class="eyebrow">APARTADOS</p><h2>Registrar abono</h2><p>Cliente: <strong>${apartado.customer||apartado.cliente||apartado.clienteNombre||'Sin nombre'}</strong></p><p>Saldo pendiente: <strong>${money(balance)}</strong></p><label class="input-label">Monto<input class="field" name="amount" type="number" min="1" max="${balance}" required></label><label class="input-label">Numero de recibo<input class="field" name="receiptNumber" required placeholder="Recibo del abono"></label><label class="input-label">Metodo<select class="field" name="method"><option>Efectivo</option><option>Transferencia</option><option>Consignacion</option><option>Tarjeta</option></select></label><button class="primary wide">Guardar abono</button></form></div>`;$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';$('#apartado-payment-form').onsubmit=async event=>{event.preventDefault();try{const values=Object.fromEntries(new FormData(event.target));await persistCatalogRecord('/api/shared-payment',{kind:'apartado',id:apartadoId,amount:Number(values.amount),receiptNumber:values.receiptNumber,method:values.method});const normalized=await hydrateState();if(normalized){store.state=normalized;await hydrateCatalog(store.state);}$('#modal-root').innerHTML='';render();showToast('Abono registrado correctamente.');}catch(error){showToast(error.message,'error');}};}
-function renderApp(){ const route=currentRoute(); $('#section-title').textContent=navItems.find(item=>item.id===route)?.label||'Dashboard'; $('#app-content').innerHTML=views[route](); if(route==='facturacion'){syncBillingSummary();syncInvoiceField();} const pendingNotifications=store.collection.notifications.filter(item=>!item.read).length; const notificationCount=$('#notification-count'); if(notificationCount){notificationCount.textContent=pendingNotifications; notificationCount.hidden=pendingNotifications===0;} if(route==='productos'){const filters=$('.product-filters');if(filters&&!filters.querySelector('[data-action="clear-product-filters"]')){const button=document.createElement('button');button.className='outline';button.type='button';button.dataset.action='clear-product-filters';button.textContent='Limpiar filtros';filters.append(button);}} applyShellMode(); renderNav(); $('#sidebar').classList.remove('open'); }
+function renderApp(){ const route=currentRoute(); $('#section-title').textContent=navItems.find(item=>item.id===route)?.label||'Dashboard'; $('#app-content').innerHTML=appHydrating ? '<section class="panel app-loading"><strong>Cargando información…</strong><span>Preparando los datos actualizados.</span></section>' : views[route](); if(appHydrating)return; if(route==='facturacion'){syncBillingSummary();syncInvoiceField();} const pendingNotifications=store.collection.notifications.filter(item=>!item.read).length; const notificationCount=$('#notification-count'); if(notificationCount){notificationCount.textContent=pendingNotifications; notificationCount.hidden=pendingNotifications===0;} if(route==='productos'){const filters=$('.product-filters');if(filters&&!filters.querySelector('[data-action="clear-product-filters"]')){const button=document.createElement('button');button.className='outline';button.type='button';button.dataset.action='clear-product-filters';button.textContent='Limpiar filtros';filters.append(button);}} applyShellMode(); renderNav(); $('#sidebar').classList.remove('open'); }
 function authScreen(configured){ document.body.innerHTML=`<main class="auth-screen"><section class="auth-card"><p class="eyebrow">FAMIMUEBLES ERP</p><h1>${configured?'Iniciar sesion':'Configurar administrador'}</h1><p class="muted">${configured?'Accede a tu empresa para continuar.':'Crea el primer usuario administrador de esta instalacion.'}</p><form id="auth-form"><label class="input-label">Usuario<input class="field" name="username" minlength="3" required autocomplete="username"></label><label class="input-label">Clave<input class="field" name="password" type="password" minlength="8" required autocomplete="current-password"></label><button class="primary wide">${configured?'Entrar':'Crear administrador'}</button><p id="auth-error" class="danger-text" role="alert"></p></form></section></main>`; $('#auth-form').onsubmit=async event=>{event.preventDefault();const values=Object.fromEntries(new FormData(event.target));const endpoint=configured?'/api/auth/login':'/api/auth/setup';try{const payload=await api.post(endpoint,values);if(payload.token)localStorage.setItem('famimuebles-auth-token',payload.token);localStorage.setItem('famimuebles-user',JSON.stringify(payload.user||{username:values.username,role:'ADMINISTRADOR'}));location.reload();}catch(error){$('#auth-error').textContent=error.message;}}; }
 function openCustomerModal(customerId=''){ const customer=customerId && store.collection.customers.find(item=>item.id===customerId); modal(customer ? 'Editar cliente' : 'Nuevo cliente', [{name:'name',label:'Nombre completo',value:customer?.name||''},{name:'document',label:'Documento',value:customer?.document||''},{name:'phone',label:'Telefono',value:customer?.phone||''},{name:'email',label:'Correo',value:customer?.email||'',required:false},{name:'status',label:'Estado',value:customer?.status||'Activo'}],async values=>{ const payload={id:customer?.id||generateId('CLI',store.collection.customers),...values,purchases:Number(customer?.purchases ?? 0),credits:Number(customer?.credits ?? 0),balance:Number(customer?.balance ?? 0),status:String(values.status || customer?.status || 'Activo'),updatedAt:new Date().toISOString()}; await persistDomainRecord('customers',payload); const index=store.collection.customers.findIndex(item=>item.id===payload.id);if(index===-1)store.collection.customers.push(payload);else store.collection.customers[index]=payload; $('#modal-root').innerHTML=''; render(); showToast(customer ? 'Cliente actualizado correctamente.' : 'Cliente guardado correctamente.');}); }
 function openModal(type){ const configs={customer:['Nuevo cliente',[['name','Nombre completo'],['document','Documento'],['phone','Telefono'],['email','Correo']],values=>store.add('customers',{id:generateId('CLI',store.collection.customers),...values,purchases:0,credits:0,balance:0,status:'Activo'})],product:['Nuevo producto',[['name','Nombre'],['code','Codigo'],['reference','Referencia'],['category','Categoria'],['price','Precio','number'],['minimum','Stock minimo','number']],values=>{const product=store.add('products',{id:generateId('PROD',store.collection.products),...values,price:Number(values.price)||0,minimum:Number(values.minimum)||0,minimumPrice:Number(values.price)||0,stock:0,ideal:(Number(values.minimum)||0)*3,estado:'Activo',activo:true,storeId:state.storeId});ensureInventoryEntry(store.collection,product.id,state.storeId);}],credit:['Nuevo credito',[['total','Valor total','number'],['initial','Cuota inicial','number'],['installmentsCount','Numero de cuotas','number']],values=>store.add('credits',{id:generateId('CR',store.collection.credits),customerId:state.customerId,total:Number(values.total)||0,originalAmount:Number(values.total)||0,initial:Number(values.initial)||0,downPayment:Number(values.initial)||0,paid:0,financedAmount:Math.max(0,(Number(values.total)||0)-(Number(values.initial)||0)),installmentsCount:Number(values.installmentsCount)||1,installmentAmount:0,next:'Pendiente',date:'Ahora',status:'Al dia'})],expense:['Nuevo gasto',[['description','Descripcion'],['amount','Valor','number']],values=>store.add('expenses',{id:generateId('GAS',store.collection.expenses),date:new Date().toISOString().slice(0,10),storeId:state.storeId,category:'Otros',description:values.description,amount:Number(values.amount)||0,paymentMethod:'Efectivo',createdBy:'USR-00001'})],fuel:['Registrar gasolina',[['vehicle','Vehiculo'],['mileage','Kilometraje actual','number'],['quantity','Galones','number'],['amount','Valor','number']],values=>store.add('fuelRecords',{id:generateId('FUE',store.collection.fuelRecords),date:new Date().toISOString().slice(0,10),storeId:state.storeId,vehicle:values.vehicle,driver:'Pendiente',quantity:Number(values.quantity)||0,unit:'galones',amount:Number(values.amount)||0,mileage:Number(values.mileage)||0,station:'Pendiente',createdBy:'USR-00001'})],user:['Nuevo usuario',[['name','Nombre'],['email','Correo'],['role','Rol']],values=>store.add('users',{id:generateId('USR',store.collection.users),...values,status:'Activo'})]}; const config=configs[type]; if(!config)return; modal(config[0],config[1].map(field=>({name:field[0],label:field[1],type:field[2]})),values=>{config[2](values);store.save();$('#modal-root').innerHTML='';render();showToast('Registro guardado correctamente.');}); }
@@ -433,6 +444,42 @@ document.addEventListener('click',event=>{const button=event.target.closest('[da
 async function toggleStore(storeId){const storeItem=store.collection.stores.find(item=>String(item.id)===String(storeId));if(!storeItem)return;try{await persistCatalogRecord('/api/catalog/store',{...storeItem,status:storeItem.status==='Inactivo'?'Activo':'Inactivo',active:storeItem.status==='Inactivo'},'PUT');storeItem.status=storeItem.status==='Inactivo'?'Activo':'Inactivo';storeItem.active=storeItem.status==='Activo';store.save();render();showToast(`Local ${storeItem.status==='Activo'?'activado':'desactivado'}.`);}catch(error){showToast(error.message,'error');}}
 async function deleteStore(storeId){if(!window.confirm('¿Eliminar este local? Solo se permite si no tiene información relacionada.'))return;try{await persistCatalogRecord(`/api/catalog/store/${encodeURIComponent(storeId)}`,{},'DELETE');store.collection.stores=store.collection.stores.filter(item=>String(item.id)!==String(storeId));store.save();render();showToast('Local eliminado correctamente.');}catch(error){showToast(error.message,'error');}}
 function openApartadoEditModal(id){const item=store.collection.apartados.find(entry=>String(entry.id)===String(id));if(!item)return;$('#modal-root').innerHTML=`<div class="modal-backdrop"><form class="modal" id="apartado-edit-form"><button type="button" class="modal-close">×</button><p class="eyebrow">APARTADOS</p><h2>Editar apartado ${item.id}</h2><label class="input-label">Cliente<input class="field" name="customer" value="${item.customer||item.clienteNombre||item.cliente_nombre||item.cliente||''}" required></label><label class="input-label">Telefono<input class="field" name="phone" value="${item.phone||item.clienteTelefono||item.cliente_telefono||item.telefono||''}"></label><label class="input-label">Direccion<input class="field" name="address" value="${item.address||item.direccion||''}"></label><label class="input-label">Estado<select class="field" name="status"><option ${String(item.status).toUpperCase()==='PENDIENTE'?'selected':''}>PENDIENTE</option><option ${String(item.status).toUpperCase()==='ENTREGADO'?'selected':''}>ENTREGADO</option><option ${String(item.status).toUpperCase()==='CANCELADO'?'selected':''}>CANCELADO</option></select></label><button class="primary wide">Guardar cambios</button></form></div>`;$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';$('#apartado-edit-form').onsubmit=async event=>{event.preventDefault();try{const values=Object.fromEntries(new FormData(event.target));await persistCatalogRecord('/api/shared-apartado',{id:item.id,...values});const normalized=await hydrateState();if(normalized){store.state=normalized;await hydrateCatalog(store.state);}$('#modal-root').innerHTML='';render();showToast('Apartado actualizado correctamente.');}catch(error){showToast(error.message,'error');}};}
+function openPurchaseEditModal(purchase,targetCollection='purchases'){
+	const suppliers=store.collection.suppliers||[];
+	const stores=store.collection.stores||[];
+	const supplierOptions=suppliers.map(supplier=>`<option value="${supplier.id}" ${String(supplier.id)===String(purchase.supplierId)?'selected':''}>${supplier.code||''} · ${supplier.name}</option>`).join('');
+	const storeOptions=stores.map(storeItem=>`<option value="${storeItem.id}" ${String(storeItem.id)===String(purchase.storeId)?'selected':''}>${storeItem.name||storeItem.id}</option>`).join('');
+	const total=Number(purchase.total ?? purchase.amount ?? (purchase.items||[]).reduce((sum,item)=>sum+Number(item.quantity||0)*Number(item.unitCost??item.price??0),0));
+	const dueDate=String(purchase.dueDate||'').slice(0,10);
+	$('#modal-root').innerHTML=`<div class="modal-backdrop"><form class="modal" id="purchase-edit-form"><button type="button" class="modal-close">×</button><p class="eyebrow">ABASTECIMIENTO</p><h2>Editar compra ${purchase.id}</h2><label class="input-label">Proveedor<select class="field" name="supplierId" required><option value="">Seleccionar proveedor</option>${supplierOptions}</select></label><label class="input-label">Local destino<select class="field" name="storeId" required>${storeOptions}</select></label><label class="input-label">Factura proveedor<input class="field" name="supplierInvoice" value="${purchase.supplierInvoice||purchase.factura||''}"></label><label class="input-label">Total de la compra<input class="field" name="total" type="number" min="0" step="0.01" value="${total}" required></label><label class="input-label">Forma de pago<select class="field" name="paymentMethod"><option value="Contado" ${String(purchase.paymentMethod).toLowerCase()==='contado'?'selected':''}>Contado</option><option value="Credito" ${String(purchase.paymentMethod).toLowerCase().includes('credito')?'selected':''}>Crédito</option><option value="Transferencia" ${String(purchase.paymentMethod).toLowerCase()==='transferencia'?'selected':''}>Transferencia</option></select></label><label class="input-label">Vencimiento de la cuenta<input class="field" name="dueDate" type="date" value="${dueDate}"></label><label class="input-label">Estado<select class="field" name="status"><option value="RECIBIDA" ${String(purchase.status).toUpperCase()==='RECIBIDA'?'selected':''}>Recibida</option><option value="BORRADOR" ${String(purchase.status).toUpperCase()==='BORRADOR'?'selected':''}>Borrador</option><option value="CANCELADA" ${String(purchase.status).toUpperCase()==='CANCELADA'?'selected':''}>Cancelada</option></select></label><p class="muted">Al elegir Crédito se creará o actualizará la cuenta por pagar vinculada a esta compra.</p><button class="primary wide">Guardar cambios</button></form></div>`;
+	$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';
+	$('#purchase-edit-form').onsubmit=async event=>{
+		event.preventDefault();
+		try{
+			const values=Object.fromEntries(new FormData(event.target));
+			const supplier=suppliers.find(item=>String(item.id)===String(values.supplierId));
+			if(!supplier)throw new Error('Selecciona un proveedor válido.');
+			const amount=Number(values.total);
+			if(!Number.isFinite(amount)||amount<0)throw new Error('El total debe ser un valor válido.');
+			const updated={...purchase,supplierId:supplier.id,supplierName:supplier.name,storeId:values.storeId,supplierInvoice:String(values.supplierInvoice||''),paymentMethod:values.paymentMethod,total:amount,amount,status:values.status,updatedAt:new Date().toISOString()};
+			if(targetCollection==='entries')await persistCatalogRecord('/api/shared-entry',updated,'PUT');else await persistDomainRecord('purchases',updated);
+			const source=store.collection[targetCollection]||[];
+			const index=source.findIndex(item=>String(item.id)===String(purchase.id));
+			if(index>=0)source[index]=updated;
+			const existing=(store.collection.accountsPayable||[]).find(account=>String(account.purchaseId)===String(purchase.id));
+			if(String(values.paymentMethod).toLowerCase().includes('credito')){
+				const account=existing||{id:generateId('CXP',store.collection.accountsPayable),purchaseId:String(purchase.id),paidAmount:0,createdAt:new Date().toISOString()};
+				Object.assign(account,{supplierId:supplier.id,supplierName:supplier.name,storeId:values.storeId,invoiceNumber:String(values.supplierInvoice||purchase.id),issueDate:purchase.createdAt||new Date().toISOString(),dueDate:values.dueDate?`${values.dueDate}T23:59:59.000Z`:new Date(Date.now()+30*86400000).toISOString(),totalAmount:amount,balance:Math.max(0,amount-Number(account.paidAmount||0)),status:'PENDIENTE',paymentTerms:'Credito',updatedAt:new Date().toISOString()});
+				await persistDomainRecord('accountsPayable',account);
+				if(!existing)store.collection.accountsPayable.push(account);
+			}else if(existing&&Number(existing.paidAmount||0)===0){
+				existing.status='ANULADA';
+				await persistDomainRecord('accountsPayable',existing);
+			}
+			store.save();$('#modal-root').innerHTML='';render();showToast('Compra y cuenta por pagar actualizadas correctamente.');
+		}catch(error){showToast(error.message,'error');}
+	};
+}
 function openDomainEditModal(collection,id,label){
 	let item=(store.collection[collection]||[]).find(entry=>String(entry.id)===String(id));
 	if(!item && collection==='purchases') item=(store.collection.entries||[]).find(entry=>String(entry.id)===String(id) || String(entry.numero_factura || entry.factura || entry.compra_id || '')===String(id));
@@ -483,7 +530,7 @@ async function parsePdfRows(buffer){const pdfjs=await import('https://cdnjs.clou
 function showImportPreview(result){$('.import-preview').innerHTML=`<p>${result.rows.length} filas · ${result.errors.length} errores</p>${result.errors.map(error=>`<p class="danger-text">${error}</p>`).join('')}`;const button=$('[data-action="confirm-import"]');button.disabled=Boolean(result.errors.length||!result.rows.length);button.dataset.rows=JSON.stringify(result.rows);}
 function previewImport(){const result=importPreview(store.collection,$('.import-text').value);showImportPreview(result);}
 function confirmImport(){const rows=JSON.parse($('[data-action="confirm-import"]').dataset.rows||'[]');const products=importProducts(store.collection,rows);products.forEach(product=>store.collection.stores.forEach(storeItem=>ensureInventoryEntry(store.collection,product.id,storeItem.id)));store.save();$('#modal-root').innerHTML='';render();showToast(`${products.length} productos importados.`);}
-function addProduct(productId){ const product=store.collection.products.find(item=>item.id===productId); const row=product&&inventoryEntry(store.collection,product.id,state.storeId); if(!product||!row||row.quantity<=0)return showToast('El producto no tiene stock en este local.','error'); const averagePrice=averageSalePrices(store.collection).get(product.id)??Number(product.price||0); const item=state.cart.find(entry=>entry.id===product.id); if(item)item.quantity=Math.min(row.quantity,item.quantity+1); else state.cart.push({...product,stock:row.quantity,priceLista:averagePrice,priceVenta:averagePrice,quantity:1,quantityInvalid:false}); render(); }
+function addProduct(productId){ const product=store.collection.products.find(item=>item.id===productId); const row=product&&inventoryEntry(store.collection,product.id,state.storeId); if(!product||!row||row.quantity<=0)return showToast('El producto no tiene stock en este local.','error'); const item=state.cart.find(entry=>entry.id===product.id); if(item)item.quantity=Math.min(row.quantity,item.quantity+1); else state.cart.push({...product,stock:row.quantity,priceLista:product.price,priceVenta:product.price,quantity:1,quantityInvalid:false}); render(); }
 function finishSaleLegacy(){ if(!state.storeId)return showToast('Selecciona un local.','error');if(!state.cart.length)return showToast('Agrega al menos un producto.','error');if(!state.customerId)return showToast('Selecciona un cliente.','error');try{runTransaction(store.collection,()=>{state.cart.forEach(item=>{const row=inventoryEntry(store.collection,item.id,state.storeId);if(!row||item.quantityInvalid||item.quantity<=0||item.quantity>row.quantity)throw new Error(`Stock insuficiente en este local para ${item.name}.`);if(item.priceVenta<item.minimumPrice)throw new Error(`Precio minimo autorizado: ${money(item.minimumPrice)}.`);});const sale={id:generateId('VEN',store.collection.sales),invoiceId:generateId('FAC',store.collection.sales),customerId:state.customerId,customer:store.collection.customers.find(item=>item.id===state.customerId)?.name||'Cliente contado',storeId:state.storeId,items:state.cart.map(item=>({productId:item.id,quantity:item.quantity,priceLista:item.priceLista,priceVenta:item.priceVenta})),transport:state.transport,transportDestination:state.transportDestination,transportNote:state.transportNote,paymentMethod:state.payment,total:cartTotal(state.cart,state.transport),date:new Date().toISOString(),status:state.payment==='Apartado'?'Apartado':'Completada'};store.collection.sales.push(sale);if(state.payment==='Apartado')createApartado(store.collection,sale,Number($('[data-apartado-initial]')?.value||0),'Efectivo');else decreaseSaleInventory(store.collection,sale);if(state.payment.toLowerCase().includes('intern')){const credit=store.add('credits',{id:generateId('CR',store.collection.credits),customerId:sale.customerId,saleId:sale.id,total:sale.total,originalAmount:sale.total,initial:0,downPayment:0,paid:0,financedAmount:sale.total,installmentsCount:6,installmentAmount:Math.ceil(sale.total/6),next:'Pendiente',date:'Ahora',status:'Al dia'});store.add('installments',{id:generateId('CUO',store.collection.installments),creditId:credit.id,number:1,dueDate:'Pendiente',amount:credit.installmentAmount,paidAmount:0,status:'Pendiente'});}store.collection.auditLog.push({id:generateId('AUD',store.collection.auditLog),date:new Date().toISOString(),userId:'USR-00001',action:'Crear venta',saleId:sale.id,storeId:state.storeId});});store.save();state.cart=[];showToast('Venta creada y stock actualizado.');render();}catch(error){showToast(error.message,'error');}}
 async function finishSale(){
 	if(!state.storeId)return showToast('Selecciona un local.','error');
@@ -552,8 +599,8 @@ function filterSharedPurchases(){const query=$('[data-filter="purchases"]')?.val
 document.addEventListener('input',event=>{if(event.target.matches('[data-filter="purchases"]'))filterSharedPurchases();});
 document.addEventListener('change',event=>{if(event.target.matches('[data-purchase-supplier],[data-purchase-store],[data-purchase-status]'))filterSharedPurchases();});
 document.addEventListener('input',event=>{if(event.target.matches('[data-filter="payables"]'))filterPayables();});
-document.addEventListener('change',event=>{if(event.target.matches('[data-payable-status],[data-payable-store]'))filterPayables();});
-function filterPayables(){const query=$('[data-filter="payables"]')?.value.toLowerCase()||'',status=$('[data-payable-status]')?.value||'all',storeId=$('[data-payable-store]')?.value||'all';const matches=(store.collection.accountsPayable||[]).filter(account=>{const supplier=store.collection.suppliers.find(item=>item.id===account.supplierId);updateAccountPayableStatus(store.collection,account);return `${account.id} ${account.invoiceNumber} ${supplier?.name||''} ${supplier?.document||''}`.toLowerCase().includes(query)&&(status==='all'||account.status===status)&&(storeId==='all'||account.storeId===storeId);});if($('#payables-table'))$('#payables-table').innerHTML=payableTable(store.collection,matches);}
+document.addEventListener('change',event=>{if(event.target.matches('[data-payable-status],[data-payable-supplier]'))filterPayables();});
+function filterPayables(){const query=$('[data-filter="payables"]')?.value.toLowerCase()||'',status=$('[data-payable-status]')?.value||'all',supplierId=$('[data-payable-supplier]')?.value||'all';const matches=(store.collection.accountsPayable||[]).filter(account=>{const supplier=store.collection.suppliers.find(item=>String(item.id)===String(account.supplierId));updateAccountPayableStatus(store.collection,account);return `${account.id} ${account.invoiceNumber} ${supplier?.name||account.supplierName||''} ${supplier?.document||''}`.toLowerCase().includes(query)&&(status==='all'||account.status===status)&&(supplierId==='all'||String(account.supplierId)===String(supplierId));});if($('#payables-table'))$('#payables-table').innerHTML=payableTable(store.collection,matches);}
 function applySalesFilters(){
 	const query=salesViewState.query.toLocaleLowerCase();
 	const sales=normalizeSales(store.collection.sales||store.collection.ventas||[]).filter(sale=>{
@@ -660,7 +707,7 @@ document.addEventListener('click',event=>{const button=event.target.closest('[da
 		if(!purchaseId)return;
 		const purchase=(store.collection.purchases||[]).find(item=>String(item.id)===String(purchaseId)) || (store.collection.entries||[]).find(item=>String(item.id)===String(purchaseId) || String(item.numero_factura || item.factura || item.compra_id || '')===String(purchaseId));
 		if(!purchase)return;
-		openDomainEditModal((store.collection.purchases||[]).some(item=>String(item.id)===String(purchaseId)) ? 'purchases' : 'entries', purchaseId, 'compra');
+		openPurchaseEditModal(purchase,(store.collection.purchases||[]).some(item=>String(item.id)===String(purchaseId)) ? 'purchases' : 'entries');
 	}
 };if(actions[button.dataset.action])actions[button.dataset.action]();});
 document.addEventListener('click',event=>{const button=event.target.closest('[data-action="edit-sale"]');if(!button)return;setTimeout(()=>{const sale=store.collection.sales.find(item=>String(item.id)===String(button.dataset.saleId));const form=$('#sale-edit-modal');if(!sale||!form||form.querySelector('[name="items"]'))return;const input=document.createElement('input');input.type='hidden';input.name='items';input.value=JSON.stringify((sale.items||[]).map(item=>({productId:item.productId,quantity:Number(item.quantity||0),unitPrice:Number(item.unitPrice??item.price??0),price:Number(item.unitPrice??item.price??0),taxRate:Number(item.taxRate||0)})));form.append(input);const lines=document.createElement('div');lines.innerHTML='<h3>Productos</h3>'+((sale.items||[]).map((item,index)=>`<label class="input-label">Producto ${index+1}<select class="field" data-sale-product="${index}">${store.collection.products.map(product=>`<option value="${product.id}" ${product.id===item.productId?'selected':''}>${product.name}</option>`).join('')}</select><input class="field" type="number" min="1" value="${item.quantity}" data-sale-quantity="${index}" placeholder="Cantidad"><input class="field" type="number" min="0" value="${item.unitPrice??item.price??0}" data-sale-price="${index}" placeholder="Precio"></label>`).join(''));form.querySelector('button.primary')?.before(lines);const sync=()=>{const items=(sale.items||[]).map((item,index)=>({productId:$(`[data-sale-product="${index}"]`).value,quantity:Number($(`[data-sale-quantity="${index}"]`).value||0),unitPrice:Number($(`[data-sale-price="${index}"]`).value||0),price:Number($(`[data-sale-price="${index}"]`).value||0),taxRate:Number(item.taxRate||0)}));input.value=JSON.stringify(items);};form.addEventListener('input',sync);form.addEventListener('change',sync);},0);});
@@ -858,16 +905,20 @@ document.addEventListener('submit',async event=>{
 		try { const values=Object.fromEntries(new FormData(form)); const kind=values.kind; const payload=kind==='parameter'?{kind,name:values.name,value:values.value}:kind==='employee'?{kind,id_telegram:values.identifier,nombre:values.name,salario_base:Number(values.value||0),local:values.local}:{kind,codigo:values.identifier,producto:values.name,comision:Number(values.value||0)}; await parityPost('/api/parity/nomina/config',payload); form.querySelector('[data-parity-result]').textContent='Configuración guardada.'; showToast('Configuración de nómina guardada.'); } catch(error) { showToast(error.message,'error'); }
 	}
 });
-document.addEventListener('submit', event => {
-	if(event.target.id !== 'audit-filter-form') return;
-	event.preventDefault();
-	const values = Object.fromEntries(new FormData(event.target));
-	setAuditFilters(values);
+document.addEventListener('input', event => {
+	const control=event.target.closest('[data-audit-filter]');
+	if(!control)return;
+	const name=control.dataset.auditFilter;
+	const caret=typeof control.selectionStart==='number' ? control.selectionStart : null;
+	setAuditFilters({[name]:control.value});
 	render();
+	const next=document.querySelector(`[data-audit-filter="${name}"]`);
+	if(next){next.focus();if(caret!==null)next.setSelectionRange(caret,caret);}
 });
-document.addEventListener('click', event => {
-	if(!event.target.closest('[data-action="clear-audit-filters"]')) return;
-	clearAuditFilters();
+document.addEventListener('change', event => {
+	const control=event.target.closest('[data-audit-filter]');
+	if(!control)return;
+	setAuditFilters({[control.dataset.auditFilter]:control.value});
 	render();
 });
 if(localStorage.getItem('famimuebles-theme')==='dark')document.body.classList.add('dark');
@@ -882,6 +933,7 @@ async function boot() {
 	if (isStaticDeployment()) {
 		localStorage.setItem('famimuebles-user', JSON.stringify({ id:'STATIC-USER', username:'Administrador', role:'ADMINISTRADOR' }));
 		store.collection.demoMode = true;
+		appHydrating = false;
 		startRouter(renderApp);
 		state.storeId = resolveActiveStore();
 		renderApp();
@@ -908,24 +960,34 @@ async function boot() {
 	store.state = normalized;
 	store.collection.demoMode = false;
 	await hydrateCatalog(store.state);
+	await hydrateDomainCollections(store.state);
+	store.collection.talonarios = normalizeActiveTalonarios(store.collection.talonarios || []);
+	const initialTalonarioSync = (store.collection.talonarios || []).filter(item => {
+		const status = String(item.status || '').toUpperCase();
+		return ['EN_USO', 'ENVIADO', 'TERMINADO', 'ALMACENADO'].includes(status);
+	});
+	Promise.allSettled(initialTalonarioSync.map(item => persistDomainRecord('talonarios', item))).then(results => results.filter(result => result.status === 'rejected').forEach(result => console.warn('No se pudo sincronizar el estado del talonario:', result.reason?.message || result.reason)));
+	repairTalonario15301().catch(error=>console.warn('No se pudo corregir el talonario 15301-15350:',error.message));
+	Promise.all([seedHistoricalTalonarios(store.state),seedConfiguredTalonariosActivos()]).then(()=>deduplicateTalonarios()).then(async()=>{
+		store.collection.talonarios = normalizeActiveTalonarios(store.collection.talonarios || []);
+		const itemsToPersist=(store.collection.talonarios || []).filter(item => {
+			const status = String(item.status || '').toUpperCase();
+			return ['EN_USO', 'ENVIADO', 'TERMINADO', 'ALMACENADO'].includes(status);
+		});
+		await Promise.allSettled(itemsToPersist.map(item => persistDomainRecord('talonarios', item)));
+	}).then(()=>refreshTalonarioSalesAlerts()).then(()=>{if(currentRoute()==='talonarios')render();}).catch(error=>console.warn('No se pudieron preparar los talonarios:',error.message));
+	await hydrateUsers(store.state);
+	const normalizedPayables=normalizePayableSuppliers(store.state);
+	Promise.allSettled(normalizedPayables.map(account => persistDomainRecord('accountsPayable',account))).then(results => results.filter(result => result.status === 'rejected').forEach(result => console.warn('No se pudo normalizar el proveedor de una cuenta por pagar:', result.reason?.message || result.reason)));
+	await hydrateCurrentUserPermissions();
+	store.save();
 	state.storeId = resolveActiveStore();
+	appHydrating = false;
 	startRouter(renderApp);
 	loadTenants();
 	syncActiveStoreSelector();
 	syncCustomerBalances();
 	render();
-	Promise.resolve().then(async()=>{
-		await hydrateDomainCollections(store.state);
-		if(currentRoute()==='talonarios')render();
-		repairTalonario15301().catch(error=>console.warn('No se pudo corregir el talonario 15301-15350:',error.message));
-		Promise.all([seedHistoricalTalonarios(store.state),seedConfiguredTalonariosActivos()]).then(()=>deduplicateTalonarios()).then(()=>refreshTalonarioSalesAlerts()).then(()=>{if(currentRoute()==='talonarios')render();}).catch(error=>console.warn('No se pudieron preparar los talonarios:',error.message));
-		await hydrateUsers(store.state);
-		const normalizedPayables=normalizePayableSuppliers(store.state);
-		for(const account of normalizedPayables){try{await persistDomainRecord('accountsPayable',account);}catch(error){console.warn('No se pudo normalizar el proveedor de una cuenta por pagar:',error.message);}}
-		await hydrateCurrentUserPermissions();
-		store.save();
-		render();
-	}).catch(error=>console.warn('No se pudo completar la sincronizacion inicial:',error.message));
 }
 document.addEventListener('click', async event => {
 	if (!event.target.closest('#sync-data')) return;
@@ -1219,7 +1281,7 @@ async function repairTalonario15301(){
 	if(!item)return;
 	item.storeId='INV CRR 5 3 26';
 	item.destinationName='INV CRR 5 3 26';
-	item.status='EN_USO';
+	item.status='TERMINADO';
 	item.currentNumber=Math.max(Number(item.currentNumber||0),15347);
 	try{await persistDomainRecord('talonarios',item);}catch(error){console.warn('No se pudo actualizar el talonario 15301-15350:',error.message);}
 }
@@ -1247,13 +1309,12 @@ async function deduplicateTalonarios(){
 	if(duplicates.length)store.collection.talonarios=(store.collection.talonarios||[]).filter(item=>keepIds.has(item.id));
 }
 const configuredTalonariosActivos=[
-	{local:'INV CRR 5 3 26',type:'REMISION',startNumber:15301,endNumber:15350,currentNumber:15347},
 	{local:'INV CARTAGENITA',type:'REMISION',startNumber:15451,endNumber:15500,currentNumber:15473},
 	{local:'INV CARTAGENITA II',type:'REMISION',startNumber:15401,endNumber:15450,currentNumber:15439},
 	{local:'INV CRR 5 3 17',type:'REMISION',startNumber:14051,endNumber:14100,currentNumber:14095},
-	{local:'INV CRR 5 5 56',type:'REMISION',startNumber:15601,endNumber:15650,currentNumber:15646},
+	{local:'INV CRR 5 5 56',type:'REMISION',startNumber:15701,endNumber:15750,currentNumber:15708},
 	{local:'INV CRR 7 6A 15',type:'REMISION',startNumber:15651,endNumber:15700,currentNumber:15656},
-	{local:'INV MANABLANCA',type:'REMISION',startNumber:15551,endNumber:15600,currentNumber:15581}
+	{local:'INV MANABLANCA',type:'REMISION',startNumber:15551,endNumber:15600,currentNumber:15599}
 ];
 const talonarioNameKey=value=>String(value||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^A-Z0-9]/gi,'').toUpperCase();
 async function seedConfiguredTalonariosActivos(){
@@ -1262,18 +1323,40 @@ async function seedConfiguredTalonariosActivos(){
 		const local=store.collection.stores.find(item=>talonarioNameKey(item.id)===talonarioNameKey(config.local)||talonarioNameKey(item.name)===talonarioNameKey(config.local));
 		const storeId=local?.id||config.local;
 		let item=store.collection.talonarios.find(entry=>String(entry.type).toUpperCase()===config.type&&Number(entry.startNumber)===config.startNumber&&Number(entry.endNumber)===config.endNumber&&(talonarioNameKey(entry.storeId)===talonarioNameKey(storeId)||talonarioNameKey(entry.destinationName)===talonarioNameKey(config.local)));
+		let shouldPersist=false;
 		if(!item){
 			item={id:`TAL-ACTIVO-${config.type}-${config.startNumber}-${talonarioNameKey(config.local)}`,...config,storeId,destinationName:local?.name||config.local,status:'EN_USO',sentFrom:'INV CRR 5 3 26',historical:false};
 			store.collection.talonarios.push(item);
+			shouldPersist=true;
 		}else{
-			item.storeId=storeId;item.destinationName=local?.name||config.local;item.status='EN_USO';item.currentNumber=config.currentNumber;
+			const destinationName=local?.name||config.local;
+			shouldPersist=String(item.storeId)!==String(storeId)||String(item.destinationName)!==String(destinationName)||String(item.status||'').toUpperCase()!=='EN_USO';
+			item.storeId=storeId;item.destinationName=destinationName;item.status='EN_USO';
 		}
-		try{await persistDomainRecord('talonarios',item);}catch(error){console.warn('No se pudo preparar talonario activo:',error.message);}
+		if(shouldPersist)try{await persistDomainRecord('talonarios',item);}catch(error){console.warn('No se pudo preparar talonario activo:',error.message);}
+	}
+	const replacedActiveRanges=[[15301,15350,'INV CRR 5 3 26'],[15601,15650,'INV CRR 5 5 56']];
+	for(const [startNumber,endNumber,localName] of replacedActiveRanges){
+		const matches=store.collection.talonarios.filter(item=>String(item.type).toUpperCase()==='REMISION'&&Number(item.startNumber)===startNumber&&Number(item.endNumber)===endNumber&&(talonarioNameKey(item.storeId)===talonarioNameKey(localName)||talonarioNameKey(item.destinationName)===talonarioNameKey(localName)));
+		for(const item of matches.filter(candidate=>String(candidate.status||'').toUpperCase()==='EN_USO')){
+			item.status='TERMINADO';
+			try{await persistDomainRecord('talonarios',item);}catch(error){console.warn('No se pudo retirar talonario reemplazado:',error.message);}
+		}
+	}
+	const currentRanges=[[15701,15750,'INV CRR 5 5 56'],[15551,15600,'INV MANABLANCA']];
+	for(const [startNumber,endNumber,localName] of currentRanges){
+		const local=store.collection.stores.find(item=>talonarioNameKey(item.id)===talonarioNameKey(localName)||talonarioNameKey(item.name)===talonarioNameKey(localName));
+		const storeId=local?.id||localName;
+		const item=store.collection.talonarios.find(entry=>String(entry.type).toUpperCase()==='REMISION'&&Number(entry.startNumber)===startNumber&&Number(entry.endNumber)===endNumber);
+		const activeItem=item||{id:generateId('TAL',store.collection.talonarios),type:'REMISION',startNumber,endNumber,currentNumber:startNumber,storeId,destinationName:local?.name||localName,status:'EN_USO',sentFrom:'INV CRR 5 3 26',sentAt:new Date().toISOString(),historical:false};
+		activeItem.storeId=storeId;activeItem.destinationName=local?.name||localName;activeItem.status='EN_USO';
+		if(!item)store.collection.talonarios.push(activeItem);
+		try{await persistDomainRecord('talonarios',activeItem);}catch(error){console.warn('No se pudo activar talonario vigente:',error.message);}
 	}
 	const sent15701=store.collection.talonarios.filter(item=>String(item.type).toUpperCase()==='REMISION'&&Number(item.startNumber)===15701&&Number(item.endNumber)===15750);
 	let canonical15701=sent15701[0];
 	if(canonical15701){
-		canonical15701.storeId='INV CRR 5 5 56';canonical15701.destinationName='INV CRR 5 5 56';canonical15701.status=String(canonical15701.status||'').toUpperCase()==='COMPLETADO'?'COMPLETADO':'EN_USO';
+		canonical15701.storeId='INV CRR 5 5 56';canonical15701.destinationName='INV CRR 5 5 56';canonical15701.status='EN_USO';
 		try{await persistDomainRecord('talonarios',canonical15701);}catch(error){console.warn('No se pudo marcar talonario enviado:',error.message);}
 		for(const duplicate of sent15701.slice(1)){
 			try{await persistCatalogRecord(`/api/domain/talonarios/${encodeURIComponent(duplicate.id)}`,{},'DELETE');}catch(error){console.warn('No se pudo eliminar duplicado de talonario:',error.message);}

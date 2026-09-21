@@ -17,6 +17,12 @@ function parseRemoteRow(item = {}) {
 function sellerKey(value) {
   return String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
 }
+function normalizePhysicalInvoice(row) {
+  const raw = Number(String(row.invoiceNumber ?? row.numero_factura ?? row.invoice ?? '').trim());
+  const store = String(row.storeId ?? row.local_id ?? row.localId ?? row.local ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (store === 'INVCRR5556'.replace(/[^A-Z0-9]/g, '') && raw >= 5000 && raw < 10000 && raw + 10000 >= 15701 && raw + 10000 <= 15750) return raw + 10000;
+  return Number.isFinite(raw) && raw > 0 ? raw : '';
+}
 
 export function saleTimestamp(value) {
   const text = String(value || '').trim();
@@ -58,9 +64,11 @@ export function normalizeSales(items = []) {
     const customer = row.customer ?? row.cliente ?? row.cliente_nombre ?? row.customer_name ?? row.nombre_cliente ?? 'Cliente';
     const seller = row.seller ?? row.vendedor ?? row.empleado ?? row.usuario ?? row.usuario_nombre ?? row.userName ?? row.user ?? row.createdBy ?? row.created_by ?? row.userId ?? row.usuario_id ?? '';
     const status = row.status ?? row.estado ?? 'Completada';
+    const invoiceNumber = normalizePhysicalInvoice(row);
     return {
       ...row,
       id: String(row.id ?? row.factura ?? row.numero_factura ?? row.invoiceId ?? 'S/F'),
+      invoiceNumber,
       storeId: String(row.storeId ?? row.local_id ?? row.localId ?? row.local ?? ''),
       customer: String(customer || 'Cliente'),
       seller: String(seller || ''),
