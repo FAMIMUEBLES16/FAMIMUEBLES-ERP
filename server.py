@@ -1123,9 +1123,10 @@ def report_domain_items(database: _PostgresConnection, collection: str, current_
 def _ensure_app_modules_available() -> None:
     app_root = ROOT.parent / "FAMIMUEBLES APP"
     if app_root.exists():
-        app_root_str = str(app_root)
-        if app_root_str not in sys.path:
-            sys.path.insert(0, app_root_str)
+        for module_root in (app_root, app_root / "servicios"):
+            module_root_str = str(module_root)
+            if module_root_str not in sys.path:
+                sys.path.insert(0, module_root_str)
 
 
 def _create_shared_credit_record(database: _PostgresConnection, payload: dict, movement_id: int, user: dict, store_id: str, invoice_number: str, total_amount: int) -> dict | None:
@@ -1155,6 +1156,37 @@ def _create_shared_credit_record(database: _PostgresConnection, payload: dict, m
         telefono=str(payload.get("phone") or "").strip(),
     )
     return {"id": int(credit_id), "total": total_amount, "initial": initial_amount}
+
+
+def _create_shared_apartado_record(payload: dict, user: dict, store_id: str, invoice_number: str, normalized: list[tuple[str, str, int, int]], total_amount: int) -> dict | None:
+    payment_method = str(payload.get("paymentMethod", "") or "").strip().lower()
+    if "apartado" not in payment_method:
+        return None
+    if not normalized:
+        raise ValueError("El apartado requiere al menos un producto")
+
+    _ensure_app_modules_available()
+    from credit_service import crear_apartado
+
+    code, product_name, quantity, unit_price = normalized[0]
+    initial_amount = int(float(payload.get("apartadoInitial", 0) or 0))
+    user_identifier = str(user.get("id") or user.get("username") or "ERP").strip() or "ERP"
+    result = crear_apartado(
+        numero_recibo=int(invoice_number),
+        local=store_id,
+        codigo=code,
+        producto=product_name,
+        cantidad=quantity,
+        cliente=str(payload.get("customer") or payload.get("customerId") or "Cliente contado").strip() or "Cliente contado",
+        vendedor=str(user.get("username") or user.get("id") or "ERP").strip() or "ERP",
+        total=total_amount,
+        abono_inicial=initial_amount,
+        usuario_creador=user_identifier,
+        documento=str(payload.get("document") or "").strip(),
+        telefono=str(payload.get("phone") or "").strip(),
+        productos=[{"codigo": item_code, "nombre": name, "cantidad": amount, "precio_unitario": price, "precio_total": amount * price} for item_code, name, amount, price in normalized],
+    )
+    return {"id": int(result["id"]), "total": total_amount, "initial": initial_amount}
 
 
 def _create_shared_sale(database: _PostgresConnection, payload: dict, user: dict, handler: "AppHandler") -> dict:
@@ -1206,9 +1238,12 @@ def _create_shared_sale(database: _PostgresConnection, payload: dict, user: dict
         database.execute("UPDATE inventarios SET cantidad = cantidad - %s, actualizado = CURRENT_TIMESTAMP WHERE local = %s AND codigo = %s", (quantity, store_id, code))
         database.execute("INSERT INTO movimiento_productos (movimiento_id, codigo, descripcion, cantidad, precio_unitario, precio_total, entrada, salida) VALUES (%s, %s, %s, %s, %s, %s, 0, %s)", (movement_id, code, description, quantity, price, quantity * price, quantity))
     credit_record = _create_shared_credit_record(database, payload, movement_id, user, store_id, invoice_number, total)
+    apartado_record = _create_shared_apartado_record(payload, user, store_id, invoice_number, normalized, total)
     result = {"id": movement_id, "total": total}
     if credit_record:
         result["creditId"] = credit_record["id"]
+    if apartado_record:
+        result["apartadoId"] = apartado_record["id"]
     complete_idempotency(database, handler, payload, "/api/catalog/sale", 201, {"ok": True, **result})
     return result
 
