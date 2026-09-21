@@ -174,18 +174,18 @@ function periodSales(sales, period, today = calendarDate()) {
 }
 
 function generateCharts(data = {}) {
-  const todayRanking = sellerRanking(data, calendarDate()).slice(0, 3);
+  const todayRanking = sellerRanking(data, calendarDate()).slice(0, 5);
   const rankingItems = todayRanking.map((item, index) => {
     const medal = ['🥇', '🥈', '🥉'][index] || '✨';
     const avatar = getSellerAvatar(item.name);
     const rankClass = ['gold', 'silver', 'bronze'][index] || 'neutral';
     return `
-      <div class="rank-item ${rankClass}">
+      <div class="rank-item ${rankClass}" tabindex="0" title="${item.name}: ${money(item.total)}" aria-label="${item.name}. ${money(item.total)} en ventas">
         <div class="rank-medal">${medal}</div>
         <div class="rank-position">${index + 1}</div>
         <div class="rank-avatar" style="background:${avatar.color};">${avatar.initials}</div>
-        <div class="rank-name-wrap"><span>${truncText(item.name, 20)}</span></div>
-        <strong>${money(item.total)}</strong>
+        <div class="rank-name-wrap"><span>${truncText(item.name, 28)}</span></div>
+        <span class="rank-tooltip" role="tooltip">${money(item.total)}</span>
       </div>
     `;
   }).join('');
@@ -267,7 +267,7 @@ function generateCharts(data = {}) {
           <span class="chart-header-icon ranking">🏆</span>
           <div>
             <h3>Ranking del día</h3>
-            <p>Top 3 vendedores por ventas</p>
+            <p>Top 5 vendedores por ventas</p>
           </div>
         </div>
         ${periodOptions()}
@@ -338,14 +338,14 @@ function initCharts(data) {
     const allSales = data.sales || [];
     const renderRanking = period => {
       const filtered = periodSales(allSales, period, today);
-      const ranking = sellerRanking({ ...data, sales: filtered }, null).slice(0, 3);
+      const ranking = sellerRanking({ ...data, sales: filtered }, null).slice(0, 5);
       const rankingList = document.querySelector('[data-ranking-list]');
       if (!rankingList) return;
       rankingList.innerHTML = ranking.map((item, index) => {
         const medal = ['🥇', '🥈', '🥉'][index] || '✨';
         const avatar = getSellerAvatar(item.name);
         const rankClass = ['gold', 'silver', 'bronze'][index] || 'neutral';
-        return `<div class="rank-item ${rankClass}"><div class="rank-medal">${medal}</div><div class="rank-position">${index + 1}</div><div class="rank-avatar" style="background:${avatar.color};">${avatar.initials}</div><div class="rank-name-wrap"><span>${truncText(item.name, 20)}</span></div><strong>${money(item.total)}</strong></div>`;
+        return `<div class="rank-item ${rankClass}" tabindex="0" title="${item.name}: ${money(item.total)}" aria-label="${item.name}. ${money(item.total)} en ventas"><div class="rank-medal">${medal}</div><div class="rank-position">${index + 1}</div><div class="rank-avatar" style="background:${avatar.color};">${avatar.initials}</div><div class="rank-name-wrap"><span>${truncText(item.name, 28)}</span></div><span class="rank-tooltip" role="tooltip">${money(item.total)}</span></div>`;
       }).join('') || '<div class="chart-legend-empty">No hay ventas en este periodo.</div>';
     };
     const renderPeriod = (period, target = 'all') => {

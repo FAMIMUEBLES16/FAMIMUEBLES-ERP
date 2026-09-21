@@ -519,7 +519,7 @@ html, body { background: var(--fm-background); color: var(--fm-text); }
   padding:6px 0;
 }
 .seller-ranking-panel {
-  min-height: 430px;
+  min-height: 500px;
   display:flex;
   flex-direction:column;
   justify-content:flex-start;
@@ -539,8 +539,9 @@ html, body { background: var(--fm-background); color: var(--fm-text); }
   margin-top: 4px;
 }
 .rank-item {
+	position:relative;
   display:grid;
-  grid-template-columns: 22px 18px 36px minmax(0, 1fr) auto;
+  grid-template-columns: 22px 18px 36px minmax(0, 1fr);
   align-items:center;
   gap:8px;
   padding:10px 10px;
@@ -594,6 +595,40 @@ html, body { background: var(--fm-background); color: var(--fm-text); }
   font-size:11px;
   font-weight:800;
   white-space:nowrap;
+}
+.rank-tooltip {
+  position:absolute;
+  right:10px;
+  bottom:calc(100% + 7px);
+  z-index:3;
+  padding:7px 9px;
+  border-radius:7px;
+  background:#102A56;
+  color:#fff;
+  font-size:11px;
+  font-weight:800;
+  white-space:nowrap;
+  opacity:0;
+  pointer-events:none;
+  transform:translateY(4px);
+  transition:opacity .16s ease,transform .16s ease;
+}
+.rank-tooltip::after {
+  content:'';
+  position:absolute;
+  right:12px;
+  top:100%;
+  border:5px solid transparent;
+  border-top-color:#102A56;
+}
+.rank-item:hover .rank-tooltip,
+.rank-item:focus-visible .rank-tooltip {
+  opacity:1;
+  transform:translateY(0);
+}
+.rank-item:focus-visible {
+  outline:2px solid var(--fm-primary);
+  outline-offset:2px;
 }
 .team-message {
   margin-top:14px;
