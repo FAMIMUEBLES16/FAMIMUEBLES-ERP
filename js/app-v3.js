@@ -29,7 +29,6 @@ import { renderGasolina } from './modules/gasolina.js?v=18';
 import { renderUsuarios } from './modules/usuarios.js?v=19';
 import { renderAuditoria, setAuditFilters } from './modules/auditoria.js?v=23';
 import { renderTalonarios, talonarioModal, setTalonarioFilters, currentTalonarioNumber, normalizeActiveTalonarios } from './modules/talonarios.js?v=12';
-	<script type="module" src="js/app-v3.js?v=58"></script>
 import { historicalTalonarios, historicalRecibos, storedTalonarios } from './modules/talonarios-historial.js?v=1';
 import { renderApartados } from './modules/apartados.js?v=19';
 import { createApartado, decreaseSaleInventory, registerPayment, runTransaction, addMovement } from './modules/finanzas.js?v=18';
