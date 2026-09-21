@@ -1,4 +1,4 @@
-const CACHE = 'famimuebles-erp-v50';
+const CACHE = 'famimuebles-erp-v51';
 const CORE = ['./', './index.html', './css/main.css?v=42', './js/app-v3.js?v=45', './js/modules/operaciones.js?v=3', './js/components/tables.js?v=1', './js/modules/dashboard-v3.js?v=28', './js/modules/facturacion.js?v=23', './js/services/product-service.js?v=18', './js/data/storage.js?v=18', './js/data/store.js?v=18', './js/router.js?v=18', './js/modules/proveedores.js?v=18', './js/modules/compras.js?v=18', './js/services/purchase-service.js?v=18', './js/services/accounts-payable-service.js?v=18', './js/modules/cuentas-por-pagar.js?v=18', './js/modules/accounts-payable-detail.js?v=18', './js/data/demo-data.js?v=18', './js/modules/cartera.js?v=23', './js/modules/creditos.js?v=23', './js/utils/ids.js', './js/services/api-client.js?v=7', './js/config.js?v=9', './manifest.json', './offline.html', './Logo Famimuebles.png', './assets/icons/icon-192.png', './assets/icons/icon-512.png', './assets/icons/apple-touch-icon.png'];
 self.addEventListener('install', event => {
   event.waitUntil(
@@ -19,13 +19,12 @@ self.addEventListener('fetch', event => {
     const isVersionedAsset = url.pathname.includes('/js/') || url.pathname.includes('/css/');
     if (isVersionedAsset) {
       event.respondWith(
-        caches.match(event.request).then(cached => {
-          const refresh = fetch(event.request).then(response => {
+        fetch(event.request)
+          .then(response => {
             if (response.ok) caches.open(CACHE).then(cache => cache.put(event.request, response.clone())).catch(() => {});
             return response;
-          }).catch(() => cached);
-          return cached || refresh;
-        })
+          })
+          .catch(() => caches.match(event.request))
       );
       return;
     }
