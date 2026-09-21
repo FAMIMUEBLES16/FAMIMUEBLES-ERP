@@ -237,6 +237,14 @@ function refreshTalonarioLowStockNotification(type){
 		if(!store.collection.notifications.some(item=>item.key===key))store.collection.notifications.push({id:`NOT-TAL-${normalized}-${today}`,key,text:`Quedan ${available} talonarios de ${normalized} disponibles en INV CRR 5 3 26.`,type:'warning',action:'talonarios',targetId:'',createdAt:new Date().toISOString(),read:false});
 	}
 }
+function talonarioGroupKey(item){
+	const local=String(item.destinationName||item.storeId||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase().replace(/[^A-Z0-9]/g,'');
+	return `${local}:${String(item.type||'REMISION').toUpperCase()}`;
+}
+function currentTalonarioFor(item, items){
+	const group=talonarioGroupKey(item);
+	return [...(items||[])].filter(candidate=>talonarioGroupKey(candidate)===group&&['EN_USO','ENVIADO'].includes(String(candidate.status||'').toUpperCase())).sort((left,right)=>Number(right.startNumber||0)-Number(left.startNumber||0))[0];
+}
 async function registerTalonarioSale(sale){
 	const documentNumber=Number(String(sale.invoiceNumber||'').trim());
 	if(!Number.isInteger(documentNumber)||documentNumber<=0)return;
@@ -261,7 +269,13 @@ async function registerTalonarioSale(sale){
 }
 async function refreshTalonarioSalesAlerts(){
 	const sales=store.collection.sales||[];
-	for(const talonario of (store.collection.talonarios||[]).filter(item=>String(item.status||'').toUpperCase()==='EN_USO')){
+	const talonarios=store.collection.talonarios||[];
+	for(const talonario of talonarios.filter(item=>String(item.status||'').toUpperCase()==='EN_USO')){
+		const currentTalonario=currentTalonarioFor(talonario,talonarios);
+		if(!currentTalonario||String(currentTalonario.id)!==String(talonario.id)){
+			store.collection.notifications=(store.collection.notifications||[]).filter(item=>!String(item.key||'').startsWith(`talonario-venta-bajo:${talonario.id}:`));
+			continue;
+		}
 		const type=String(talonario.type||'REMISION').toUpperCase();
 		const alertLocalName=String(talonario.destinationName||talonario.storeId||'Sin local');
 		const latest=currentTalonarioNumber(talonario, sales);
