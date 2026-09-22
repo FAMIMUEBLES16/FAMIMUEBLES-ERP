@@ -1345,7 +1345,7 @@ const configuredTalonariosActivos=[
 	{local:'INV CRR 5 3 17',type:'REMISION',startNumber:14051,endNumber:14100,currentNumber:14095},
 	{local:'INV CRR 5 5 56',type:'REMISION',startNumber:15701,endNumber:15750,currentNumber:15708},
 	{local:'INV CRR 7 6A 15',type:'REMISION',startNumber:15651,endNumber:15700,currentNumber:15656},
-	{local:'INV MANABLANCA',type:'REMISION',startNumber:15551,endNumber:15600,currentNumber:15599}
+	{local:'INV MANABLANCA',type:'REMISION',startNumber:15751,endNumber:15800,currentNumber:15754}
 ];
 const talonarioNameKey=value=>String(value||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^A-Z0-9]/gi,'').toUpperCase();
 async function seedConfiguredTalonariosActivos(){
@@ -1361,8 +1361,10 @@ async function seedConfiguredTalonariosActivos(){
 			shouldPersist=true;
 		}else{
 			const destinationName=local?.name||config.local;
-			shouldPersist=String(item.storeId)!==String(storeId)||String(item.destinationName)!==String(destinationName)||String(item.status||'').toUpperCase()!=='EN_USO';
-			item.storeId=storeId;item.destinationName=destinationName;item.status='EN_USO';
+			const exhausted=Number(item.currentNumber||item.startNumber)>=Number(item.endNumber||item.startNumber);
+			const nextStatus=exhausted?'TERMINADO':'EN_USO';
+			shouldPersist=String(item.storeId)!==String(storeId)||String(item.destinationName)!==String(destinationName)||String(item.status||'').toUpperCase()!==nextStatus;
+			item.storeId=storeId;item.destinationName=destinationName;item.status=nextStatus;
 		}
 		if(shouldPersist)try{await persistDomainRecord('talonarios',item);}catch(error){console.warn('No se pudo preparar talonario activo:',error.message);}
 	}
@@ -1374,13 +1376,14 @@ async function seedConfiguredTalonariosActivos(){
 			try{await persistDomainRecord('talonarios',item);}catch(error){console.warn('No se pudo retirar talonario reemplazado:',error.message);}
 		}
 	}
-	const currentRanges=[[15701,15750,'INV CRR 5 5 56'],[15551,15600,'INV MANABLANCA']];
+	const currentRanges=[[15701,15750,'INV CRR 5 5 56'],[15751,15800,'INV MANABLANCA']];
 	for(const [startNumber,endNumber,localName] of currentRanges){
 		const local=store.collection.stores.find(item=>talonarioNameKey(item.id)===talonarioNameKey(localName)||talonarioNameKey(item.name)===talonarioNameKey(localName));
 		const storeId=local?.id||localName;
 		const item=store.collection.talonarios.find(entry=>String(entry.type).toUpperCase()==='REMISION'&&Number(entry.startNumber)===startNumber&&Number(entry.endNumber)===endNumber);
 		const activeItem=item||{id:generateId('TAL',store.collection.talonarios),type:'REMISION',startNumber,endNumber,currentNumber:startNumber,storeId,destinationName:local?.name||localName,status:'EN_USO',sentFrom:'INV CRR 5 3 26',sentAt:new Date().toISOString(),historical:false};
-		activeItem.storeId=storeId;activeItem.destinationName=local?.name||localName;activeItem.status='EN_USO';
+		const exhausted=Number(activeItem.currentNumber||activeItem.startNumber)>=Number(activeItem.endNumber||activeItem.startNumber);
+		activeItem.storeId=storeId;activeItem.destinationName=local?.name||localName;activeItem.status=exhausted?'TERMINADO':'EN_USO';
 		if(!item)store.collection.talonarios.push(activeItem);
 		try{await persistDomainRecord('talonarios',activeItem);}catch(error){console.warn('No se pudo activar talonario vigente:',error.message);}
 	}
@@ -1399,7 +1402,7 @@ async function removeActiveTalonarioDuplicates(){
 	const activeRanges=[
 		[15651,15700,'INV CRR 7 6A 15'],
 		[15601,15650,'INV CRR 5 5 56'],
-		[15551,15600,'INV MANABLANCA'],
+		[15751,15800,'INV MANABLANCA'],
 		[15451,15500,'INV CARTAGENITA'],
 		[15401,15450,'INV CARTAGENITA II']
 	];

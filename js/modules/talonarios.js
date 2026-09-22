@@ -8,7 +8,7 @@ const CURRENT_RANGES = new Map([
   ['INVCRR5326:REMISION', 15801],
   ['INVCRR5556:REMISION', 15701],
   ['INVCRR76A15:REMISION', 15651],
-  ['INVMANABLANCA:REMISION', 15551]
+  ['INVMANABLANCA:REMISION', 15751]
 ]);
 const CURRENT_RECEIPT_RANGES = new Set([5651, 5601, 5551, 5501]);
 const SENT_RANGES = new Set([15751, 15851]);
@@ -65,8 +65,10 @@ export function normalizeActiveTalonarios(items = []) {
       const current = Number(item.currentNumber ?? item.startNumber ?? 0);
       return current > Number(item.startNumber || 0);
     });
-    const canonical = started.length ? [...started].sort((left, right) => Number(right.startNumber) - Number(left.startNumber))[0] : null;
-    const active = matches.find(item => isExactCurrent(item));
+    const active = [...started]
+      .filter(item => Number(item.currentNumber ?? item.startNumber ?? 0) < Number(item.endNumber || item.startNumber || 0))
+      .sort((left, right) => Number(right.startNumber) - Number(left.startNumber))[0]
+      || matches.find(item => isExactCurrent(item));
     const nextSent = active
       ? [...matches]
         .filter(item => Number(item.startNumber) > Number(active.startNumber) && ['ENVIADO', 'EN_USO'].includes(String(item.status || '').toUpperCase()))
@@ -77,7 +79,7 @@ export function normalizeActiveTalonarios(items = []) {
       const start = Number(item.startNumber || 0);
       const end = Number(item.endNumber || start);
       const status = String(item.status || '').toUpperCase();
-      if (isExactCurrent(item)) {
+      if (active && item.id === active.id) {
         item.status = 'EN_USO';
         continue;
       }
@@ -155,7 +157,7 @@ export function setTalonarioFilters(filters) { talonarioFilters = { ...talonario
 
 export function renderTalonariosSummary(state) {
   const talonarios = state?.talonarios || [];
-  const active = talonarios.filter(item => String(item.type || '').toUpperCase() === 'REMISION' && isConfiguredCurrent(item) && String(item.status || '').toUpperCase() === 'EN_USO');
+  const active = talonarios.filter(item => String(item.type || '').toUpperCase() === 'REMISION' && String(item.status || '').toUpperCase() === 'EN_USO' && isCurrentActiveRange(item, talonarios));
   const sales = state?.sales || state?.ventas || [];
   const rows = active
     .sort((left, right) => localLabel(left).localeCompare(localLabel(right), 'es'))
@@ -176,7 +178,7 @@ export function renderTalonarios(state) {
     return (!talonarioFilters.query || haystack.includes(talonarioFilters.query.toLowerCase())) && (talonarioFilters.type === 'all' || type === talonarioFilters.type) && (talonarioFilters.status === 'all' || status === talonarioFilters.status) && (talonarioFilters.store === 'all' || store === talonarioFilters.store);
   });
   const central = filteredItems.filter(item => String(item.storeId || CENTRAL) === CENTRAL && String(item.status || 'ALMACENADO') === 'ALMACENADO');
-  const activeItems = items.filter(item => String(item.type || '').toUpperCase() === 'REMISION' && isConfiguredCurrent(item) && String(item.status || '').toUpperCase() === 'EN_USO');
+  const activeItems = items.filter(item => String(item.type || '').toUpperCase() === 'REMISION' && String(item.status || '').toUpperCase() === 'EN_USO' && isCurrentActiveRange(item, items));
   const sales = state?.sales || state?.ventas || [];
   const summaryMap = new Map();
   activeItems.forEach(item => {
