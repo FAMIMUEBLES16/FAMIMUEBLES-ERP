@@ -968,12 +968,38 @@ def _shared_domain_items(database: _PostgresConnection, collection: str) -> list
             LEFT JOIN movimientos m ON m.id = c.venta_id
             ORDER BY c.creado_en DESC NULLS LAST, c.id DESC
         """.replace("CUSTOMER_EXPRESSION", customer_expression)
+    elif collection == "transfers":
+        query = """
+            SELECT m.id, m.fecha, m.local_origen, m.local_destino, m.vendedor,
+                   m.estado, m.observacion, mp.codigo, mp.descripcion, mp.cantidad
+            FROM movimientos m
+            LEFT JOIN movimiento_productos mp ON mp.movimiento_id = m.id
+            WHERE UPPER(COALESCE(m.tipo, '')) = 'TRASLADO'
+            ORDER BY m.fecha DESC, m.id DESC, mp.id
+        """
     elif collection in table_map:
         query = f"SELECT * FROM {table_map[collection]} ORDER BY 1 DESC"
     else:
         return None
     try:
-        items = [_with_frontend_aliases(dict(row)) for row in database.execute(query).fetchall()]
+        rows = database.execute(query).fetchall()
+        if collection == "transfers":
+            grouped = {}
+            for row in rows:
+                key = str(row["id"])
+                transfer = grouped.setdefault(key, {
+                    "id": f"PG-TRA-{key}", "sourceId": row["id"],
+                    "originStoreId": row["local_origen"] or "",
+                    "destinationStoreId": row["local_destino"] or "",
+                    "createdAt": row["fecha"], "createdBy": row["vendedor"] or "",
+                    "status": "RECIBIDO" if str(row["estado"] or "").upper() == "COMPLETADO" else str(row["estado"] or "PENDIENTE").upper(),
+                    "notes": row["observacion"] or "", "items": [],
+                })
+                if row["codigo"]:
+                    transfer["items"].append({"productId": row["codigo"], "name": row["descripcion"] or row["codigo"], "quantity": row["cantidad"] or 0})
+            items = list(grouped.values())
+        else:
+            items = [_with_frontend_aliases(dict(row)) for row in rows]
         if collection == "credits":
             stored = database.execute(
                 "SELECT data_json FROM domain_records WHERE tenant_id = %s AND collection = %s ORDER BY created_at",
@@ -2606,6 +2632,19 @@ class AppHandler(SimpleHTTPRequestHandler):
                 self.send_json(403, {"error": "Solo el administrador puede eliminar ventas"})
                 return
             identifier = unquote(path.removeprefix("/api/catalog/sale/")).strip()
+            if _postgres_enabled():
+                with connection() as database:
+                    sale = database.execute("SELECT id, local_origen FROM movimientos WHERE id = %s AND UPPER(COALESCE(tipo, '')) = 'VENTA' FOR UPDATE", (identifier,)).fetchone()
+                    if not sale:
+                        self.send_json(404, {"error": "Venta no encontrada"})
+                        return
+                    items = database.execute("SELECT codigo, cantidad FROM movimiento_productos WHERE movimiento_id = %s", (identifier,)).fetchall()
+                    for item in items:
+                        database.execute("UPDATE inventarios SET cantidad = cantidad + %s, actualizado = CURRENT_TIMESTAMP WHERE local = %s AND codigo = %s", (float(item["cantidad"] or 0), sale["local_origen"], item["codigo"]))
+                    database.execute("DELETE FROM movimiento_productos WHERE movimiento_id = %s", (identifier,))
+                    database.execute("DELETE FROM movimientos WHERE id = %s", (identifier,))
+                self.send_json(200, {"ok": True, "deleted": True})
+                return
             with connection() as database:
                 sale = database.execute("SELECT store_id FROM sales WHERE tenant_id = ? AND id = ?", (tenant_id(self), identifier)).fetchone()
                 if not sale:
@@ -2743,6 +2782,19 @@ class AppHandler(SimpleHTTPRequestHandler):
         identifier = unquote(parts[1]) if len(parts) == 2 else ""
         if collection not in DOMAIN_COLLECTIONS or not identifier:
             self.send_json(400, {"error": "Coleccion o id invalido"})
+            return
+        if _postgres_enabled() and collection in {"credits", "apartados"}:
+            table = "creditos" if collection == "credits" else "apartados"
+            payments_table = "abonos_creditos" if collection == "credits" else "abonos_apartados"
+            foreign_key = "credito_id" if collection == "credits" else "apartado_id"
+            with connection() as database:
+                existing = database.execute(f"SELECT id FROM {table} WHERE id = %s FOR UPDATE", (int(identifier),)).fetchone()
+                if not existing:
+                    self.send_json(200, {"ok": True, "deleted": False})
+                    return
+                database.execute(f"DELETE FROM {payments_table} WHERE {foreign_key} = %s", (int(identifier),))
+                database.execute(f"DELETE FROM {table} WHERE id = %s", (int(identifier),))
+            self.send_json(200, {"ok": True, "deleted": True})
             return
         with connection() as database:
             deleted = database.execute("DELETE FROM domain_records WHERE tenant_id = ? AND collection = ? AND id = ?", (tenant_id(self), collection, identifier)).rowcount
