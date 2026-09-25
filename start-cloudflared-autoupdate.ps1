@@ -19,6 +19,19 @@ if ([string]::IsNullOrWhiteSpace($token)) {
 
 $null = New-Item -ItemType Directory -Path (Split-Path $logPath) -Force
 Remove-Item $logPath, $errorLogPath -Force -ErrorAction SilentlyContinue
+$originReady = $false
+for ($attempt = 0; $attempt -lt 60 -and -not $originReady; $attempt++) {
+    try {
+        $health = Invoke-WebRequest -Uri 'http://127.0.0.1:8024/api/health' -UseBasicParsing -TimeoutSec 3
+        $originReady = $health.StatusCode -eq 200
+    } catch {
+        $originReady = $false
+    }
+    if (-not $originReady) { Start-Sleep -Seconds 1 }
+}
+if (-not $originReady) {
+    throw 'El servidor ERP no respondio en http://127.0.0.1:8024.'
+}
 $process = Start-Process -FilePath $cloudflared -ArgumentList @('tunnel', '--protocol', 'http2', '--url', 'http://127.0.0.1:8024') -WorkingDirectory $root -RedirectStandardOutput $logPath -RedirectStandardError $errorLogPath -PassThru
 $pattern = 'https://[a-z0-9-]+\.trycloudflare\.com'
 $tunnelUrl = $null
