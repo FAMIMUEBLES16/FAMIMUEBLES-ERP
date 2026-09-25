@@ -1,11 +1,11 @@
 const LOCAL_API_URL = 'http://127.0.0.1:8024/api';
-const PUBLIC_API_URL = 'https://richards-mug-pure-mattress.trycloudflare.com/api';
+const PUBLIC_API_URL = 'https://obtaining-design-either-completely.trycloudflare.com/api';
 
 const configuredApiBase = String(
   globalThis.FAMIMUEBLES_API_BASE_URL ||
   ''
 ).trim();
-const hasDeprecatedApiBase = configuredApiBase.includes('artwork-charges-wiley-sort.trycloudflare.com') || configuredApiBase.includes('joy-rendering-whereas-clean.trycloudflare.com');
+const hasDeprecatedApiBase = configuredApiBase.includes('artwork-charges-wiley-sort.trycloudflare.com') || configuredApiBase.includes('joy-rendering-whereas-clean.trycloudflare.com') || configuredApiBase.includes('richards-mug-pure-mattress.trycloudflare.com');
 const hostname = window.location.hostname || '';
 const protocol = window.location.protocol || '';
 const isFileOrigin = protocol === 'file:' || hostname === '';
@@ -28,8 +28,6 @@ export const API_BASE_URL = isLocalHostname
   ? LOCAL_API_URL
   : configuredApiBase && !hasDeprecatedApiBase
     ? configuredApiBase.replace(/\/+$/, '')
-    : hostname.endsWith('.github.io')
-      ? ''
-      : publicApiUrl;
+    : publicApiUrl;
 
 export const API_MODE = API_BASE_URL ? 'api' : 'static';
