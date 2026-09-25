@@ -17,6 +17,10 @@ self.addEventListener('fetch', event => {
   if (url.origin === self.location.origin && url.pathname.startsWith('/api/')) return;
   if (url.origin === self.location.origin && (url.pathname.endsWith('/index.html') || url.pathname.endsWith('/') || url.pathname.includes('/js/') || url.pathname.includes('/css/'))) {
     const isVersionedAsset = url.pathname.includes('/js/') || url.pathname.includes('/css/');
+    if (url.pathname.endsWith('/js/config.js')) {
+      event.respondWith(fetch(new Request(event.request, { cache: 'no-store' })).catch(() => caches.match(event.request)));
+      return;
+    }
     if (isVersionedAsset) {
       event.respondWith(
         caches.match(event.request).then(cached => cached || fetch(event.request).then(response => {
