@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import hmac
 import csv
 import hashlib
 import io
@@ -20,7 +21,6 @@ from decimal import Decimal
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse, unquote, parse_qs
-
 from report_pdf import make_pdf
 
 ROOT = Path(__file__).resolve().parent
@@ -68,6 +68,9 @@ def _load_environment_file(path: Path) -> None:
 
 for environment_file in (ROOT / ".env", ROOT.parent / "FAMIMUEBLES APP" / ".env"):
     _load_environment_file(environment_file)
+
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+TELEGRAM_BOT_USERNAME = os.environ.get("TELEGRAM_BOT_USERNAME", "").strip().lstrip("@")
 
 try:
     import psycopg2
@@ -289,7 +292,7 @@ def _initialize_schema() -> sqlite3.Connection:
         "CREATE TABLE IF NOT EXISTS domain_records (collection TEXT NOT NULL, id TEXT NOT NULL, data_json TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (collection, id))"
     )
     database.execute(
-        "CREATE TABLE IF NOT EXISTS auth_users (id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL, role TEXT NOT NULL, store_id TEXT, active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)"
+        "CREATE TABLE IF NOT EXISTS auth_users (id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL, role TEXT NOT NULL, store_id TEXT, active INTEGER NOT NULL DEFAULT 1, tenant_id TEXT NOT NULL DEFAULT 'tenant-default', email TEXT NOT NULL DEFAULT '', phone TEXT NOT NULL DEFAULT '', telegram_id TEXT, display_name TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)"
     )
     user_columns = {row[1] for row in database.execute("PRAGMA table_info(auth_users)")}
     if "tenant_id" not in user_columns:
@@ -298,6 +301,11 @@ def _initialize_schema() -> sqlite3.Connection:
         database.execute("ALTER TABLE auth_users ADD COLUMN email TEXT NOT NULL DEFAULT ''")
     if "phone" not in user_columns:
         database.execute("ALTER TABLE auth_users ADD COLUMN phone TEXT NOT NULL DEFAULT ''")
+    if "telegram_id" not in user_columns:
+        database.execute("ALTER TABLE auth_users ADD COLUMN telegram_id TEXT")
+    if "display_name" not in user_columns:
+        database.execute("ALTER TABLE auth_users ADD COLUMN display_name TEXT NOT NULL DEFAULT ''")
+    database.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_auth_users_telegram_id ON auth_users(telegram_id) WHERE telegram_id IS NOT NULL AND telegram_id <> ''")
     database.execute(
         "CREATE TABLE IF NOT EXISTS auth_tokens (token TEXT PRIMARY KEY, user_id TEXT NOT NULL, expires_at TEXT NOT NULL)"
     )
@@ -322,6 +330,9 @@ def _initialize_schema() -> sqlite3.Connection:
         );
         CREATE TABLE IF NOT EXISTS products (
             id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, code TEXT NOT NULL,
+            received_hash = str(payload.get("hash", "")).strip().lower()
+            auth_date = str(payload.get("auth_date", "")).strip()
+            if not TELEGRAM_BOT_TOKEN or not received_hash or not auth_date:
             name TEXT NOT NULL, reference TEXT NOT NULL DEFAULT '', barcode TEXT NOT NULL DEFAULT '',
             category TEXT NOT NULL DEFAULT '', cost REAL NOT NULL DEFAULT 0,
             sale_price REAL NOT NULL DEFAULT 0, tax_rate REAL NOT NULL DEFAULT 0,
@@ -379,7 +390,10 @@ def _initialize_postgres_schema() -> _PostgresConnection:
     statements = [
         "CREATE TABLE IF NOT EXISTS app_state (id INTEGER PRIMARY KEY, state_json TEXT NOT NULL, updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)",
         "CREATE TABLE IF NOT EXISTS domain_records (tenant_id TEXT NOT NULL, collection TEXT NOT NULL, id TEXT NOT NULL, data_json TEXT NOT NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (tenant_id, collection, id))",
-        "CREATE TABLE IF NOT EXISTS auth_users (id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL, role TEXT NOT NULL, store_id TEXT, active INTEGER NOT NULL DEFAULT 1, tenant_id TEXT NOT NULL DEFAULT 'tenant-default', email TEXT NOT NULL DEFAULT '', phone TEXT NOT NULL DEFAULT '', created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)",
+        "CREATE TABLE IF NOT EXISTS auth_users (id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL, role TEXT NOT NULL, store_id TEXT, active INTEGER NOT NULL DEFAULT 1, tenant_id TEXT NOT NULL DEFAULT 'tenant-default', email TEXT NOT NULL DEFAULT '', phone TEXT NOT NULL DEFAULT '', telegram_id TEXT, display_name TEXT NOT NULL DEFAULT '', created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)",
+        "ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS telegram_id TEXT",
+        "ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS display_name TEXT NOT NULL DEFAULT ''",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_auth_users_telegram_id ON auth_users(telegram_id) WHERE telegram_id IS NOT NULL AND telegram_id <> ''",
         "CREATE TABLE IF NOT EXISTS auth_tokens (token TEXT PRIMARY KEY, user_id TEXT NOT NULL, expires_at TIMESTAMP NOT NULL)",
         "CREATE TABLE IF NOT EXISTS user_permissions (tenant_id TEXT NOT NULL, user_id TEXT NOT NULL, resource TEXT NOT NULL, action TEXT NOT NULL, allowed INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (tenant_id, user_id, resource, action))",
         "CREATE TABLE IF NOT EXISTS audit_events (id BIGSERIAL PRIMARY KEY, user_id TEXT, action TEXT NOT NULL, collection TEXT, record_id TEXT, data_json TEXT NOT NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)",
@@ -402,8 +416,43 @@ def _initialize_postgres_schema() -> _PostgresConnection:
     ]
     for statement in statements:
         database.execute(statement)
+    if database.execute("SELECT to_regclass('public.empleados')").fetchone()[0]:
+        database.execute("""
+        INSERT INTO auth_users (id, username, password_hash, role, store_id, active, tenant_id, display_name, telegram_id)
+        SELECT 'telegram-' || BTRIM(e.id_telegram), 'telegram_' || BTRIM(e.id_telegram), '!telegram-only:' || BTRIM(e.id_telegram),
+               UPPER(COALESCE(NULLIF(BTRIM(e.rol), ''), 'VENDEDOR')), NULLIF(BTRIM(COALESCE(e.local_asignado, '')), ''),
+               CASE WHEN UPPER(COALESCE(e.activo, 'SI')) <> 'NO' THEN 1 ELSE 0 END, 'tenant-default', BTRIM(e.nombre), BTRIM(e.id_telegram)
+        FROM empleados e
+        WHERE NULLIF(BTRIM(e.id_telegram), '') IS NOT NULL
+        ON CONFLICT (telegram_id) WHERE telegram_id IS NOT NULL AND telegram_id <> '' DO UPDATE SET
+            display_name = EXCLUDED.display_name,
+            role = EXCLUDED.role,
+            store_id = EXCLUDED.store_id,
+            active = EXCLUDED.active
+        """)
+    if database.execute("SELECT to_regclass('public.administradores')").fetchone()[0]:
+        database.execute("""
+        INSERT INTO auth_users (id, username, password_hash, role, active, tenant_id, display_name, telegram_id)
+         SELECT 'telegram-admin-' || a.telegram_id::text, 'telegram_' || a.telegram_id::text, '!telegram-only:' || a.telegram_id::text,
+             'ADMINISTRADOR', CASE WHEN a.activo THEN 1 ELSE 0 END, 'tenant-default', BTRIM(a.nombre), a.telegram_id::text
+        FROM administradores a
+         WHERE a.telegram_id IS NOT NULL
+        ON CONFLICT (telegram_id) WHERE telegram_id IS NOT NULL AND telegram_id <> '' DO UPDATE SET
+            display_name = EXCLUDED.display_name,
+            role = 'ADMINISTRADOR',
+            active = EXCLUDED.active
+        """)
     database.execute("ALTER TABLE locales ADD COLUMN IF NOT EXISTS direccion TEXT NOT NULL DEFAULT ''")
     database.execute("ALTER TABLE locales ADD COLUMN IF NOT EXISTS telefono TEXT NOT NULL DEFAULT ''")
+    database.execute("ALTER TABLE productos ADD COLUMN IF NOT EXISTS precio_venta BIGINT NOT NULL DEFAULT 0")
+    database.execute("CREATE TABLE IF NOT EXISTS clientes (id BIGSERIAL PRIMARY KEY, tenant_id TEXT NOT NULL DEFAULT 'tenant-default', external_id TEXT, nombre TEXT NOT NULL, documento TEXT NOT NULL DEFAULT '', telefono TEXT NOT NULL DEFAULT '', direccion TEXT NOT NULL DEFAULT '', email TEXT NOT NULL DEFAULT '', estado TEXT NOT NULL DEFAULT 'Activo', created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)")
+    database.execute("ALTER TABLE clientes ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT 'tenant-default'")
+    database.execute("ALTER TABLE clientes ADD COLUMN IF NOT EXISTS external_id TEXT")
+    database.execute("ALTER TABLE clientes ADD COLUMN IF NOT EXISTS email TEXT NOT NULL DEFAULT ''")
+    database.execute("ALTER TABLE clientes ADD COLUMN IF NOT EXISTS estado TEXT NOT NULL DEFAULT 'Activo'")
+    database.execute("ALTER TABLE clientes ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP")
+    database.execute("CREATE INDEX IF NOT EXISTS idx_clientes_tenant_documento ON clientes(tenant_id, documento)")
+    database.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_clientes_tenant_external ON clientes(tenant_id, external_id)")
     database.execute("""
         CREATE OR REPLACE FUNCTION protect_audit_events() RETURNS trigger AS $$
         BEGIN
@@ -442,6 +491,61 @@ def password_matches(password: str, stored: str) -> bool:
         return False
     candidate = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 120_000).hex()
     return secrets.compare_digest(candidate, digest)
+
+
+def _ensure_auth_user_columns(database) -> None:
+    try:
+        column_rows = database.execute("SELECT column_name FROM information_schema.columns WHERE table_name = 'auth_users' ORDER BY ordinal_position").fetchall()
+        columns = {row[0] for row in column_rows}
+    except Exception:
+        try:
+            column_rows = database.execute("PRAGMA table_info(auth_users)").fetchall()
+            columns = {row[1] for row in column_rows}
+        except Exception:
+            return
+    for column_name, definition in (
+        ("email", "TEXT NOT NULL DEFAULT ''"),
+        ("phone", "TEXT NOT NULL DEFAULT ''"),
+        ("telegram_id", "TEXT"),
+        ("display_name", "TEXT NOT NULL DEFAULT ''"),
+    ):
+        if column_name not in columns:
+            database.execute(f"ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS {column_name} {definition}")
+    database.execute("UPDATE auth_users SET display_name = COALESCE(NULLIF(TRIM(username), ''), 'Usuario') WHERE display_name IS NULL OR display_name = ''")
+
+
+def _auth_user_value(user, key: str, default: str = "") -> str:
+    if user is None:
+        return default
+    if isinstance(user, dict):
+        value = user.get(key)
+        return default if value is None else str(value)
+    try:
+        value = user[key]
+        return default if value is None else str(value)
+    except (KeyError, TypeError):
+        return default
+
+
+def verify_telegram_login(payload: dict) -> bool:
+    """Verifica la firma oficial del Telegram Login Widget y su vigencia."""
+    received_hash = str(payload.get("hash", "")).strip().lower()
+    auth_date = str(payload.get("auth_date", "")).strip()
+    if not TELEGRAM_BOT_TOKEN or not received_hash or not auth_date:
+        return False
+    try:
+        if int(datetime.now().timestamp()) - int(auth_date) > 300:
+            return False
+    except (TypeError, ValueError):
+        return False
+    data_check_string = "\n".join(
+        f"{key}={payload[key]}"
+        for key in sorted(payload)
+        if key != "hash" and payload[key] is not None
+    ).encode("utf-8")
+    secret_key = hashlib.sha256(TELEGRAM_BOT_TOKEN.encode("utf-8")).digest()
+    expected_hash = hmac.new(secret_key, data_check_string, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected_hash, received_hash)
 
 
 def request_json(handler: "AppHandler") -> dict:
@@ -506,10 +610,44 @@ def record_id(payload: dict) -> str:
     return value
 
 
+def normalize_role(value: object) -> str:
+    return str(value or "").strip().upper()
+
+
+def _normalize_tenant_slug(value: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", str(value or "").strip().lower())
+    slug = slug.strip("-")
+    return slug or "empresa"
+
+
+def _ensure_tenant_record(database, tenant_key: str, name: str | None = None, slug: str | None = None) -> dict:
+    tenant_id_value = str(tenant_key or DEFAULT_TENANT).strip() or DEFAULT_TENANT
+    tenant_name = str(name or "").strip() or ("FAMIMUEBLES" if tenant_id_value == DEFAULT_TENANT else "Nueva empresa")
+    tenant_slug = _normalize_tenant_slug(slug or tenant_name or tenant_id_value)
+    existing = database.execute(
+        "SELECT id, name, slug, plan, active FROM tenants WHERE id = ? OR slug = ? LIMIT 1",
+        (tenant_id_value, tenant_slug),
+    ).fetchone()
+    if existing is None:
+        database.execute(
+            "INSERT INTO tenants (id, name, slug, plan, active) VALUES (?, ?, ?, ?, 1)",
+            (tenant_id_value, tenant_name, tenant_slug, "starter"),
+        )
+        return {"id": tenant_id_value, "name": tenant_name, "slug": tenant_slug, "plan": "starter", "active": 1}
+    row = dict(existing)
+    if not row.get("slug"):
+        database.execute("UPDATE tenants SET slug = ? WHERE id = ?", (tenant_slug, row.get("id") or tenant_id_value))
+        row["slug"] = tenant_slug
+    if not row.get("name"):
+        database.execute("UPDATE tenants SET name = ? WHERE id = ?", (tenant_name, row.get("id") or tenant_id_value))
+        row["name"] = tenant_name
+    return row
+
+
 def tenant_id(handler: "AppHandler", payload: dict | None = None) -> str:
     user = authenticated_user(handler)
     requested = handler.headers.get("X-Tenant-ID") or (payload or {}).get("tenantId")
-    value = requested if user and user["role"] == "ADMINISTRADOR" and requested else (user["tenant_id"] if user else requested or DEFAULT_TENANT)
+    value = requested if user and normalize_role(user.get("role")) == "ADMINISTRADOR" and requested else (user["tenant_id"] if user else requested or DEFAULT_TENANT)
     return str(value).strip() or DEFAULT_TENANT
 
 
@@ -518,7 +656,7 @@ def requested_tenant_allowed(handler: "AppHandler", payload: dict | None = None)
     if not user:
         return False
     requested = str((handler.headers.get("X-Tenant-ID") or (payload or {}).get("tenantId") or user["tenant_id"])).strip()
-    return user["role"] == "ADMINISTRADOR" or requested == str(user["tenant_id"])
+    return requested == str(user["tenant_id"])
 
 
 def authenticated_user(handler: "AppHandler") -> sqlite3.Row | None:
@@ -533,7 +671,7 @@ def has_user_permission(handler: "AppHandler", resource: str, action: str = "vie
     user = authenticated_user(handler)
     if not user:
         return False
-    if user["role"] == "ADMINISTRADOR":
+    if normalize_role(user.get("role")) == "ADMINISTRADOR":
         return True
     with connection() as database:
         configured = database.execute("SELECT COUNT(*) FROM user_permissions WHERE tenant_id = ? AND user_id = ?", (user["tenant_id"], user["id"])).fetchone()[0] > 0
@@ -541,6 +679,10 @@ def has_user_permission(handler: "AppHandler", resource: str, action: str = "vie
             return False
         row = database.execute("SELECT allowed FROM user_permissions WHERE tenant_id = ? AND user_id = ? AND resource = ? AND action = ?", (user["tenant_id"], user["id"], resource, action)).fetchone()
     return bool(row and row[0])
+
+
+def normalize_collection_alias(name: str) -> str:
+    return str(name or "").strip().lower().replace("_", "-")
 
 
 def permission_target(path: str, method: str) -> tuple[str, str] | None:
@@ -560,8 +702,36 @@ def permission_target(path: str, method: str) -> tuple[str, str] | None:
     if "/report" in path:
         return "Reportes", "view"
     if "/domain/" in path:
-        collection = path.split("/domain/", 1)[1].split("/", 1)[0]
-        resources = {"customers":"Clientes", "suppliers":"Proveedores", "purchases":"Compras", "credits":"Creditos", "apartados":"Apartados", "expenses":"Gastos", "returns":"Devoluciones", "supplierReturns":"Devoluciones", "stockCounts":"Inventario", "reservations":"Inventario", "warranties":"Inventario", "damagedStock":"Inventario"}
+        collection = normalize_collection_alias(path.split("/domain/", 1)[1].split("/", 1)[0])
+        resources = {
+            "customers": "Clientes",
+            "suppliers": "Proveedores",
+            "purchases": "Compras",
+            "credits": "Creditos",
+            "apartados": "Apartados",
+            "expenses": "Gastos",
+            "returns": "Devoluciones",
+            "supplier-returns": "Devoluciones",
+            "supplierreturns": "Devoluciones",
+            "stock-counts": "Inventario",
+            "stockcounts": "Inventario",
+            "reservations": "Inventario",
+            "warranties": "Inventario",
+            "damaged-stock": "Inventario",
+            "damagedstock": "Inventario",
+            "accounts-payable": "Cuentas por pagar",
+            "accountspayable": "Cuentas por pagar",
+            "supplier-payments": "Pagos a proveedores",
+            "supplierpayments": "Pagos a proveedores",
+            "customer-accounts": "Cuentas por cobrar",
+            "customeraccounts": "Cuentas por cobrar",
+            "cash-sessions": "Caja",
+            "cashsessions": "Caja",
+            "cash-movements": "Caja",
+            "cashmovements": "Caja",
+            "bank-accounts": "Bancos",
+            "bankaccounts": "Bancos",
+        }
         resource = resources.get(collection)
         return (resource, action) if resource else None
     return None
@@ -571,9 +741,12 @@ def can_access(handler: "AppHandler", path: str, method: str = "GET") -> bool:
     user = authenticated_user(handler)
     if not user:
         return False
+    role = normalize_role(user.get("role"))
+    requested_tenant = str((handler.headers.get("X-Tenant-ID") or user.get("tenant_id") or "")).strip()
+    if requested_tenant and requested_tenant != str(user.get("tenant_id") or ""):
+        return False
     if _postgres_enabled() and tenant_id(handler) != DEFAULT_TENANT and (
-        path == "/api/state"
-        or path == "/api/catalog"
+        path.startswith("/api/shared-")
         or path.startswith("/api/parity/")
         or path.startswith("/api/report")
     ):
@@ -582,26 +755,49 @@ def can_access(handler: "AppHandler", path: str, method: str = "GET") -> bool:
         requested_user_id = unquote(path.removeprefix("/api/users/").removesuffix("/permissions")).strip("/")
         if requested_user_id == user["id"]:
             return True
-    if path.startswith("/api/users") and user["role"] != "ADMINISTRADOR":
+    if path.startswith("/api/users") and role != "ADMINISTRADOR":
         return False
     target = permission_target(path, method)
     if target and not has_user_permission(handler, *target):
         return False
-    if user["role"] == "ADMINISTRADOR":
+    if role == "ADMINISTRADOR":
         return True
     if path == "/api/tenants":
         return True
     if "/report/" in path or path == "/api/state":
-        return user["role"] in {"GERENTE", "CONTADOR", "SUPERVISOR"}
+        return role in {"GERENTE", "CONTADOR", "SUPERVISOR"}
     if "/domain/" in path:
-        collection = path.split("/domain/", 1)[1].split("/", 1)[0]
-        finance = {"accounts-payable", "supplier-payments", "customer-accounts", "cash-sessions", "cash-movements", "bank-accounts"}
-        inventory = {"returns", "supplier-returns", "stock-counts", "reservations", "warranties", "damaged-stock"}
+        collection = normalize_collection_alias(path.split("/domain/", 1)[1].split("/", 1)[0])
+        finance = {
+            "accounts-payable",
+            "accountspayable",
+            "supplier-payments",
+            "supplierpayments",
+            "customer-accounts",
+            "customeraccounts",
+            "cash-sessions",
+            "cashsessions",
+            "cash-movements",
+            "cashmovements",
+            "bank-accounts",
+            "bankaccounts",
+        }
+        inventory = {
+            "returns",
+            "supplier-returns",
+            "supplierreturns",
+            "stock-counts",
+            "stockcounts",
+            "reservations",
+            "warranties",
+            "damaged-stock",
+            "damagedstock",
+        }
         if collection in finance:
-            return user["role"] in {"GERENTE", "CONTADOR", "CAJERO"}
+            return role in {"GERENTE", "CONTADOR", "CAJERO"}
         if collection in inventory:
-            return user["role"] in {"GERENTE", "SUPERVISOR", "BODEGA"}
-    return user["role"] in {"GERENTE", "SUPERVISOR", "VENDEDOR", "CAJERO", "BODEGA"}
+            return role in {"GERENTE", "SUPERVISOR", "BODEGA"}
+    return role in {"GERENTE", "SUPERVISOR", "VENDEDOR", "CAJERO", "BODEGA"}
 
 
 def filter_report_items(items: list[dict], date_from: str = "", date_to: str = "", store_filter: str = "") -> list[dict]:
@@ -691,17 +887,43 @@ def specialized_report_rows(database: _PostgresConnection, report_name: str, que
     if report_name == "sistecredito":
         rows = database.execute(f"SELECT fecha, vendedor, local, valor, metodo_pago FROM sistecredito{suffix} ORDER BY fecha DESC, id DESC", tuple(params)).fetchall()
         return ["fecha", "vendedor", "local", "valor", "metodo_pago"], [[row[key] for key in ("fecha", "vendedor", "local", "valor", "metodo_pago")] for row in rows]
-    queries = {
-        "disponibilidad": ("SELECT local, codigo, nombre_producto AS producto, cantidad FROM inventarios JOIN productos USING (codigo) WHERE cantidad > 0 ORDER BY nombre_producto, local", ["local", "codigo", "producto", "cantidad"]),
-        "inventario-bajo": ("SELECT local, codigo, cantidad FROM inventarios WHERE cantidad <= 3 ORDER BY cantidad, local", ["local", "codigo", "cantidad"]),
-        "gastos": ("SELECT fecha, categoria, detalle, valor, usuario FROM gastos ORDER BY fecha DESC, id DESC", ["fecha", "categoria", "detalle", "valor", "usuario"]),
-        "gasolina": ("SELECT fecha, carro, conductor, valor FROM gasolina ORDER BY fecha DESC, id DESC", ["fecha", "carro", "conductor", "valor"]),
-        "historial-empleado": ("SELECT vendedor, tipo, local_origen AS local, factura, fecha, estado FROM movimientos WHERE NULLIF(BTRIM(COALESCE(vendedor, '')), '') IS NOT NULL ORDER BY fecha DESC, id DESC", ["vendedor", "tipo", "local", "factura", "fecha", "estado"]),
+    report_specs = {
+        "disponibilidad": ("SELECT local, codigo, nombre_producto AS producto, cantidad FROM inventarios JOIN productos USING (codigo)", ["local", "codigo", "producto", "cantidad"], "local", None, None),
+        "inventario-bajo": ("SELECT local, codigo, cantidad FROM inventarios", ["local", "codigo", "cantidad"], "local", None, "cantidad"),
+        "gastos": ("SELECT fecha, categoria, detalle, valor, usuario, local FROM gastos", ["fecha", "categoria", "detalle", "valor", "usuario", "local"], "local", None, "valor"),
+        "gasolina": ("SELECT fecha, carro, conductor, valor FROM gasolina", ["fecha", "carro", "conductor", "valor"], None, None, "valor"),
+        "historial-empleado": ("SELECT vendedor, tipo, local_origen AS local, factura, fecha, estado FROM movimientos", ["vendedor", "tipo", "local", "factura", "fecha", "estado"], "local_origen", "vendedor", None),
     }
-    query, columns = queries.get(report_name, (None, None))
-    if not query:
+    spec = report_specs.get(report_name)
+    if not spec:
         raise ValueError("Reporte especializado no disponible")
-    rows = database.execute(query).fetchall()
+    query, columns, local_column, seller_column, amount_column = spec
+    report_filters = []
+    report_params = []
+    if date_from and report_name not in {"disponibilidad", "inventario-bajo"}:
+        report_filters.append("fecha::date >= %s")
+        report_params.append(date_from)
+    if date_to and report_name not in {"disponibilidad", "inventario-bajo"}:
+        report_filters.append("fecha::date <= %s")
+        report_params.append(date_to)
+    if local and local_column:
+        report_filters.append(f"COALESCE({local_column}, '') = %s")
+        report_params.append(local)
+    if vendedor and seller_column:
+        report_filters.append(f"COALESCE({seller_column}, '') ILIKE %s")
+        report_params.append(f"%{vendedor}%")
+    if min_amount and amount_column:
+        report_filters.append(f"{amount_column} >= %s")
+        report_params.append(int(float(min_amount)))
+    if max_amount and amount_column:
+        report_filters.append(f"{amount_column} <= %s")
+        report_params.append(int(float(max_amount)))
+    if report_name == "disponibilidad":
+        report_filters.append("cantidad > 0")
+    if report_name == "inventario-bajo":
+        report_filters.append("cantidad <= 3")
+    suffix = f" WHERE {' AND '.join(report_filters)}" if report_filters else ""
+    rows = database.execute(f"{query}{suffix} ORDER BY fecha DESC, id DESC" if report_name not in {"disponibilidad", "inventario-bajo"} else f"{query}{suffix} ORDER BY cantidad, local", tuple(report_params)).fetchall()
     return columns, [[row[column] for column in columns] for row in rows]
 
 
@@ -730,7 +952,7 @@ def specialized_xlsx(columns: list[str], rows: list[list]) -> bytes:
 def enforce_user_store(handler: "AppHandler", store_id: str) -> None:
     user = authenticated_user(handler)
     assigned_store = str(user["store_id"] or "") if user else ""
-    if assigned_store and user["role"] != "ADMINISTRADOR" and assigned_store != str(store_id):
+    if assigned_store and normalize_role(user.get("role")) != "ADMINISTRADOR" and assigned_store != str(store_id):
         raise ValueError("El usuario no puede operar en este local")
 
 
@@ -763,8 +985,17 @@ def _shared_catalog(database: _PostgresConnection) -> dict:
         for row in database.execute("SELECT id, nombre, activo, direccion, telefono FROM locales ORDER BY nombre").fetchall()
     ]
     products = [
-        {"id": str(row["codigo"]).strip(), "code": str(row["codigo"]).strip(), "name": row["nombre_producto"], "reference": "", "barcode": "", "category": product_category(row["nombre_producto"]), "categoryName": product_category(row["nombre_producto"]), "cost": row["precio_compra"] or 0, "salePrice": 0, "taxRate": 0, "minimum": 3, "minStock": 3, "minimumStock": 3, "active": str(row["activo"] or "SI").upper() != "NO"}
-        for row in database.execute("SELECT BTRIM(codigo) AS codigo, nombre_producto, precio_compra, activo FROM productos ORDER BY nombre_producto").fetchall()
+        {"id": str(row["codigo"]).strip(), "code": str(row["codigo"]).strip(), "name": row["nombre_producto"], "reference": "", "barcode": "", "category": product_category(row["nombre_producto"]), "categoryName": product_category(row["nombre_producto"]), "cost": row["precio_compra"] or 0, "salePrice": row["precio_venta"] or 0, "taxRate": 0, "minimum": 3, "minStock": 3, "minimumStock": 3, "active": str(row["activo"] or "SI").upper() != "NO"}
+                for row in database.execute("""SELECT BTRIM(p.codigo) AS codigo, p.nombre_producto, p.precio_compra,
+                                     COALESCE(NULLIF(p.precio_venta, 0), (
+                                             SELECT mp.precio_unitario FROM movimiento_productos mp
+                                             JOIN movimientos m ON m.id = mp.movimiento_id
+                                             WHERE BTRIM(mp.codigo) = BTRIM(p.codigo)
+                                                 AND UPPER(COALESCE(m.tipo, '')) = 'VENTA'
+                                                 AND COALESCE(mp.precio_unitario, 0) > 0
+                                             ORDER BY m.fecha DESC, m.id DESC LIMIT 1
+                                     ), 0) AS precio_venta, p.activo
+                                     FROM productos p ORDER BY p.nombre_producto""").fetchall()
     ]
     inventory_rows = database.execute(
         "SELECT BTRIM(local) AS local, BTRIM(codigo) AS codigo, SUM(cantidad) AS cantidad FROM inventarios GROUP BY BTRIM(local), BTRIM(codigo) ORDER BY local, codigo"
@@ -844,6 +1075,13 @@ def _shared_domain_items(database: _PostgresConnection, collection: str) -> list
         "payments": "abonos_creditos",
     }
     if collection == "customers":
+        canonical = database.execute(
+            "SELECT COALESCE(NULLIF(external_id, ''), 'CLI-' || id::text) AS id, nombre AS name, documento AS document, telefono AS phone, email, estado AS status FROM clientes WHERE tenant_id = %s ORDER BY nombre",
+            (DEFAULT_TENANT,),
+        ).fetchall()
+        if canonical:
+            return [_with_frontend_aliases(dict(row)) for row in canonical]
+
         def table_columns(table_name: str) -> set[str]:
             return {
                 row["column_name"]
@@ -1166,25 +1404,38 @@ def _create_shared_credit_record(database: _PostgresConnection, payload: dict, m
     if initial_amount > total_amount:
         raise ValueError("La cuota inicial no puede superar el total")
 
-    _ensure_app_modules_available()
-    from credit_service import crear_credito
-
-    credit_id = crear_credito(
-        movimiento_id=int(movement_id),
-        cliente=str(payload.get("customer") or payload.get("customerId") or "Cliente contado").strip() or "Cliente contado",
-        vendedor=str(user.get("username") or user.get("id") or "ERP").strip() or "ERP",
-        total=total_amount,
-        abono_inicial=initial_amount,
-        creado_por=str(user.get("id") or user.get("username") or "ERP").strip() or "ERP",
-        local=store_id,
-        factura=invoice_number,
-        documento=str(payload.get("document") or "").strip(),
-        telefono=str(payload.get("phone") or "").strip(),
+    customer = str(payload.get("customer") or payload.get("customerId") or "Cliente contado").strip() or "Cliente contado"
+    seller = str(user.get("username") or user.get("id") or "ERP").strip() or "ERP"
+    creator = str(user.get("id") or user.get("username") or "ERP").strip() or "ERP"
+    balance = total_amount - initial_amount
+    credit_row = database.execute(
+        """INSERT INTO creditos
+           (movimiento_id, cliente, documento, telefono, vendedor, total, abono_inicial,
+            saldo_pendiente, estado, local, factura, creado_por)
+           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+           RETURNING id""",
+        (int(movement_id), customer, str(payload.get("document") or "").strip(), str(payload.get("phone") or "").strip(), seller, total_amount, initial_amount, balance, "PAGADO" if balance == 0 else "PENDIENTE", store_id, invoice_number, creator),
+    ).fetchone()
+    credit_id = int(credit_row[0])
+    if initial_amount > 0:
+        database.execute(
+            """INSERT INTO abonos_creditos
+               (credito_id, usuario, vendedor, local, valor_abono, saldo_anterior,
+                saldo_nuevo, metodo_pago, observacion, numero_recibo)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+            (credit_id, creator, seller, store_id, initial_amount, total_amount, balance, str(payload.get("initialPaymentMethod") or "Inicial"), "Abono inicial ERP", invoice_number),
+        )
+    database.execute(
+        """INSERT INTO cuotas_credito
+           (credito_id, numero_cuota, fecha_vencimiento, valor_programado, valor_pagado, estado)
+           VALUES (%s, 1, CURRENT_DATE + INTERVAL '30 days', %s, %s, %s)
+           ON CONFLICT (credito_id, numero_cuota) DO NOTHING""",
+        (credit_id, balance, 0, "PAGADA" if balance == 0 else "PENDIENTE"),
     )
-    return {"id": int(credit_id), "total": total_amount, "initial": initial_amount}
+    return {"id": credit_id, "total": total_amount, "initial": initial_amount}
 
 
-def _create_shared_apartado_record(payload: dict, user: dict, store_id: str, invoice_number: str, normalized: list[tuple[str, str, int, int]], total_amount: int) -> dict | None:
+def _create_shared_apartado_record(database: _PostgresConnection, payload: dict, user: dict, store_id: str, invoice_number: str, normalized: list[tuple[str, str, int, int]], total_amount: int) -> dict | None:
     payment_method = str(payload.get("paymentMethod", "") or "").strip().lower()
     if "apartado" not in payment_method:
         return None
@@ -1211,6 +1462,7 @@ def _create_shared_apartado_record(payload: dict, user: dict, store_id: str, inv
         documento=str(payload.get("document") or "").strip(),
         telefono=str(payload.get("phone") or "").strip(),
         productos=[{"codigo": item_code, "nombre": name, "cantidad": amount, "precio_unitario": price, "precio_total": amount * price} for item_code, name, amount, price in normalized],
+        conn=database._connection,
     )
     return {"id": int(result["id"]), "total": total_amount, "initial": initial_amount}
 
@@ -1239,8 +1491,8 @@ def _create_shared_sale(database: _PostgresConnection, payload: dict, user: dict
         quantity = int(float(item.get("quantity", 0)))
         price = int(float(item.get("unitPrice", item.get("price", 0))))
         product = database.execute("SELECT nombre_producto FROM productos WHERE codigo = %s AND UPPER(COALESCE(activo, 'SI')) <> 'NO'", (code,)).fetchone()
-        if not product or quantity <= 0 or price < 0:
-            raise ValueError("Producto inexistente o stock insuficiente")
+        if not product or quantity <= 0 or price <= 0:
+            raise ValueError("Producto inexistente, precio invalido o stock insuficiente")
         total += quantity * price
         normalized.append((code, product["nombre_producto"], quantity, price))
         requested_by_code[code] = requested_by_code.get(code, 0) + quantity
@@ -1264,7 +1516,7 @@ def _create_shared_sale(database: _PostgresConnection, payload: dict, user: dict
         database.execute("UPDATE inventarios SET cantidad = cantidad - %s, actualizado = CURRENT_TIMESTAMP WHERE local = %s AND codigo = %s", (quantity, store_id, code))
         database.execute("INSERT INTO movimiento_productos (movimiento_id, codigo, descripcion, cantidad, precio_unitario, precio_total, entrada, salida) VALUES (%s, %s, %s, %s, %s, %s, 0, %s)", (movement_id, code, description, quantity, price, quantity * price, quantity))
     credit_record = _create_shared_credit_record(database, payload, movement_id, user, store_id, invoice_number, total)
-    apartado_record = _create_shared_apartado_record(payload, user, store_id, invoice_number, normalized, total)
+    apartado_record = _create_shared_apartado_record(database, payload, user, store_id, invoice_number, normalized, total)
     result = {"id": movement_id, "total": total}
     if credit_record:
         result["creditId"] = credit_record["id"]
@@ -1313,7 +1565,7 @@ def _create_shared_purchase_entry(database: _PostgresConnection, payload: dict, 
 
 def enforce_user_store_proxy(user: dict, store_id: str) -> None:
     assigned_store = str(user["store_id"] or "")
-    if assigned_store and user["role"] != "ADMINISTRADOR" and assigned_store != store_id:
+    if assigned_store and normalize_role(user.get("role")) != "ADMINISTRADOR" and assigned_store != store_id:
         raise ValueError("El usuario no puede operar en este local")
 
 
@@ -1466,7 +1718,7 @@ class AppHandler(SimpleHTTPRequestHandler):
         if path == "/api/auth/status":
             with connection() as database:
                 configured = database.execute("SELECT 1 FROM auth_users WHERE active = 1 LIMIT 1").fetchone() is not None
-            self.send_json(200, {"configured": configured})
+            self.send_json(200, {"configured": configured, "telegramLoginConfigured": bool(TELEGRAM_BOT_TOKEN and TELEGRAM_BOT_USERNAME), "telegramBotUsername": TELEGRAM_BOT_USERNAME})
             return
         if path.startswith("/api/") and not authenticated_user(self):
             self.send_json(401, {"error": "Autenticacion requerida"})
@@ -1631,7 +1883,7 @@ class AppHandler(SimpleHTTPRequestHandler):
             return
         if path == "/api/users":
             with connection() as database:
-                rows = database.execute("SELECT id, username, email, phone, role, store_id AS storeId, tenant_id AS tenantId, active, created_at AS createdAt FROM auth_users WHERE tenant_id = ? ORDER BY username", (tenant_id(self),)).fetchall()
+                rows = database.execute("SELECT id, username, email, phone, role, store_id AS storeId, tenant_id AS tenantId, active, telegram_id AS telegramId, display_name AS displayName, created_at AS createdAt FROM auth_users WHERE tenant_id = ? ORDER BY username", (tenant_id(self),)).fetchall()
             self.send_json(200, {"items": [dict(row) for row in rows]})
             return
         if path.startswith("/api/users/") and path.endswith("/permissions"):
@@ -1879,7 +2131,7 @@ class AppHandler(SimpleHTTPRequestHandler):
                 if not user:
                     self.send_json(401, {"error": "Autenticacion requerida"})
                     return
-                if str(user.get("role", "")).upper() != "ADMINISTRADOR":
+                if normalize_role(user.get("role")) != "ADMINISTRADOR":
                     self.send_json(403, {"error": "Solo el administrador puede publicar cambios."})
                     return
                 self.send_json(200, publish_public_version())
@@ -1890,13 +2142,13 @@ class AppHandler(SimpleHTTPRequestHandler):
                     database.execute("DELETE FROM auth_tokens WHERE token = ?", (token,))
                 self.send_json(200, {"ok": True})
                 return
-            if path not in {"/api/auth/setup", "/api/auth/login"} and not authenticated_user(self):
+            if path not in {"/api/auth/setup", "/api/auth/login", "/api/auth/telegram"} and not authenticated_user(self):
                 self.send_json(401, {"error": "Autenticacion requerida"})
                 return
-            if path not in {"/api/auth/setup", "/api/auth/login"} and not requested_tenant_allowed(self, payload):
+            if path not in {"/api/auth/setup", "/api/auth/login", "/api/auth/telegram"} and not requested_tenant_allowed(self, payload):
                 self.send_json(403, {"error": "Empresa no autorizada"})
                 return
-            if path not in {"/api/auth/setup", "/api/auth/login"} and not can_access(self, path, "POST"):
+            if path not in {"/api/auth/setup", "/api/auth/login", "/api/auth/telegram"} and not can_access(self, path, "POST"):
                 self.send_json(403, {"error": "Permiso insuficiente"})
                 return
             if path == "/api/tenants":
@@ -1906,14 +2158,17 @@ class AppHandler(SimpleHTTPRequestHandler):
                     raise ValueError("La empresa requiere nombre y slug validos")
                 new_id = secrets.token_hex(10)
                 with connection() as database:
-                    database.execute("INSERT INTO tenants (id, name, slug, plan) VALUES (?, ?, ?, ?)", (new_id, name, slug, str(payload.get("plan") or "starter")))
+                    tenant = _ensure_tenant_record(database, new_id, name, slug)
+                    database.execute("UPDATE tenants SET plan = ?, active = ? WHERE id = ?", (str(payload.get("plan") or tenant.get("plan") or "starter"), 1, tenant["id"]))
                 self.send_json(201, {"id": new_id, "name": name, "slug": slug})
                 return
             if path == "/api/users":
-                if authenticated_user(self)["role"] != "ADMINISTRADOR":
+                if normalize_role(authenticated_user(self).get("role")) != "ADMINISTRADOR":
                     self.send_json(403, {"error": "Solo el administrador puede crear usuarios"})
                     return
                 username = str(payload.get("username", "")).strip()
+                telegram_id = str(payload.get("telegramId", payload.get("telegram_id", ""))).strip()
+                display_name = str(payload.get("displayName", payload.get("name", username))).strip() or username
                 password = str(payload.get("password", ""))
                 role = str(payload.get("role", "VENDEDOR")).strip().upper()
                 if len(username) < 3 or len(password) < 8:
@@ -1922,12 +2177,12 @@ class AppHandler(SimpleHTTPRequestHandler):
                     raise ValueError("Rol no valido")
                 user_id = secrets.token_hex(8)
                 with connection() as database:
-                    database.execute("INSERT INTO auth_users (id, username, email, phone, password_hash, role, store_id, tenant_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", (user_id, username, str(payload.get("email", "")).strip(), str(payload.get("phone", "")).strip(), password_hash(password), role, payload.get("storeId"), tenant_id(self, payload)))
-                self.send_json(201, {"ok": True, "id": user_id, "username": username, "role": role})
+                    database.execute("INSERT INTO auth_users (id, username, email, phone, password_hash, role, store_id, tenant_id, telegram_id, display_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (user_id, username, str(payload.get("email", "")).strip(), str(payload.get("phone", "")).strip(), password_hash(password), role, payload.get("storeId"), tenant_id(self, payload), telegram_id or None, display_name))
+                self.send_json(201, {"ok": True, "id": user_id, "username": username, "role": role, "telegramId": telegram_id, "displayName": display_name})
                 return
             if path.startswith("/api/users/") and path.endswith("/permissions"):
                 current_user = authenticated_user(self)
-                if current_user["role"] != "ADMINISTRADOR":
+                if normalize_role(current_user.get("role")) != "ADMINISTRADOR":
                     self.send_json(403, {"error": "Solo el administrador puede cambiar permisos"})
                     return
                 user_id = unquote(path.removeprefix("/api/users/").removesuffix("/permissions")).strip("/")
@@ -1949,26 +2204,55 @@ class AppHandler(SimpleHTTPRequestHandler):
                 password = str(payload.get("password", ""))
                 if len(username) < 3 or len(password) < 8:
                     raise ValueError("El usuario requiere 3 caracteres y la clave 8")
+                tenant_id_value = str(payload.get("tenantId") or DEFAULT_TENANT).strip() or DEFAULT_TENANT
+                tenant_name = str(payload.get("tenantName") or "").strip() or ("FAMIMUEBLES" if tenant_id_value == DEFAULT_TENANT else "Nueva empresa")
+                tenant_slug = str(payload.get("tenantSlug") or "").strip().lower() or _normalize_tenant_slug(tenant_name)
                 with connection() as database:
+                    _ensure_auth_user_columns(database)
                     if database.execute("SELECT 1 FROM auth_users LIMIT 1").fetchone():
                         raise ValueError("El usuario inicial ya fue configurado")
+                    _ensure_tenant_record(database, tenant_id_value, tenant_name, tenant_slug)
                     user_id = secrets.token_hex(8)
-                    database.execute("INSERT INTO auth_users (id, username, password_hash, role, store_id, tenant_id) VALUES (?, ?, ?, ?, ?, ?)", (user_id, username, password_hash(password), "ADMINISTRADOR", payload.get("storeId"), payload.get("tenantId") or DEFAULT_TENANT))
+                    database.execute("INSERT INTO auth_users (id, username, password_hash, role, store_id, tenant_id, telegram_id, display_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", (user_id, username, password_hash(password), "ADMINISTRADOR", payload.get("storeId"), tenant_id_value, str(payload.get("telegramId", "")).strip() or None, str(payload.get("displayName", username)).strip() or username))
                     token = secrets.token_urlsafe(32)
                     database.execute("INSERT INTO auth_tokens (token, user_id, expires_at) VALUES (?, ?, datetime('now', '+30 days'))", (token, user_id))
-                self.send_json(201, {"ok": True, "token": token, "user": {"id": user_id, "username": username, "email": str(payload.get("email", "")).strip(), "phone": str(payload.get("phone", "")).strip(), "role": "ADMINISTRADOR", "storeId": payload.get("storeId")}})
+                self.send_json(201, {"ok": True, "token": token, "user": {"id": user_id, "username": username, "email": str(payload.get("email", "")).strip(), "phone": str(payload.get("phone", "")).strip(), "role": "ADMINISTRADOR", "storeId": payload.get("storeId"), "telegramId": str(payload.get("telegramId", "")).strip()}})
                 return
             if path == "/api/auth/login":
                 username = str(payload.get("username", "")).strip()
                 password = str(payload.get("password", ""))
                 with connection() as database:
+                    _ensure_auth_user_columns(database)
                     user = database.execute("SELECT * FROM auth_users WHERE LOWER(username) = LOWER(?) AND active = 1", (username,)).fetchone()
                     if not user or not password_matches(password, user["password_hash"]):
                         self.send_json(401, {"error": "Credenciales invalidas"})
                         return
                     token = secrets.token_urlsafe(32)
                     database.execute("INSERT INTO auth_tokens (token, user_id, expires_at) VALUES (?, ?, datetime('now', '+30 days'))", (token, user["id"]))
-                self.send_json(200, {"token": token, "user": {"id": user["id"], "username": user["username"], "email": user["email"], "phone": user["phone"], "role": user["role"], "storeId": user["store_id"]}})
+                login_display_name = _auth_user_value(user, "display_name", _auth_user_value(user, "username", username))
+                login_email = _auth_user_value(user, "email", "")
+                login_phone = _auth_user_value(user, "phone", "")
+                login_telegram_id = _auth_user_value(user, "telegram_id", "")
+                self.send_json(200, {"token": token, "user": {"id": user["id"], "username": user["username"], "email": login_email, "phone": login_phone, "role": user["role"], "storeId": user["store_id"], "telegramId": login_telegram_id, "displayName": login_display_name}})
+                return
+            if path == "/api/auth/telegram":
+                if not verify_telegram_login(payload):
+                    self.send_json(401, {"error": "La validacion de Telegram no es valida o ya expiro"})
+                    return
+                telegram_id = str(payload.get("id", "")).strip()
+                with connection() as database:
+                    _ensure_auth_user_columns(database)
+                    user = database.execute("SELECT * FROM auth_users WHERE telegram_id = ? AND active = 1", (telegram_id,)).fetchone()
+                    if not user:
+                        self.send_json(403, {"error": "Este Telegram no esta vinculado a un usuario ERP activo"})
+                        return
+                    token = secrets.token_urlsafe(32)
+                    database.execute("INSERT INTO auth_tokens (token, user_id, expires_at) VALUES (?, ?, datetime('now', '+30 days'))", (token, user["id"]))
+                telegram_display_name = _auth_user_value(user, "display_name", _auth_user_value(user, "username", "Usuario"))
+                telegram_email = _auth_user_value(user, "email", "")
+                telegram_phone = _auth_user_value(user, "phone", "")
+                telegram_user_id = _auth_user_value(user, "telegram_id", telegram_id)
+                self.send_json(200, {"token": token, "user": {"id": user["id"], "username": user["username"], "email": telegram_email, "phone": telegram_phone, "role": user["role"], "storeId": user["store_id"], "telegramId": telegram_user_id, "displayName": telegram_display_name}})
                 return
             if path == "/api/state":
                 state = payload.get("state")
@@ -1976,8 +2260,8 @@ class AppHandler(SimpleHTTPRequestHandler):
                     raise ValueError("El estado debe ser un objeto JSON")
                 serialized = json.dumps(state, ensure_ascii=False, separators=(",", ":"))
                 with connection() as database:
-                    database.execute("INSERT OR IGNORE INTO tenants (id, name, slug) VALUES (?, ?, ?)", (tenant_id(self, payload), "Nueva empresa", tenant_id(self, payload)))
-                    database.execute("INSERT INTO tenant_states (tenant_id, state_json) VALUES (?, ?) ON CONFLICT(tenant_id) DO UPDATE SET state_json = excluded.state_json, updated_at = CURRENT_TIMESTAMP", (tenant_id(self, payload), serialized))
+                    tenant = _ensure_tenant_record(database, tenant_id(self, payload), "Nueva empresa", tenant_id(self, payload))
+                    database.execute("INSERT INTO tenant_states (tenant_id, state_json) VALUES (?, ?) ON CONFLICT(tenant_id) DO UPDATE SET state_json = excluded.state_json, updated_at = CURRENT_TIMESTAMP", (tenant["id"], serialized))
                 self.send_json(200, {"ok": True, "backend": "postgres"})
                 return
             if path in {"/api/catalog/store", "/api/catalog/product"}:
@@ -1995,7 +2279,7 @@ class AppHandler(SimpleHTTPRequestHandler):
                             name = str(payload.get("name", "")).strip()
                             if not code or not name:
                                 raise ValueError("El producto requiere codigo y nombre")
-                            database.execute("INSERT INTO productos (codigo, nombre_producto, precio_compra, activo) VALUES (%s, %s, %s, %s) ON CONFLICT (codigo) DO UPDATE SET nombre_producto = EXCLUDED.nombre_producto, precio_compra = EXCLUDED.precio_compra, activo = EXCLUDED.activo", (code, name, int(float(payload.get("cost", 0) or 0)), "NO" if payload.get("active") is False else "SI"))
+                            database.execute("INSERT INTO productos (codigo, nombre_producto, precio_compra, precio_venta, activo) VALUES (%s, %s, %s, %s, %s) ON CONFLICT (codigo) DO UPDATE SET nombre_producto = EXCLUDED.nombre_producto, precio_compra = EXCLUDED.precio_compra, precio_venta = EXCLUDED.precio_venta, activo = EXCLUDED.activo", (code, name, int(float(payload.get("cost", 0) or 0)), int(float(payload.get("salePrice", payload.get("price", 0)) or 0)), "NO" if payload.get("active") is False else "SI"))
                     self.send_json(201, {"ok": True, "id": identifier})
                     return
                 current_tenant = tenant_id(self, payload)
@@ -2235,6 +2519,10 @@ class AppHandler(SimpleHTTPRequestHandler):
                 quantity = int(quantity)
                 if _postgres_enabled():
                     with connection() as database:
+                        _, cached = claim_idempotency(database, self, payload, path)
+                        if cached is not None:
+                            self.send_json(200, cached)
+                            return
                         sale = database.execute("SELECT id, local_origen AS store_id, factura, cliente, metodo_pago FROM movimientos WHERE (id = %s OR factura = %s) AND UPPER(COALESCE(tipo, '')) = 'VENTA' ORDER BY id DESC LIMIT 1 FOR UPDATE", (sale_id, sale_id)).fetchone()
                         if not sale:
                             raise ValueError("No se encontro la factura")
@@ -2246,10 +2534,16 @@ class AppHandler(SimpleHTTPRequestHandler):
                             raise ValueError("Producto inexistente o stock insuficiente")
                         database.execute("UPDATE inventarios SET cantidad = cantidad - %s, actualizado = CURRENT_TIMESTAMP WHERE local = %s AND codigo = %s", (quantity, store_id, product_id))
                         database.execute("INSERT INTO movimiento_productos (movimiento_id, codigo, descripcion, cantidad, precio_unitario, precio_total, entrada, salida) VALUES (%s, %s, %s, %s, %s, %s, 0, %s)", (sale["id"], product_id, product["nombre_producto"], quantity, price, quantity * price, quantity))
-                    self.send_json(201, {"ok": True, "saleId": sale_id, "quantity": quantity})
+                        response = {"ok": True, "saleId": sale_id, "quantity": quantity}
+                        complete_idempotency(database, self, payload, path, 201, response)
+                    self.send_json(201, response)
                     return
                 current_tenant = tenant_id(self, payload)
                 with connection() as database:
+                    _, cached = claim_idempotency(database, self, payload, path)
+                    if cached is not None:
+                        self.send_json(200, cached)
+                        return
                     sale = database.execute("SELECT store_id FROM sales WHERE tenant_id = ? AND id = ?", (current_tenant, sale_id)).fetchone()
                     if not sale:
                         raise ValueError("No se encontro la factura")
@@ -2264,7 +2558,9 @@ class AppHandler(SimpleHTTPRequestHandler):
                     database.execute("UPDATE inventory SET quantity = quantity - ?, updated_at = CURRENT_TIMESTAMP WHERE tenant_id = ? AND product_id = ? AND store_id = ?", (quantity, current_tenant, product_id, store_id))
                     movement_id = f"{sale_id}-ADIC-{product_id}-{int(__import__('time').time() * 1000)}"
                     database.execute("INSERT INTO inventory_movements (id, tenant_id, product_id, store_id, movement_type, quantity, reference_id, note, user_id) VALUES (?, ?, ?, ?, 'VENTA', ?, ?, ?, ?)", (movement_id, current_tenant, product_id, store_id, -quantity, sale_id, f"Producto agregado a venta {sale_id}", authenticated_user(self)["id"]))
-                self.send_json(201, {"ok": True, "saleId": sale_id, "quantity": quantity})
+                    response = {"ok": True, "saleId": sale_id, "quantity": quantity}
+                    complete_idempotency(database, self, payload, path, 201, response)
+                self.send_json(201, response)
                 return
             if path == "/api/catalog/sale":
                 if _postgres_enabled():
@@ -2553,6 +2849,11 @@ class AppHandler(SimpleHTTPRequestHandler):
                     if collection == "cash-sessions" and status in {"CERRADA", "CERRADO"} and previous_status not in {"CERRADA", "CERRADO"}:
                         if not payload.get("closingAmount") and payload.get("closingAmount") != 0:
                             raise ValueError("El cierre de caja requiere valor de cierre")
+                    if collection == "customers" and _postgres_enabled():
+                        customer_values = (str(payload.get("name") or payload.get("nombre") or "").strip(), str(payload.get("document") or payload.get("documento") or "").strip(), str(payload.get("phone") or payload.get("telefono") or "").strip(), str(payload.get("email") or "").strip(), str(payload.get("status") or payload.get("estado") or "Activo").strip())
+                        updated_customer = database.execute("UPDATE clientes SET nombre = %s, documento = %s, telefono = %s, email = %s, estado = %s, updated_at = CURRENT_TIMESTAMP WHERE tenant_id = %s AND external_id = %s", (*customer_values, current_tenant, identifier)).rowcount
+                        if not updated_customer:
+                            database.execute("INSERT INTO clientes (external_id, tenant_id, nombre, documento, telefono, email, estado) VALUES (%s, %s, %s, %s, %s, %s, %s)", (identifier, current_tenant, *customer_values))
                     database.execute("INSERT INTO domain_records (tenant_id, collection, id, data_json, version) VALUES (?, ?, ?, ?, 1) ON CONFLICT(tenant_id, collection, id) DO UPDATE SET data_json = excluded.data_json, version = domain_records.version + 1, updated_at = CURRENT_TIMESTAMP", (tenant_id(self, payload), collection, identifier, serialized))
                     database.execute("INSERT INTO audit_events (user_id, action, collection, record_id, data_json) VALUES (?, ?, ?, ?, ?)", (payload.get("userId"), "UPSERT", collection, identifier, serialized))
                     response = {"ok": True, "item": payload}
@@ -2591,7 +2892,7 @@ class AppHandler(SimpleHTTPRequestHandler):
             return
         if path.startswith("/api/catalog/store/"):
             user = authenticated_user(self)
-            if user["role"] != "ADMINISTRADOR":
+            if normalize_role(user.get("role")) != "ADMINISTRADOR":
                 self.send_json(403, {"error": "Solo el administrador puede eliminar locales"})
                 return
             identifier = unquote(path.removeprefix("/api/catalog/store/")).strip()
@@ -2628,40 +2929,59 @@ class AppHandler(SimpleHTTPRequestHandler):
             return
         if path.startswith("/api/catalog/sale/"):
             user = authenticated_user(self)
-            if user["role"] != "ADMINISTRADOR":
-                self.send_json(403, {"error": "Solo el administrador puede eliminar ventas"})
+            if normalize_role(user.get("role")) != "ADMINISTRADOR":
+                self.send_json(403, {"error": "Solo el administrador puede anular ventas"})
                 return
             identifier = unquote(path.removeprefix("/api/catalog/sale/")).strip()
             if _postgres_enabled():
                 with connection() as database:
-                    sale = database.execute("SELECT id, local_origen FROM movimientos WHERE id = %s AND UPPER(COALESCE(tipo, '')) = 'VENTA' FOR UPDATE", (identifier,)).fetchone()
+                    sale = database.execute("SELECT id, local_origen, factura, estado FROM movimientos WHERE id = %s AND UPPER(COALESCE(tipo, '')) = 'VENTA' FOR UPDATE", (identifier,)).fetchone()
                     if not sale:
                         self.send_json(404, {"error": "Venta no encontrada"})
                         return
-                    items = database.execute("SELECT codigo, cantidad FROM movimiento_productos WHERE movimiento_id = %s", (identifier,)).fetchall()
+                    if str(sale["estado"] or "").upper() == "ANULADO":
+                        self.send_json(200, {"ok": True, "anulado": True, "alreadyCancelled": True})
+                        return
+                    credit = database.execute("SELECT id FROM creditos WHERE movimiento_id = %s FOR UPDATE", (identifier,)).fetchone()
+                    apartado = database.execute("SELECT id FROM apartados WHERE movimiento_id = %s FOR UPDATE", (identifier,)).fetchone()
+                    if credit and database.execute("SELECT 1 FROM abonos_creditos WHERE credito_id = %s LIMIT 1", (credit["id"],)).fetchone():
+                        self.send_json(409, {"error": "No se puede anular una venta con abonos de credito. Gestione primero la anulacion financiera."})
+                        return
+                    if apartado and database.execute("SELECT 1 FROM abonos_apartados WHERE apartado_id = %s LIMIT 1", (apartado["id"],)).fetchone():
+                        self.send_json(409, {"error": "No se puede anular una venta con abonos de apartado. Gestione primero la anulacion financiera."})
+                        return
+                    items = database.execute("SELECT codigo, cantidad, descripcion, precio_unitario, precio_total FROM movimiento_productos WHERE movimiento_id = %s", (identifier,)).fetchall()
                     for item in items:
                         database.execute("UPDATE inventarios SET cantidad = cantidad + %s, actualizado = CURRENT_TIMESTAMP WHERE local = %s AND codigo = %s", (float(item["cantidad"] or 0), sale["local_origen"], item["codigo"]))
-                    database.execute("DELETE FROM movimiento_productos WHERE movimiento_id = %s", (identifier,))
-                    database.execute("DELETE FROM movimientos WHERE id = %s", (identifier,))
-                self.send_json(200, {"ok": True, "deleted": True})
+                    reversal = database.execute("INSERT INTO movimientos (tipo, estado, local_origen, empleado, vendedor, factura, referencia, observacion) VALUES ('ANULACION_VENTA', 'COMPLETADO', %s, %s, %s, %s, %s, %s) RETURNING id", (sale["local_origen"], user["username"], user["username"], sale["factura"], identifier, "Reversion por anulacion de venta")).fetchone()
+                    for item in items:
+                        database.execute("INSERT INTO movimiento_productos (movimiento_id, codigo, descripcion, cantidad, precio_unitario, precio_total, entrada, salida) VALUES (%s, %s, %s, %s, %s, %s, %s, 0)", (reversal[0], item["codigo"], item["descripcion"], item["cantidad"], item["precio_unitario"], item["precio_total"], item["cantidad"]))
+                    database.execute("UPDATE movimientos SET estado = 'ANULADO', observacion = %s WHERE id = %s", ("Anulada por administrador; reversión " + str(reversal[0]), identifier))
+                    if credit:
+                        database.execute("UPDATE creditos SET estado = 'ANULADO' WHERE id = %s", (credit["id"],))
+                    if apartado:
+                        database.execute("UPDATE apartados SET estado = 'ANULADO' WHERE id = %s", (apartado["id"],))
+                self.send_json(200, {"ok": True, "anulado": True, "reversalId": reversal[0]})
                 return
             with connection() as database:
-                sale = database.execute("SELECT store_id FROM sales WHERE tenant_id = ? AND id = ?", (tenant_id(self), identifier)).fetchone()
+                sale = database.execute("SELECT store_id, status FROM sales WHERE tenant_id = ? AND id = ?", (tenant_id(self), identifier)).fetchone()
                 if not sale:
                     self.send_json(404, {"error": "Venta no encontrada"})
+                    return
+                if str(sale[1] or "").upper() in {"ANULADA", "CANCELLED", "CANCELED"}:
+                    self.send_json(200, {"ok": True, "anulado": True, "alreadyCancelled": True})
                     return
                 items = database.execute("SELECT product_id, quantity FROM sale_items WHERE sale_id = ?", (identifier,)).fetchall()
                 for item in items:
                     database.execute("UPDATE inventory SET quantity = quantity + ?, updated_at = CURRENT_TIMESTAMP WHERE tenant_id = ? AND product_id = ? AND store_id = ?", (float(item[1]), tenant_id(self), item[0], sale[0]))
-                    database.execute("INSERT INTO inventory_movements (id, tenant_id, product_id, store_id, movement_type, quantity, reference_id, user_id, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", (f"REV-{identifier}-{item[0]}", tenant_id(self), item[0], sale[0], "ANULACION_VENTA", float(item[1]), identifier, user["id"], "Reversion por eliminacion de venta"))
-                database.execute("DELETE FROM sale_items WHERE sale_id = ?", (identifier,))
-                database.execute("DELETE FROM sales WHERE tenant_id = ? AND id = ?", (tenant_id(self), identifier))
-                database.execute("INSERT INTO audit_events (user_id, action, collection, record_id, data_json) VALUES (?, ?, ?, ?, ?)", (user["id"], "DELETE", "sales", identifier, "{}"))
-            self.send_json(200, {"ok": True, "deleted": True})
+                    database.execute("INSERT INTO inventory_movements (id, tenant_id, product_id, store_id, movement_type, quantity, reference_id, user_id, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", (f"REV-{identifier}-{item[0]}", tenant_id(self), item[0], sale[0], "ANULACION_VENTA", float(item[1]), identifier, user["id"], "Reversion por anulacion de venta"))
+                database.execute("UPDATE sales SET status = 'ANULADA' WHERE tenant_id = ? AND id = ?", (tenant_id(self), identifier))
+                database.execute("INSERT INTO audit_events (user_id, action, collection, record_id, data_json) VALUES (?, ?, ?, ?, ?)", (user["id"], "ANULATE", "sales", identifier, json.dumps({"reason": "Anulacion administrativa", "inventoryReversed": True})))
+            self.send_json(200, {"ok": True, "anulado": True})
             return
         if path.startswith("/api/shared-entry/"):
             user = authenticated_user(self)
-            if user["role"] != "ADMINISTRADOR":
+            if normalize_role(user.get("role")) != "ADMINISTRADOR":
                 self.send_json(403, {"error": "Solo el administrador puede eliminar entradas"})
                 return
             identifier = unquote(path.removeprefix("/api/shared-entry/")).strip()
@@ -2720,7 +3040,7 @@ class AppHandler(SimpleHTTPRequestHandler):
             return
         if path.startswith("/api/catalog/store/"):
             user = authenticated_user(self)
-            if user["role"] != "ADMINISTRADOR":
+            if normalize_role(user.get("role")) != "ADMINISTRADOR":
                 self.send_json(403, {"error": "Solo el administrador puede eliminar locales"})
                 return
             identifier = unquote(path.removeprefix("/api/catalog/store/")).strip()
@@ -2774,7 +3094,7 @@ class AppHandler(SimpleHTTPRequestHandler):
         if not path.startswith("/api/domain/"):
             self.send_json(404, {"error": "Ruta no encontrada"})
             return
-        if authenticated_user(self)["role"] != "ADMINISTRADOR":
+        if normalize_role(authenticated_user(self).get("role")) != "ADMINISTRADOR":
             self.send_json(403, {"error": "Solo el administrador puede eliminar movimientos"})
             return
         parts = path.removeprefix("/api/domain/").strip("/").split("/", 1)
@@ -2816,11 +3136,13 @@ class AppHandler(SimpleHTTPRequestHandler):
                 return
             if path == "/api/users":
                 current_user = authenticated_user(self)
-                if current_user["role"] != "ADMINISTRADOR":
+                if normalize_role(current_user.get("role")) != "ADMINISTRADOR":
                     self.send_json(403, {"error": "Solo el administrador puede editar usuarios"})
                     return
                 identifier = record_id(payload)
                 username = str(payload.get("username", "")).strip()
+                telegram_id = str(payload.get("telegramId", payload.get("telegram_id", ""))).strip()
+                display_name = str(payload.get("displayName", payload.get("name", username))).strip() or username
                 role = str(payload.get("role", "VENDEDOR")).strip().upper()
                 password = str(payload.get("password", ""))
                 active = 0 if payload.get("active") is False else 1
@@ -2835,16 +3157,16 @@ class AppHandler(SimpleHTTPRequestHandler):
                         self.send_json(404, {"error": "Usuario no encontrado"})
                         return
                     if password:
-                        database.execute("UPDATE auth_users SET username = ?, email = ?, phone = ?, role = ?, store_id = ?, active = ?, password_hash = ? WHERE id = ? AND tenant_id = ?", (username, str(payload.get("email", "")).strip(), str(payload.get("phone", "")).strip(), role, payload.get("storeId"), active, password_hash(password), identifier, tenant_id(self, payload)))
+                        database.execute("UPDATE auth_users SET username = ?, email = ?, phone = ?, role = ?, store_id = ?, active = ?, password_hash = ?, telegram_id = ?, display_name = ? WHERE id = ? AND tenant_id = ?", (username, str(payload.get("email", "")).strip(), str(payload.get("phone", "")).strip(), role, payload.get("storeId"), active, password_hash(password), telegram_id or None, display_name, identifier, tenant_id(self, payload)))
                     else:
-                        database.execute("UPDATE auth_users SET username = ?, email = ?, phone = ?, role = ?, store_id = ?, active = ? WHERE id = ? AND tenant_id = ?", (username, str(payload.get("email", "")).strip(), str(payload.get("phone", "")).strip(), role, payload.get("storeId"), active, identifier, tenant_id(self, payload)))
+                        database.execute("UPDATE auth_users SET username = ?, email = ?, phone = ?, role = ?, store_id = ?, active = ?, telegram_id = ?, display_name = ? WHERE id = ? AND tenant_id = ?", (username, str(payload.get("email", "")).strip(), str(payload.get("phone", "")).strip(), role, payload.get("storeId"), active, telegram_id or None, display_name, identifier, tenant_id(self, payload)))
                     if not active:
                         database.execute("DELETE FROM auth_tokens WHERE user_id = ?", (identifier,))
                 self.send_json(200, {"ok": True, "id": identifier})
                 return
             if path == "/api/shared-entry":
                 user = authenticated_user(self)
-                if user["role"] != "ADMINISTRADOR":
+                if normalize_role(user.get("role")) != "ADMINISTRADOR":
                     self.send_json(403, {"error": "Solo el administrador puede editar entradas"})
                     return
                 identifier = record_id(payload)
@@ -2874,7 +3196,7 @@ class AppHandler(SimpleHTTPRequestHandler):
                 return
             if path == "/api/catalog/sale":
                 current_user = authenticated_user(self)
-                if current_user["role"] != "ADMINISTRADOR":
+                if normalize_role(current_user.get("role")) != "ADMINISTRADOR":
                     self.send_json(403, {"error": "Solo el administrador puede editar ventas"})
                     return
                 identifier = record_id(payload)
@@ -2900,8 +3222,8 @@ class AppHandler(SimpleHTTPRequestHandler):
                                 price = int(float(item.get("unitPrice", item.get("price", 0)) or 0))
                                 product = database.execute("SELECT nombre_producto FROM productos WHERE codigo = %s AND UPPER(COALESCE(activo, 'SI')) <> 'NO'", (code,)).fetchone()
                                 stock = database.execute("SELECT cantidad FROM inventarios WHERE local = %s AND codigo = %s FOR UPDATE", (store_id, code)).fetchone()
-                                if not product or not stock or quantity <= 0 or price < 0 or int(stock["cantidad"] or 0) < quantity:
-                                    raise ValueError("Producto inexistente o stock insuficiente para la venta editada")
+                                if not product or not stock or quantity <= 0 or price <= 0 or int(stock["cantidad"] or 0) < quantity:
+                                    raise ValueError("Producto inexistente, precio invalido o stock insuficiente para la venta editada")
                                 normalized.append((code, product["nombre_producto"], quantity, price))
                             database.execute("DELETE FROM movimiento_productos WHERE movimiento_id = %s", (identifier,))
                             total = 0
