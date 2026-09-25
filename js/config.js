@@ -1,11 +1,11 @@
 const LOCAL_API_URL = 'http://127.0.0.1:8024/api';
-const PUBLIC_API_URL = 'https://joy-rendering-whereas-clean.trycloudflare.com/api';
+const PUBLIC_API_URL = 'https://richards-mug-pure-mattress.trycloudflare.com/api';
 
 const configuredApiBase = String(
   globalThis.FAMIMUEBLES_API_BASE_URL ||
   ''
 ).trim();
-const hasDeprecatedApiBase = configuredApiBase.includes('artwork-charges-wiley-sort.trycloudflare.com');
+const hasDeprecatedApiBase = configuredApiBase.includes('artwork-charges-wiley-sort.trycloudflare.com') || configuredApiBase.includes('joy-rendering-whereas-clean.trycloudflare.com');
 const hostname = window.location.hostname || '';
 const protocol = window.location.protocol || '';
 const isFileOrigin = protocol === 'file:' || hostname === '';
@@ -20,7 +20,7 @@ if (!isLocalHostname && !configuredApiBase && hostname.endsWith('.github.io')) {
       publicApiUrl = `${tunnel.url.replace(/\/+$/, '')}/api`;
     }
   } catch (error) {
-    console.warn('No se pudo actualizar la URL publica del servidor.', error);
+    console.warn('No se pudo actualizar la URL publica del servidor; la vista quedara en modo demo.', error);
   }
 }
 
@@ -28,6 +28,8 @@ export const API_BASE_URL = isLocalHostname
   ? LOCAL_API_URL
   : configuredApiBase && !hasDeprecatedApiBase
     ? configuredApiBase.replace(/\/+$/, '')
-    : publicApiUrl;
+    : hostname.endsWith('.github.io')
+      ? ''
+      : publicApiUrl;
 
 export const API_MODE = API_BASE_URL ? 'api' : 'static';
