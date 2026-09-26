@@ -12,7 +12,7 @@ import { showToast } from './components/toast.js';
 import { table } from './components/tables.js';
 import { renderNotifications } from './components/notifications.js';
 import { renderDashboard } from './modules/dashboard-v3.js?v=27';
-import { canonicalSellerName, renderVentas, salesTable, salesSummary, normalizeSales, saleTimestamp } from './modules/ventas.js?v=24';
+import { canonicalSellerName, renderVentas, salesTable, salesSummary, normalizeSales, saleTimestamp } from './modules/ventas.js?v=25';
 import { renderFacturacion, cartTotal, productResults, customerResults } from './modules/facturacion.js?v=23';
 import { renderProductos, productTable, productMatches } from './modules/productos.js?v=22';
 import { renderInventario, inventoryContent } from './modules/inventario.js?v=20';
@@ -41,7 +41,7 @@ import { createProduct, updateProduct, setProductActive, generateTestProducts, s
 import { productDetail } from './modules/product-detail.js?v=14';
 import { importPreview, importPreviewRows, importProducts } from './modules/product-import.js?v=15';
 import { renderProveedores, supplierTable } from './modules/proveedores.js?v=15';
-import { renderCompras, purchaseTable, purchaseSummary } from './modules/compras.js?v=21';
+import { renderCompras, purchaseTable, purchaseSummary } from './modules/compras.js?v=22';
 import { purchaseTotal, createPurchase, orderPurchase, receivePurchase, receiveTalonarioPurchase, cancelPurchase } from './services/purchase-service.js?v=16';
 import { purchaseDetail } from './modules/purchase-detail.js?v=16';
 import { renderCuentasPorPagar, payableTable } from './modules/cuentas-por-pagar.js?v=15';
