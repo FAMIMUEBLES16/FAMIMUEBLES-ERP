@@ -59,7 +59,7 @@
           const registrations = await navigator.serviceWorker.getRegistrations();
           await Promise.all(registrations.map(registration => registration.unregister()));
 
-          const registration = await navigator.serviceWorker.register('./service-worker.js?v=20260926124500', {
+          const registration = await navigator.serviceWorker.register('./service-worker.js?v=20260926131716', {
             scope: './',
             updateViaCache: 'none'
           });
