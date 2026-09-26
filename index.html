@@ -7,8 +7,8 @@
   <meta name="description" content="FAMIMUEBLES ERP, sistema empresarial local.">
   <link rel="manifest" href="manifest.json">
   <link rel="apple-touch-icon" sizes="192x192" href="assets/icons/apple-touch-icon.png">
-  <link rel="stylesheet" href="css/main.css?v=51">
-  <link rel="stylesheet" href="css/parity-report-fixes.css?v=3">
+  <link rel="stylesheet" href="css/main.css?v=52">
+  <link rel="stylesheet" href="css/parity-report-fixes.css?v=4">
   <script defer src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
   <title>FAMIMUEBLES ERP</title>
@@ -51,7 +51,7 @@
   <nav class="bottom-nav" id="bottom-nav" aria-label="Navegacion movil"></nav>
   <div id="toast-region" class="toast-region" aria-live="polite"></div>
   <div id="modal-root"></div>
-  <script type="module" src="js/app-v3.js?v=72"></script>
+  <script type="module" src="js/app-v3.js?v=74"></script>
   <script>
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', async () => {
@@ -59,7 +59,7 @@
           const registrations = await navigator.serviceWorker.getRegistrations();
           await Promise.all(registrations.map(registration => registration.unregister()));
 
-          const registration = await navigator.serviceWorker.register('./service-worker.js?v=20260925143000', {
+          const registration = await navigator.serviceWorker.register('./service-worker.js?v=20260926122231', {
             scope: './',
             updateViaCache: 'none'
           });
