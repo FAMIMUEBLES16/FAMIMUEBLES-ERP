@@ -67,10 +67,16 @@ export function purchaseTable(state, items) {
   }));
 }
 
+export function purchaseSummary(state, items) {
+  const records = normalizePurchases(items);
+  const total = records.reduce((sum, purchase) => sum + Number(purchase.total || purchaseTotal(state, purchase) || 0), 0);
+  return `<div class="record-summary"><strong class="record-summary-count">${records.length}</strong><div><h3>Resumen de compras</h3><p>Valor: ${money(total)}</p></div></div>`;
+}
+
 export function renderCompras(state) {
   const stores = (state.stores || []).map(item => `<option value="${item.id}">${item.name}</option>`).join('');
   const suppliers = (state.suppliers || []).map(item => `<option value="${item.id}">${item.name}</option>`).join('');
   const entries = Array.isArray(state.entries) ? state.entries : [];
   const sourcePurchases = [...(Array.isArray(state.purchases) ? state.purchases : []), ...entries];
-  return page('ABASTECIMIENTO','Compras','<button class="primary" data-action="new-purchase">＋ Nueva compra</button>',`<div class="toolbar"><input class="field" data-filter="purchases" placeholder="Buscar compra, factura o proveedor..."><select class="field" data-purchase-supplier><option value="all">Todos los proveedores</option>${suppliers}</select><select class="field" data-purchase-store><option value="all">Todos los locales</option>${stores}</select><select class="field" data-purchase-status><option value="all">Todos los estados</option><option>RECIBIDA</option></select></div><div id="purchases-table">${purchaseTable(state, sourcePurchases)}</div>`);
+  return page('ABASTECIMIENTO','Compras','<button class="primary" data-action="new-purchase">＋ Nueva compra</button>',`<div class="toolbar"><input class="field" data-filter="purchases" placeholder="Buscar compra, factura o proveedor..."><select class="field" data-purchase-supplier><option value="all">Todos los proveedores</option>${suppliers}</select><select class="field" data-purchase-store><option value="all">Todos los locales</option>${stores}</select><select class="field" data-purchase-status><option value="all">Todos los estados</option><option>RECIBIDA</option></select></div><div data-purchase-summary>${purchaseSummary(state, sourcePurchases)}</div><div id="purchases-table">${purchaseTable(state, sourcePurchases)}</div>`);
 }
