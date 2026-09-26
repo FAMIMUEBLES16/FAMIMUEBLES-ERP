@@ -2,6 +2,11 @@
 .parity-filters, .report-filter-row { display:grid; grid-template-columns:repeat(5, minmax(130px, 1fr)); align-items:end; gap:10px; }
 .report-filter-row { grid-template-columns:1.05fr 1.35fr 1fr 1fr auto; }
 .parity-filters .input-label, .report-filter-row .input-label { min-width:0; margin:0; }
+.sistecredito-summary { display:flex; align-items:center; gap:12px; width:max-content; max-width:100%; margin:0 0 18px; }
+.sistecredito-summary-count { display:grid; place-items:center; width:90px; min-width:90px; height:60px; border-radius:8px; background:#d7fbd1; color:#16752a; font:600 26px 'Space Grotesk'; }
+.sistecredito-summary > div > strong, .sistecredito-summary > div > span { display:block; }
+.sistecredito-summary > div > strong { font:600 16px 'Space Grotesk'; }
+.sistecredito-summary > div > span { margin-top:4px; color:var(--muted); font-size:14px; }
 .report-generate { min-height:42px; white-space:nowrap; }
 .report-preview { margin-top:18px; }
 .report-preview .table-wrap { margin-top:0; overflow:auto; }
