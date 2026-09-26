@@ -4,19 +4,35 @@ const value = (item, ...keys) => keys.map(key => item?.[key]).find(item => item 
 const dateValue = item => String(value(item, 'fecha', 'date', 'createdAt', 'created_at')).slice(0, 10);
 const photoValue = item => value(item, 'foto', 'photo', 'imagen', 'image', 'captura', 'screenshot', 'comprobante', 'evidencia', 'foto_url', 'photo_url', 'comprobante_file_id');
 
+function filteredSistecreditoRows(data = {}, filters = {}) {
+  return (Array.isArray(data.sistecredito) ? data.sistecredito : [])
+    .filter(item => {
+      const date = dateValue(item);
+      const vendedor = String(value(item, 'vendedor', 'seller', 'empleado')).toLowerCase();
+      const local = String(value(item, 'local', 'store', 'storeId'));
+      const method = String(value(item, 'metodo_pago', 'method', 'paymentMethod'));
+      return (!filters.from || date >= filters.from)
+        && (!filters.to || date <= filters.to)
+        && (!filters.local || local === filters.local)
+        && (!filters.vendedor || vendedor.includes(filters.vendedor.toLowerCase()))
+        && (!filters.method || method === filters.method);
+    })
+    .sort((left, right) => {
+      const leftDate = new Date(left?.fecha || left?.date || left?.createdAt || left?.created_at || 0).getTime();
+      const rightDate = new Date(right?.fecha || right?.date || right?.createdAt || right?.created_at || 0).getTime();
+      return rightDate - leftDate;
+    });
+}
+
+export function sistecreditoSummary(data = {}, filters = {}) {
+  const rows = filteredSistecreditoRows(data, filters);
+  const total = rows.reduce((sum, item) => sum + Number(value(item, 'valor', 'amount', 'total') || 0), 0);
+  return `<div class="sistecredito-summary" aria-label="Resumen de recaudos"><strong class="sistecredito-summary-count">${rows.length}</strong><div><strong>Resumen recaudos</strong><span>Valor: ${money(total)}</span></div></div>`;
+}
+
 export function sistecreditoTable(data = {}, filters = {}) {
-  const rows = (Array.isArray(data.sistecredito) ? data.sistecredito : []).filter(item => {
-    const date = dateValue(item);
-    const vendedor = String(value(item, 'vendedor', 'seller', 'empleado')).toLowerCase();
-    const local = String(value(item, 'local', 'store', 'storeId'));
-    const method = String(value(item, 'metodo_pago', 'method', 'paymentMethod'));
-    return (!filters.from || date >= filters.from)
-      && (!filters.to || date <= filters.to)
-      && (!filters.local || local === filters.local)
-      && (!filters.vendedor || vendedor.includes(filters.vendedor.toLowerCase()))
-      && (!filters.method || method === filters.method);
-  });
-  const body = rows.length ? rows.map(item => `<tr><td>${dateValue(item) || '-'}</td><td>${value(item, 'vendedor', 'seller', 'empleado') || '-'}</td><td>${value(item, 'local', 'store', 'storeId') || '-'}</td><td><strong>${money(Number(value(item, 'valor', 'amount', 'total') || 0))}</strong></td><td>${value(item, 'metodo_pago', 'method', 'paymentMethod') || '-'}</td><td>${photoValue(item) ? `<button class="table-action" data-action="sistecredito-photo" data-photo="${photoValue(item)}">Ver foto</button>` : '<span class="muted">Sin foto</span>'}</td></tr>`).join('') : '<tr><td colspan="6" class="muted">No hay operaciones de Sistecrédito para los filtros seleccionados.</td></tr>';
+  const rows = filteredSistecreditoRows(data, filters);
+  const body = rows.length ? rows.map(item => `<tr><td>${dateValue(item) || '-'}</td><td>${value(item, 'vendedor', 'seller', 'empleado') || '-'}</td><td>${value(item, 'local', 'store', 'storeId') || '-'}</td><td><strong>${money(Number(value(item, 'valor', 'amount', 'total') || 0))}</strong></td><td>${value(item, 'metodo_pago', 'method', 'paymentMethod') || '-'}</td><td>${photoValue(item) ? `<button class="table-action" data-action="sistecredito-photo" data-photo="${photoValue(item)}">Ver foto</button>` : '<span class="muted">Sin foto</span>'}${item?.id ? ` <button class="table-action" data-action="sistecredito-edit" data-id="${item.id}">Editar fecha</button>` : ''}</td></tr>`).join('') : '<tr><td colspan="6" class="muted">No hay operaciones de Sistecrédito para los filtros seleccionados.</td></tr>';
   return table(['Fecha', 'Vendedor', 'Local', 'Valor', 'Método de pago', 'Acciones'], body);
 }
 
@@ -26,7 +42,8 @@ export function renderParidad(data = {}) {
   const sellers = sellerOptions([], sistecredito);
   const methods = [...new Set(sistecredito.map(item => value(item, 'metodo_pago', 'method', 'paymentMethod')).filter(Boolean))].sort((left, right) => left.localeCompare(right, 'es')).map(method => `<option value="${method}">${method}</option>`).join('');
   return page('SISTECREDITO', 'Sistecredito', '', `
-    <section class="panel"><div class="panel-head"><h3>Sistecrédito</h3></div><div class="filter-row parity-filters"><label class="input-label">Desde<input class="field" id="parity-from" type="date"></label><label class="input-label">Hasta<input class="field" id="parity-to" type="date"></label><label class="input-label">Local<select class="field" id="parity-local"><option value="">Todos</option>${stores}</select></label><label class="input-label">Vendedor<select class="field" id="parity-vendedor"><option value="">Todos</option>${sellers}</select></label><label class="input-label">Método de pago<select class="field" id="parity-method"><option value="">Todos</option>${methods}</select></label></div><div id="sistecredito-table">${sistecreditoTable(data)}</div></section>`);
+    <div id="sistecredito-summary">${sistecreditoSummary(data)}</div>
+    <section class="panel"><div class="filter-row parity-filters"><label class="input-label">Desde<input class="field" id="parity-from" type="date"></label><label class="input-label">Hasta<input class="field" id="parity-to" type="date"></label><label class="input-label">Local<select class="field" id="parity-local"><option value="">Todos</option>${stores}</select></label><label class="input-label">Vendedor<select class="field" id="parity-vendedor"><option value="">Todos</option>${sellers}</select></label><label class="input-label">Método de pago<select class="field" id="parity-method"><option value="">Todos</option>${methods}</select></label></div><div id="sistecredito-table">${sistecreditoTable(data)}</div></section>`);
 }
 
 export function payrollModal(data = {}) {
