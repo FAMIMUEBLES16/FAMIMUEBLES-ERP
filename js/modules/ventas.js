@@ -86,6 +86,11 @@ export function salesTable(data, sales = normalizeSales(data.sales || data.venta
   return table(['Factura','Factura física','Cliente','Fecha','Metodo de pago','Total','Estado','Acciones'], orderedSales.map(sale => `<tr><td><strong>${sale.id}</strong></td><td>${sale.invoiceNumber || '-'}</td><td>${sale.customer}</td><td>${sale.date}</td><td>${sale.paymentMethod}</td><td><strong>${money(sale.total)}</strong></td><td>${badge(sale.status)}</td><td><button class="table-action" data-action="sale-detail" data-sale-id="${sale.id}">Ver</button>${isAdmin ? `<button class="table-action" data-action="edit-sale" data-sale-id="${sale.id}">Editar</button><button class="table-action danger-text" data-action="delete-sale" data-sale-id="${sale.id}">Eliminar</button>` : ''}</td></tr>`));
 }
 
+export function salesSummary(sales) {
+  const total = sales.reduce((sum, sale) => sum + Number(sale.total || 0), 0);
+  return `<div class="record-summary"><strong class="record-summary-count">${sales.length}</strong><div><h3>Resumen de ventas</h3><p>Valor: ${money(total)}</p></div></div>`;
+}
+
 export function renderVentas(data) {
   const sales = normalizeSales(data.sales || data.ventas || []);
   const storeOptions = (data.stores || []).map(store => `<option value="${store.id}">${store.name}</option>`).join('');
@@ -93,6 +98,6 @@ export function renderVentas(data) {
      'OPERACION',
      'Ventas',
      '<button class="primary" data-action="new-sale">＋ Nueva venta</button>',
-    `<div class="toolbar"><input class="field" data-filter="sales" placeholder="Buscar factura o cliente..."><select class="field" data-sales-store><option value="all">Todos los locales</option>${storeOptions}</select><select class="field" data-sales-payment><option value="all">Todos los medios</option></select><select class="field" data-sales-status><option value="all">Todos los estados</option></select></div><div data-sales-table>${salesTable(data, sales)}</div>`
+    `<div class="toolbar"><input class="field" data-filter="sales" placeholder="Buscar factura o cliente..."><select class="field" data-sales-store><option value="all">Todos los locales</option>${storeOptions}</select><select class="field" data-sales-payment><option value="all">Todos los medios</option></select><select class="field" data-sales-status><option value="all">Todos los estados</option></select></div><div data-sales-summary>${salesSummary(sales)}</div><div data-sales-table>${salesTable(data, sales)}</div>`
   );
 }
