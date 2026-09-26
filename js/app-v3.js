@@ -12,7 +12,7 @@ import { showToast } from './components/toast.js';
 import { table } from './components/tables.js';
 import { renderNotifications } from './components/notifications.js';
 import { renderDashboard } from './modules/dashboard-v3.js?v=27';
-import { canonicalSellerName, renderVentas, salesTable, normalizeSales, saleTimestamp } from './modules/ventas.js?v=23';
+import { canonicalSellerName, renderVentas, salesTable, salesSummary, normalizeSales, saleTimestamp } from './modules/ventas.js?v=24';
 import { renderFacturacion, cartTotal, productResults, customerResults } from './modules/facturacion.js?v=23';
 import { renderProductos, productTable, productMatches } from './modules/productos.js?v=22';
 import { renderInventario, inventoryContent } from './modules/inventario.js?v=20';
@@ -28,7 +28,7 @@ import { renderGastos } from './modules/gastos.js?v=19';
 import { renderGasolina } from './modules/gasolina.js?v=18';
 import { renderUsuarios } from './modules/usuarios.js?v=19';
 import { renderAuditoria, setAuditFilters } from './modules/auditoria.js?v=23';
-import { renderTalonarios, talonarioModal, setTalonarioFilters, currentTalonarioNumber, normalizeActiveTalonarios } from './modules/talonarios.js?v=12';
+import { renderTalonarios, talonarioModal, setTalonarioFilters, currentTalonarioNumber, normalizeActiveTalonarios } from './modules/talonarios.js?v=13';
 import { historicalTalonarios, historicalRecibos, storedTalonarios } from './modules/talonarios-historial.js?v=1';
 import { renderApartados } from './modules/apartados.js?v=19';
 import { createApartado, decreaseSaleInventory, registerPayment, runTransaction, addMovement } from './modules/finanzas.js?v=18';
@@ -41,14 +41,14 @@ import { createProduct, updateProduct, setProductActive, generateTestProducts, s
 import { productDetail } from './modules/product-detail.js?v=14';
 import { importPreview, importPreviewRows, importProducts } from './modules/product-import.js?v=15';
 import { renderProveedores, supplierTable } from './modules/proveedores.js?v=15';
-import { renderCompras, purchaseTable } from './modules/compras.js?v=20';
+import { renderCompras, purchaseTable, purchaseSummary } from './modules/compras.js?v=21';
 import { purchaseTotal, createPurchase, orderPurchase, receivePurchase, receiveTalonarioPurchase, cancelPurchase } from './services/purchase-service.js?v=16';
 import { purchaseDetail } from './modules/purchase-detail.js?v=16';
 import { renderCuentasPorPagar, payableTable } from './modules/cuentas-por-pagar.js?v=15';
 import { accountsPayableDetail } from './modules/accounts-payable-detail.js?v=14';
 import { calculateBalance, registerPayment as registerSupplierPayment, updateAccountPayableStatus } from './services/accounts-payable-service.js?v=14';
 import { renderOperaciones, advancedModal, nextAdvancedId } from './modules/operaciones.js?v=2';
-import { renderParidad, payrollModal, payrollConfigModal, countModal, sistecreditoModal, formatParityResult, sistecreditoTable } from './modules/paridad.js?v=2';
+import { renderParidad, payrollModal, payrollConfigModal, countModal, sistecreditoModal, formatParityResult, sistecreditoSummary, sistecreditoTable } from './modules/paridad.js?v=4';
 import { api } from './services/api-client.js?v=8';
 
 const state = { cart:[], payment:'Efectivo', customerId:'CLI-00001', storeId:store.collection.stores[0]?.id || '', transport:0, transportDestination:'', transportNote:'' };
@@ -174,12 +174,14 @@ async function persistDomainRecord(collection, record){
 }
 async function seedHistoricalTalonarios(state){
 	if(!Array.isArray(state.talonarios))state.talonarios=[];
+	state.talonarios = normalizeActiveTalonarios(state.talonarios);
 	const existing=new Set(state.talonarios.map(item=>String(item.id)));
 	const missing=[...historicalTalonarios,...historicalRecibos,...storedTalonarios].filter(item=>!existing.has(item.id));
 	if(!missing.length)return;
-	state.talonarios.push(...missing);
+	state.talonarios.push(...missing.map(item => ({ ...item, status: String(item.status || '').toUpperCase() === 'TERMINADO' && !item.sentAt && String(item.storeId || item.destinationName || '').toUpperCase() === 'INV CRR 5 3 26' ? 'ALMACENADO' : item.status })));
+	state.talonarios = normalizeActiveTalonarios(state.talonarios);
 	for(const item of missing){
-		try{await persistDomainRecord('talonarios',item);}catch(error){console.warn('No se pudo guardar el historial de talonarios:',error.message);}
+		try{await persistDomainRecord('talonarios', { ...item, status: String(item.status || '').toUpperCase() === 'TERMINADO' && !item.sentAt && (String(item.storeId || item.destinationName || '').toUpperCase() === 'INV CRR 5 3 26' || String(item.storeId || item.destinationName || '').toUpperCase() === 'INV CRR 5 3 26') ? 'ALMACENADO' : item.status });}catch(error){console.warn('No se pudo guardar el historial de talonarios:',error.message);}
 	}
 }
 function openTalonarioModal(itemId=''){
@@ -665,7 +667,18 @@ function updateProductViewState(){productViewState={query:$('[data-filter="produ
 document.addEventListener('input',event=>{if(event.target.matches('[data-filter="purchases"]'))filterPurchases();});
 document.addEventListener('change',event=>{if(event.target.matches('[data-purchase-supplier],[data-purchase-store],[data-purchase-status]'))filterPurchases();});
 function filterPurchases(){const query=$('[data-filter="purchases"]')?.value.toLowerCase()||'',supplier=$('[data-purchase-supplier]')?.value||'all',storeId=$('[data-purchase-store]')?.value||'all',status=$('[data-purchase-status]')?.value||'all';const matches=(store.collection.purchases||[]).filter(purchase=>{const supplierName=store.collection.suppliers?.find(item=>item.id===purchase.supplierId)?.name||'';return `${purchase.id} ${purchase.supplierInvoice} ${supplierName}`.toLowerCase().includes(query)&&(supplier==='all'||purchase.supplierId===supplier)&&(storeId==='all'||purchase.storeId===storeId)&&(status==='all'||purchase.status===status);});if($('#purchases-table'))$('#purchases-table').innerHTML=purchaseTable(store.collection,matches);}
-function filterSharedPurchases(){const query=$('[data-filter="purchases"]')?.value.toLowerCase()||'';const supplier=$('[data-purchase-supplier]')?.value||'all';const storeId=$('[data-purchase-store]')?.value||'all';const status=$('[data-purchase-status]')?.value||'all';const items=[...(store.collection.purchases||[]),...(store.collection.entries||[])].filter(item=>{const text=Object.values(item).map(value=>String(value??'')).join(' ').toLowerCase();return text.includes(query)&&(supplier==='all'||String(item.supplierId||item.proveedor_id||'')===supplier)&&(storeId==='all'||String(item.storeId||item.local_id||item.local||'')===storeId)&&(status==='all'||String(item.status||item.estado||'').toUpperCase()===status);});if($('#purchases-table'))$('#purchases-table').innerHTML=purchaseTable(store.collection,items);}
+function filterSharedPurchases(){
+	const query=$('[data-filter="purchases"]')?.value.toLowerCase()||'';
+	const supplier=$('[data-purchase-supplier]')?.value||'all';
+	const storeId=$('[data-purchase-store]')?.value||'all';
+	const status=$('[data-purchase-status]')?.value||'all';
+	const items=[...(store.collection.purchases||[]),...(store.collection.entries||[])].filter(item=>{
+		const text=Object.values(item).map(value=>String(value??'')).join(' ').toLowerCase();
+		return text.includes(query)&&(supplier==='all'||String(item.supplierId||item.proveedor_id||'')===supplier)&&(storeId==='all'||String(item.storeId||item.local_id||item.local||'')===storeId)&&(status==='all'||String(item.status||item.estado||'').toUpperCase()===status);
+	});
+	if($('[data-purchase-summary]'))$('[data-purchase-summary]').innerHTML=purchaseSummary(store.collection,items);
+	if($('#purchases-table'))$('#purchases-table').innerHTML=purchaseTable(store.collection,items);
+}
 document.addEventListener('input',event=>{if(event.target.matches('[data-filter="purchases"]'))filterSharedPurchases();});
 document.addEventListener('change',event=>{if(event.target.matches('[data-purchase-supplier],[data-purchase-store],[data-purchase-status]'))filterSharedPurchases();});
 document.addEventListener('input',event=>{if(event.target.matches('[data-filter="payables"]'))filterPayables();});
@@ -691,6 +704,7 @@ function applySalesFilters(){
 	if(statusSelect)statusSelect.value=salesViewState.status;
 	if($('[data-sales-store]'))$('[data-sales-store]').value=salesViewState.store;
 	if($('[data-filter="sales"]'))$('[data-filter="sales"]').value=salesViewState.query;
+	if($('[data-sales-summary]'))$('[data-sales-summary]').innerHTML=salesSummary(sales);
 	if($('[data-sales-table]'))$('[data-sales-table]').innerHTML=salesTable(store.collection,sales);
 }
 async function readAttachment(file){if(!file)return null;if(file.size>5*1024*1024)throw new Error('El soporte no puede superar 5 MB.');return new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve({name:file.name,type:file.type,data:reader.result});reader.onerror=()=>reject(new Error('No se pudo leer el soporte.'));reader.readAsDataURL(file);});}
@@ -919,6 +933,15 @@ document.addEventListener('submit',async event=>{if(event.target.id!=='advanced-
 async function parityPost(path, payload) { return api.post(path, {...payload, tenantId:activeTenantId()}, {headers:{'X-Tenant-ID':activeTenantId()}}); }
 document.addEventListener('click', async event=>{
 	const action=event.target.closest('[data-action]')?.dataset.action;
+	if(action==='sistecredito-edit'){
+		const recordId=event.target.closest('[data-action="sistecredito-edit"]')?.dataset.id;
+		const record=(store.collection.sistecredito||[]).find(item=>String(item.id)===String(recordId));
+		if(!record)return showToast('No se encontró el registro a editar.','error');
+		const dateValue=(record.fecha || record.date || record.createdAt || record.created_at || '').toString().slice(0,10);
+		$('#modal-root').innerHTML=`<div class="modal-backdrop"><form class="modal" id="sistecredito-date-edit-form" data-id="${record.id}"><button type="button" class="modal-close">×</button><p class="eyebrow">SISTECREDITO</p><h2>Editar fecha</h2><p class="muted">Registro #${record.id}</p><label class="input-label">Fecha correcta<input class="field" name="fecha" type="date" value="${dateValue}" required></label><button class="primary wide">Guardar fecha</button><div data-parity-result></div></form></div>`;
+		$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';
+		return;
+	}
 	if(action==='sistecredito-photo'){
 		const photo=event.target.closest('[data-action="sistecredito-photo"]')?.dataset.photo;
 		if(!photo)return showToast('Este registro no tiene una foto guardada.','error');
@@ -965,6 +988,21 @@ document.addEventListener('submit',async event=>{
 	if(form.id==='parity-count-form'){
 		event.preventDefault();
 		try { const sessionId=form.dataset.sessionId; const results=[...form.querySelectorAll('[data-count-product]')].map(row=>({codigo:row.dataset.countProduct,descripcion:row.dataset.countDescription,cantidad_fisica:Number(row.querySelector('[data-count-physical]')?.value||0),motivo:row.querySelector('[data-count-reason]')?.value||'',observacion:row.querySelector('[data-count-note]')?.value||''})); const values=Object.fromEntries(new FormData(form)); const payload=await parityPost('/api/parity/conteo',sessionId?{action:'apply',sessionId,results}:{action:'create',local:values.local,products:results}); if(!sessionId){form.dataset.sessionId=payload.id;form.innerHTML=`<button type="button" class="modal-close">x</button><p class="eyebrow">INVENTARIO</p><h2>Aplicar conteo ${payload.id}</h2><p class="muted">Confirma nuevamente las cantidades antes de aplicarlas.</p>${results.map(item=>`<div class="count-row" data-count-product="${item.codigo}" data-count-description="${item.descripcion}"><span>${item.descripcion}</span><small>${item.codigo}</small><input class="field" data-count-physical type="number" min="0" value="${item.cantidad_fisica}" aria-label="Cantidad física"><input class="field" data-count-reason placeholder="Motivo"></div>`).join('')}<button class="primary wide">Aplicar ajustes confirmados</button><div data-parity-result></div>`;form.querySelector('.modal-close').onclick=()=>$('#modal-root').innerHTML='';showToast('Sesión de conteo creada.');}else{$('#modal-root').innerHTML='';showToast(`Conteo aplicado: ${payload.applied} productos.`);} } catch(error) { showToast(error.message,'error'); }
+	}
+	if(form.id==='sistecredito-date-edit-form'){
+		event.preventDefault();
+		try {
+			const id = Number(form.dataset.id || 0);
+			const values = Object.fromEntries(new FormData(form));
+			if (!id || !values.fecha) throw new Error('Debes seleccionar la fecha correcta.');
+			const payload = await parityPost('/api/parity/sistecredito', { action: 'update', id, fecha: values.fecha });
+			form.querySelector('[data-parity-result]').innerHTML=`<p class="muted">Fecha actualizada: ${payload.fecha || values.fecha}.</p>`;
+			const normalized = await hydrateState();
+			if (normalized) { store.state = normalized; await hydrateCatalog(store.state); }
+			$('#modal-root').innerHTML='';
+			render();
+			showToast('Fecha de Sistecrédito actualizada.');
+		} catch(error) { showToast(error.message,'error'); }
 	}
 	if(form.id==='parity-sistecredito-form'){
 		event.preventDefault();
@@ -1094,6 +1132,8 @@ document.addEventListener('click', async event => {
 document.addEventListener('input', event => {
 	if (event.target.matches('#parity-from,#parity-to,#parity-local,#parity-vendedor,#parity-method')) {
 		const filters = { from: $('#parity-from')?.value || '', to: $('#parity-to')?.value || '', local: $('#parity-local')?.value || '', vendedor: $('#parity-vendedor')?.value || '', method: $('#parity-method')?.value || '' };
+		const summary = $('#sistecredito-summary');
+		if (summary) summary.innerHTML = sistecreditoSummary(store.collection, filters);
 		const container = $('#sistecredito-table');
 		if (container) container.innerHTML = sistecreditoTable(store.collection, filters);
 	}
@@ -1109,6 +1149,8 @@ document.addEventListener('input', event => {
 document.addEventListener('change', event => {
 	if (!event.target.matches('#parity-from,#parity-to,#parity-local,#parity-vendedor,#parity-method')) return;
 	const filters = { from: $('#parity-from')?.value || '', to: $('#parity-to')?.value || '', local: $('#parity-local')?.value || '', vendedor: $('#parity-vendedor')?.value || '', method: $('#parity-method')?.value || '' };
+	const summary = $('#sistecredito-summary');
+	if (summary) summary.innerHTML = sistecreditoSummary(store.collection, filters);
 	const container = $('#sistecredito-table');
 	if (container) container.innerHTML = sistecreditoTable(store.collection, filters);
 });
@@ -1399,6 +1441,7 @@ const configuredTalonariosActivos=[
 	{local:'INV CARTAGENITA',type:'REMISION',startNumber:15451,endNumber:15500,currentNumber:15473},
 	{local:'INV CARTAGENITA II',type:'REMISION',startNumber:15401,endNumber:15450,currentNumber:15439},
 	{local:'INV CRR 5 3 17',type:'REMISION',startNumber:14051,endNumber:14100,currentNumber:14095},
+	{local:'INV CRR 5 3 26',type:'REMISION',startNumber:15801,endNumber:15850,currentNumber:15808},
 	{local:'INV CRR 5 5 56',type:'REMISION',startNumber:15701,endNumber:15750,currentNumber:15708},
 	{local:'INV CRR 7 6A 15',type:'REMISION',startNumber:15651,endNumber:15700,currentNumber:15656},
 	{local:'INV MANABLANCA',type:'REMISION',startNumber:15751,endNumber:15800,currentNumber:15754}
@@ -1432,7 +1475,7 @@ async function seedConfiguredTalonariosActivos(){
 			try{await persistDomainRecord('talonarios',item);}catch(error){console.warn('No se pudo retirar talonario reemplazado:',error.message);}
 		}
 	}
-	const currentRanges=[[15701,15750,'INV CRR 5 5 56'],[15751,15800,'INV MANABLANCA']];
+	const currentRanges=[[15701,15750,'INV CRR 5 5 56'],[15751,15800,'INV MANABLANCA'],[15801,15850,'INV CRR 5 3 26']];
 	for(const [startNumber,endNumber,localName] of currentRanges){
 		const local=store.collection.stores.find(item=>talonarioNameKey(item.id)===talonarioNameKey(localName)||talonarioNameKey(item.name)===talonarioNameKey(localName));
 		const storeId=local?.id||localName;
