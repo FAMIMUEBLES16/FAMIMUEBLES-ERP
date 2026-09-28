@@ -1,4 +1,4 @@
-import { API_BASE_URL } from '../config.js?v=20260928103822';
+import { API_BASE_URL } from '../config.js?v=20260928155145';
 
 const REQUEST_TIMEOUT_MS = 15000;
 
@@ -10,7 +10,11 @@ function buildUrl(path) {
 
 function authHeaders() {
   const token = localStorage.getItem('famimuebles-auth-token');
-  return token ? { Authorization: `Bearer ${token}` } : {};
+  const tenantId = localStorage.getItem('famimuebles-tenant-id') || 'tenant-default';
+  return {
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    'X-Tenant-ID': tenantId,
+  };
 }
 
 export class ApiError extends Error {
@@ -40,6 +44,8 @@ export async function apiRequest(path, options = {}) {
   const timeout = setTimeout(() => controller.abort(), options.timeout || REQUEST_TIMEOUT_MS);
   const method = String(options.method || 'GET').toUpperCase();
   const headers = { Accept: 'application/json', 'ngrok-skip-browser-warning': 'true', ...authHeaders(), ...(options.headers || {}) };
+  const tenantId = localStorage.getItem('famimuebles-tenant-id') || 'tenant-default';
+  headers['X-Tenant-ID'] = String(options.headers?.['X-Tenant-ID'] || tenantId).trim() || 'tenant-default';
   const cacheMode = options.cache || (method === 'GET' ? 'default' : 'no-store');
   try {
     const response = await fetch(buildUrl(path), { ...options, headers, cache: cacheMode, signal: controller.signal });
@@ -57,6 +63,8 @@ export async function downloadRequest(path, options = {}) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), options.timeout || REQUEST_TIMEOUT_MS);
   const headers = { 'ngrok-skip-browser-warning': 'true', ...authHeaders(), ...(options.headers || {}) };
+  const tenantId = localStorage.getItem('famimuebles-tenant-id') || 'tenant-default';
+  headers['X-Tenant-ID'] = String(options.headers?.['X-Tenant-ID'] || tenantId).trim() || 'tenant-default';
   try {
     const response = await fetch(buildUrl(path), { ...options, headers, cache: 'no-store', signal: controller.signal });
     if (!response.ok) {
