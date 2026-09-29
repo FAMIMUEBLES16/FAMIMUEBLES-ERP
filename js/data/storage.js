@@ -1,10 +1,10 @@
 import { createAccountPayable } from '../services/accounts-payable-service.js?v=14';
 import { demoState } from './demo-data.js';
 import { api } from '../services/api-client.js';
-import { API_BASE_URL } from '../config.js?v=20260928155145';
+import { API_BASE_URL } from '../config.js?v=20260929091753';
 
 export const TENANT_STORAGE_KEY = 'famimuebles-tenant-id';
-const REMOTE_DOMAIN_COLLECTIONS = ['customers','suppliers','purchases','credits','expenses','accountsPayable','supplierPayments','customerAccounts','returns','supplierReturns','stockCounts','reservations','warranties','damagedStock','cashSessions','cashMovements','bankAccounts','quotes','orders','deliveries','creditNotes','talonarios','talonarioJustifications'];
+const REMOTE_DOMAIN_COLLECTIONS = ['customers','suppliers','purchases','credits','expenses','accountsPayable','supplierPayments','customerAccounts','returns','supplierReturns','stockCounts','reservations','warranties','damagedStock','cashSessions','cashMovements','bankAccounts','quotes','orders','deliveries','creditNotes','talonarios','talonarioJustifications','workSchedules','staffAbsences'];
 export function activeTenantId() { return localStorage.getItem(TENANT_STORAGE_KEY) || 'tenant-default'; }
 export function authHeaders() { const token = localStorage.getItem('famimuebles-auth-token'); return token ? { Authorization: `Bearer ${token}` } : {}; }
 export function isStaticDeployment() { return !API_BASE_URL && window.location.hostname.endsWith('.github.io'); }
@@ -23,6 +23,8 @@ function createEmptyState() {
     inventoryByStore: [],
     transfers: [],
     users: [],
+    workSchedules: [],
+    staffAbsences: [],
     roles: [],
     paymentMethods: [],
     expenses: [],
