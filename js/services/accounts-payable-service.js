@@ -4,6 +4,37 @@ import { notifyCreation } from './notification-service.js';
 export const payableStatuses = ['PENDIENTE', 'PARCIAL', 'PAGADA', 'VENCIDA', 'ANULADA'];
 
 export function calculateBalance(account) { return Math.max(0, Number(account.totalAmount || 0) - Number(account.paidAmount || 0)); }
+export function buildFuelAccountPayable(state, fuelRecord, options = {}) {
+  const fuelId = String(fuelRecord?.id || '').trim();
+  const totalAmount = Number(options.totalAmount ?? fuelRecord?.amount ?? fuelRecord?.valor ?? 0);
+  if (!fuelId) throw new Error('El consumo de gasolina requiere un id.');
+  if (!Number.isFinite(totalAmount) || totalAmount <= 0) throw new Error('El valor de la cuenta debe ser mayor que cero.');
+  const supplierName = String(options.supplierName || fuelRecord.driver || fuelRecord.conductor || 'Conductor').trim();
+  const issueDate = String(options.issueDate || fuelRecord.date || new Date().toISOString()).slice(0, 10);
+  const dueDate = String(options.dueDate || addDays(issueDate, 30)).slice(0, 10);
+  const createdAt = new Date().toISOString();
+  return {
+    id: `CXP-GAS-${fuelId}`,
+    type: 'GASOLINA',
+    fuelRecordId: fuelId,
+    sourceType: 'fuelRecords',
+    sourceId: fuelId,
+    supplierId: options.supplierId || supplierName,
+    supplierName,
+    storeId: fuelRecord.storeId || '',
+    invoiceNumber: String(options.invoiceNumber || fuelRecord.invoiceNumber || `GAS-${fuelId}`).trim(),
+    description: `Gasolina ${fuelRecord.vehicle || ''} · ${supplierName}`.trim(),
+    issueDate,
+    dueDate,
+    totalAmount,
+    paidAmount: 0,
+    balance: totalAmount,
+    status: 'PENDIENTE',
+    paymentTerms: 'Credito',
+    createdAt,
+    updatedAt: createdAt,
+  };
+}
 export function getAccountPayable(state, accountId) { return (state.accountsPayable || []).find(account => account.id === accountId); }
 export function listAccountsPayable(state) { return [...(state.accountsPayable || [])]; }
 export function searchAccountsPayable(state, query = '') { const term=String(query).trim().toLowerCase(); return listAccountsPayable(state).filter(account=>{const supplier=state.suppliers.find(item=>item.id===account.supplierId);return !term||`${account.id} ${account.invoiceNumber} ${supplier?.name || ''} ${supplier?.document || ''}`.toLowerCase().includes(term);}); }

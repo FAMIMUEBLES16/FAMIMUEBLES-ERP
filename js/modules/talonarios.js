@@ -167,6 +167,32 @@ export function normalizeActiveTalonarios(items = []) {
   }
   return items;
 }
+
+export function duplicateTalonarioIds(items = []) {
+  const groups = new Map();
+  for (const item of Array.isArray(items) ? items : []) {
+    const id = String(item?.id || '').trim();
+    if (!id) continue;
+    const key = [localKey(localLabel(item)), String(item.type || 'REMISION').toUpperCase(), Number(item.startNumber || 0), Number(item.endNumber || 0)].join(':');
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(item);
+  }
+  const duplicates = new Set();
+  for (const group of groups.values()) {
+    if (group.length < 2) continue;
+    const ranked = [...group].sort((left, right) => {
+      const activeDifference = Number(String(right.status || '').toUpperCase() === 'EN_USO') - Number(String(left.status || '').toUpperCase() === 'EN_USO');
+      if (activeDifference) return activeDifference;
+      return String(right.updatedAt || right.createdAt || '').localeCompare(String(left.updatedAt || left.createdAt || ''));
+    });
+    for (const duplicate of ranked.slice(1)) {
+      const id = String(duplicate.id || '').trim();
+      if (id && id !== String(ranked[0].id)) duplicates.add(id);
+    }
+  }
+  return duplicates;
+}
+
 const numberLabel = value => Number(value).toLocaleString('es-CO');
 const saleNumber = (sale, talonario = null) => {
   const raw = Number(String(sale.invoiceNumber || sale.numero_factura || sale.invoice || '').trim());

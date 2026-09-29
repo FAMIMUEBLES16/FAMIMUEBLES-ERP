@@ -105,9 +105,10 @@ DOMAIN_COLLECTIONS = {
     "returns", "supplier-returns", "supplierReturns", "stock-counts", "stockCounts", "reservations", "warranties",
     "damaged-stock", "damagedStock", "cash-sessions", "cashSessions", "cash-movements", "cashMovements", "bank-accounts", "bankAccounts",
     "quotes", "orders", "deliveries", "transfers", "credit-notes", "creditNotes", "company-settings", "companySettings", "talonarios", "talonarioJustifications",
+    "workSchedules", "staffAbsences",
 }
 DEFAULT_TENANT = "tenant-default"
-PUBLISHABLE_FILES = ("index.html", "css/", "js/", "server.py", "report_pdf.py")
+PUBLISHABLE_FILES = ("index.html", "css/", "js/", "service-worker.js", "server.py", "report_pdf.py")
 
 
 def publish_public_version() -> dict:
@@ -124,7 +125,7 @@ def publish_public_version() -> dict:
     status = run_git("status", "--porcelain", "--", *PUBLISHABLE_FILES)
     if not status:
         return {"ok": True, "published": False, "message": "No hay cambios funcionales pendientes."}
-    run_git("add", "-u", "--", *PUBLISHABLE_FILES)
+    run_git("add", "--", *PUBLISHABLE_FILES)
     changed = run_git("diff", "--cached", "--name-only")
     if not changed:
         return {"ok": True, "published": False, "message": "No hay archivos funcionales para publicar."}
@@ -416,6 +417,10 @@ def _initialize_postgres_schema() -> _PostgresConnection:
     ]
     for statement in statements:
         database.execute(statement)
+    if database.execute("SELECT to_regclass('public.gasolina')").fetchone()[0]:
+        database.execute("ALTER TABLE gasolina ADD COLUMN IF NOT EXISTS local TEXT NOT NULL DEFAULT ''")
+        database.execute("ALTER TABLE gasolina ADD COLUMN IF NOT EXISTS factura TEXT NOT NULL DEFAULT ''")
+        database.execute("ALTER TABLE gasolina ADD COLUMN IF NOT EXISTS kilometraje INTEGER NOT NULL DEFAULT 0")
     if database.execute("SELECT to_regclass('public.empleados')").fetchone()[0]:
         database.execute("""
         INSERT INTO auth_users (id, username, password_hash, role, store_id, active, tenant_id, display_name, telegram_id)
@@ -610,6 +615,150 @@ def record_id(payload: dict) -> str:
     return value
 
 
+def has_meaningful_domain_payload(payload: dict) -> bool:
+    ignored_keys = {
+        "id",
+        "tenantId",
+        "tenant_id",
+        "requestId",
+        "idempotencyKey",
+        "_version",
+        "version",
+        "userId",
+        "createdAt",
+        "updatedAt",
+        "status",
+        "action",
+    }
+    return any(key not in ignored_keys for key in payload)
+
+
+def updated_user_telegram_id(payload: dict, existing) -> str | None:
+    if "telegramId" not in payload and "telegram_id" not in payload:
+        return existing["telegram_id"]
+    value = payload.get("telegramId", payload.get("telegram_id"))
+    return (str(value).strip() or None) if value is not None else None
+
+
+def fuel_record_values(payload: dict, current: dict | None = None) -> dict:
+    current = current or {}
+    date_value = str(payload.get("date") or current.get("date") or current.get("fecha") or "").strip()[:10]
+    try:
+        datetime.strptime(date_value, "%Y-%m-%d")
+        mileage = int(float(payload.get("mileage", current.get("mileage", current.get("kilometraje", 0))) or 0))
+        quantity = float(payload.get("quantity", current.get("quantity", current.get("galones", 0))) or 0)
+        amount = int(float(payload.get("amount", current.get("amount", current.get("valor", 0))) or 0))
+    except (TypeError, ValueError, OverflowError) as error:
+        raise ValueError("Fecha, kilometraje, galones o valor de gasolina no validos") from error
+    driver = str(payload.get("driver") or current.get("driver") or current.get("conductor") or "").strip()
+    vehicle = str(payload.get("vehicle") or current.get("vehicle") or current.get("carro") or "").strip()
+    if "storeId" in payload:
+        store_id = str(payload.get("storeId") or "").strip()
+    else:
+        store_id = str(current.get("storeId") or current.get("local") or "").strip()
+    store_id = ""
+    invoice_number = str(payload.get("invoiceNumber", current.get("invoiceNumber", current.get("factura", ""))) or "").strip()
+    if not date_value or not driver or not vehicle:
+        raise ValueError("La gasolina requiere fecha, conductor y vehiculo")
+    if mileage < 0 or quantity < 0 or amount <= 0:
+        raise ValueError("Kilometraje y galones no pueden ser negativos; el valor debe ser mayor que cero")
+    return {"date": date_value, "driver": driver, "vehicle": vehicle, "mileage": mileage, "quantity": quantity, "amount": amount, "storeId": store_id, "invoiceNumber": invoice_number}
+
+
+def fuel_record_item(row: object) -> dict:
+    date_value = row["fecha"]
+    if hasattr(date_value, "strftime"):
+        date_value = date_value.strftime("%Y-%m-%d")
+    return {
+        "id": str(row["id"]),
+        "sourceId": str(row["id"]),
+        "date": str(date_value or "")[:10],
+        "driver": str(row["conductor"] or ""),
+        "vehicle": str(row["carro"] or ""),
+        "mileage": int(row["kilometraje"] or 0),
+        "quantity": float(row["galones"] or 0),
+        "unit": "galones",
+        "amount": int(row["valor"] or 0),
+        "storeId": "",
+        "invoiceNumber": str(row["factura"] or ""),
+        "paymentStatus": "paid" if row.get("paidAtRegistration") is True or str(row.get("paymentStatus") or "").lower() == "paid" else "pending",
+        "paidAtRegistration": bool(row.get("paidAtRegistration") is True or str(row.get("paymentStatus") or "").lower() == "paid"),
+    }
+
+
+def pending_fuel_account_records(item: dict) -> tuple[dict, None]:
+    fuel_id = str(item["id"])
+    amount = int(item["amount"])
+    supplier_name = str(item["driver"] or "Conductor")
+    invoice_number = str(item.get("invoiceNumber") or f"GAS-{fuel_id}")
+    account_id = f"CXP-GAS-{fuel_id}"
+    account = {
+        "id": account_id,
+        "type": "GASOLINA",
+        "fuelRecordId": fuel_id,
+        "sourceType": "fuelRecords",
+        "sourceId": fuel_id,
+        "supplierId": supplier_name,
+        "supplierName": supplier_name,
+        "storeId": "",
+        "invoiceNumber": invoice_number,
+        "description": f"Gasolina {item.get('vehicle') or ''} · {supplier_name}".strip(),
+        "issueDate": str(item["date"])[:10],
+        "dueDate": str(item["date"])[:10],
+        "totalAmount": amount,
+        "paidAmount": 0,
+        "balance": amount,
+        "status": "PENDIENTE",
+        "paymentTerms": "Credito",
+        "createdAt": datetime.now().isoformat(),
+        "updatedAt": datetime.now().isoformat(),
+    }
+    return account, None
+
+
+def paid_fuel_account_records(item: dict, method: str, user: dict) -> tuple[dict, dict]:
+    fuel_id = str(item["id"])
+    amount = int(item["amount"])
+    supplier_name = str(item["driver"] or "Conductor")
+    invoice_number = str(item.get("invoiceNumber") or f"GAS-{fuel_id}")
+    account_id = f"CXP-GAS-{fuel_id}"
+    payment_id = f"PXP-GAS-{fuel_id}"
+    account = {
+        "id": account_id,
+        "type": "GASOLINA",
+        "fuelRecordId": fuel_id,
+        "sourceType": "fuelRecords",
+        "sourceId": fuel_id,
+        "supplierId": supplier_name,
+        "supplierName": supplier_name,
+        "storeId": "",
+        "invoiceNumber": invoice_number,
+        "description": f"Gasolina {item.get('vehicle') or ''} · {supplier_name}".strip(),
+        "issueDate": str(item["date"])[:10],
+        "dueDate": str(item["date"])[:10],
+        "totalAmount": amount,
+        "paidAmount": amount,
+        "balance": 0,
+        "status": "PAGADA",
+        "paymentTerms": "Contado",
+        "createdAt": datetime.now().isoformat(),
+        "updatedAt": datetime.now().isoformat(),
+    }
+    payment = {
+        "id": payment_id,
+        "accountId": account_id,
+        "fuelRecordId": fuel_id,
+        "supplierId": supplier_name,
+        "amount": amount,
+        "method": str(method or "EFECTIVO").upper(),
+        "reference": invoice_number,
+        "note": "Gasolina pagada al registrar el consumo",
+        "date": str(item["date"])[:10],
+        "createdBy": str(user.get("username") or user.get("id") or "ERP"),
+    }
+    return account, payment
+
+
 def normalize_role(value: object) -> str:
     return str(value or "").strip().upper()
 
@@ -687,6 +836,8 @@ def normalize_collection_alias(name: str) -> str:
 
 def permission_target(path: str, method: str) -> tuple[str, str] | None:
     action = {"GET": "view", "POST": "create", "PUT": "edit", "DELETE": "delete"}.get(method, "view")
+    if path.startswith("/api/parity/gasolina"):
+        return "Gasolina", action
     if path.startswith("/api/parity/nomina"):
         return "Nomina", action
     if path.startswith("/api/parity/conteo"):
@@ -731,6 +882,8 @@ def permission_target(path: str, method: str) -> tuple[str, str] | None:
             "cashmovements": "Caja",
             "bank-accounts": "Bancos",
             "bankaccounts": "Bancos",
+            "workschedules": "Descansos",
+            "staffabsences": "Descansos",
         }
         resource = resources.get(collection)
         return (resource, action) if resource else None
@@ -751,6 +904,10 @@ def can_access(handler: "AppHandler", path: str, method: str = "GET") -> bool:
         or path.startswith("/api/report")
     ):
         return False
+    if path.startswith("/api/domain/"):
+        collection = normalize_collection_alias(path.split("/domain/", 1)[1].split("/", 1)[0])
+        if collection in {"workschedules", "staffabsences"} and role != "ADMINISTRADOR":
+            return False
     if path.startswith("/api/users/") and path.endswith("/permissions"):
         requested_user_id = unquote(path.removeprefix("/api/users/").removesuffix("/permissions")).strip("/")
         if requested_user_id == user["id"]:
@@ -1055,6 +1212,7 @@ def _with_frontend_aliases(row: dict) -> dict:
 
 def _shared_domain_items(database: _PostgresConnection, collection: str) -> list[dict] | None:
     """Convierte tablas operativas del bot al contrato de colecciones del ERP."""
+    canonical_customers = []
     table_map = {
         "users": "empleados",
         "roles": "roles",
@@ -1079,8 +1237,7 @@ def _shared_domain_items(database: _PostgresConnection, collection: str) -> list
             "SELECT COALESCE(NULLIF(external_id, ''), 'CLI-' || id::text) AS id, nombre AS name, documento AS document, telefono AS phone, email, estado AS status FROM clientes WHERE tenant_id = %s ORDER BY nombre",
             (DEFAULT_TENANT,),
         ).fetchall()
-        if canonical:
-            return [_with_frontend_aliases(dict(row)) for row in canonical]
+        canonical_customers = [_with_frontend_aliases(dict(row)) for row in canonical]
 
         def table_columns(table_name: str) -> set[str]:
             return {
@@ -1238,6 +1395,14 @@ def _shared_domain_items(database: _PostgresConnection, collection: str) -> list
             items = list(grouped.values())
         else:
             items = [_with_frontend_aliases(dict(row)) for row in rows]
+        if collection == "customers":
+            merged = {}
+            for item in canonical_customers + items:
+                name = str(item.get("name") or item.get("customer") or "").strip()
+                key = name.casefold()
+                if key:
+                    merged.setdefault(key, item)
+            items = sorted(merged.values(), key=lambda item: str(item.get("name") or item.get("customer") or "").casefold())
         if collection == "credits":
             stored = database.execute(
                 "SELECT data_json FROM domain_records WHERE tenant_id = %s AND collection = %s ORDER BY created_at",
@@ -1354,7 +1519,7 @@ def _shared_domain_items(database: _PostgresConnection, collection: str) -> list
     except Exception as error:
         database.rollback()
         print(f"[ERP] Coleccion compartida no disponible ({collection}): {error}")
-        return []
+        return canonical_customers if collection == "customers" else []
 
 
 def _shared_state(database: _PostgresConnection) -> dict:
@@ -1678,8 +1843,12 @@ class AppHandler(SimpleHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self._send_cors_headers()
         self.send_header("Cache-Control", "no-store")
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.end_headers()
+            self.wfile.write(body)
+            self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, OSError):
+            pass
 
     def do_OPTIONS(self) -> None:
         self.send_response(204)
@@ -2345,12 +2514,65 @@ class AppHandler(SimpleHTTPRequestHandler):
                 self.send_json(201, response)
                 return
             if path == "/api/parity/sistecredito":
+                action = str(payload.get("action") or "create").lower()
+                if action in {"update", "edit"}:
+                    sistecredito_id = payload.get("id")
+                    if sistecredito_id in (None, ""):
+                        raise ValueError("Falta el id del registro a editar")
+                    fecha = str(payload.get("fecha") or payload.get("date") or "").strip()
+                    if not fecha:
+                        raise ValueError("La fecha es requerida para editar el registro")
+                    with connection() as database:
+                        database.execute("UPDATE sistecredito SET fecha = %s WHERE id = %s", (fecha, int(sistecredito_id)))
+                    self.send_json(200, {"ok": True, "id": int(sistecredito_id), "fecha": fecha})
+                    return
                 amount = int(float(payload.get("valor") or payload.get("amount") or 0))
                 if amount <= 0:
                     raise ValueError("El valor de Sistecrédito debe ser mayor que cero")
                 with connection() as database:
                     row = database.execute("INSERT INTO sistecredito (vendedor, local, valor, metodo_pago) VALUES (%s, %s, %s, %s) RETURNING id", (str(payload.get("vendedor") or authenticated_user(self).get("username") or "ERP"), str(payload.get("local") or ""), amount, str(payload.get("metodo_pago") or "Sistecrédito"))).fetchone()
                 self.send_json(201, {"ok": True, "id": row[0]})
+                return
+            if path == "/api/parity/gasolina":
+                if not _postgres_enabled():
+                    self.send_json(503, {"error": "La gasolina compartida requiere PostgreSQL"})
+                    return
+                values = fuel_record_values(payload)
+                with connection() as database:
+                    _, cached = claim_idempotency(database, self, payload, path)
+                    if cached is not None:
+                        self.send_json(200, cached)
+                        return
+                    row = database.execute(
+                        "INSERT INTO gasolina (fecha, conductor, carro, kilometraje, galones, valor, local, factura) VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id, fecha, conductor, carro, kilometraje, galones, valor, local, factura",
+                        (values["date"], values["driver"], values["vehicle"], values["mileage"], values["quantity"], values["amount"], values["storeId"], values["invoiceNumber"]),
+                    ).fetchone()
+                    item = fuel_record_item(row)
+                    response = {"ok": True, "id": item["id"], "item": item}
+                    current_user = authenticated_user(self)
+                    tenant = tenant_id(self, payload)
+                    if payload.get("paidAtRegistration") is True:
+                        account, payment = paid_fuel_account_records(item, payload.get("paymentMethod"), current_user)
+                        for collection, record in (("accountsPayable", account), ("supplierPayments", payment)):
+                            database.execute(
+                                "INSERT INTO domain_records (tenant_id, collection, id, data_json, version) VALUES (?, ?, ?, ?, 1) ON CONFLICT(tenant_id, collection, id) DO UPDATE SET data_json = excluded.data_json, version = domain_records.version + 1, updated_at = CURRENT_TIMESTAMP",
+                                (tenant, collection, record["id"], json.dumps(record, ensure_ascii=False, separators=(",", ":"))),
+                            )
+                        response["account"] = account
+                        response["payment"] = payment
+                    else:
+                        account, _ = pending_fuel_account_records(item)
+                        database.execute(
+                            "INSERT INTO domain_records (tenant_id, collection, id, data_json, version) VALUES (?, ?, ?, ?, 1) ON CONFLICT(tenant_id, collection, id) DO UPDATE SET data_json = excluded.data_json, version = domain_records.version + 1, updated_at = CURRENT_TIMESTAMP",
+                            (tenant, "accountsPayable", account["id"], json.dumps(account, ensure_ascii=False, separators=(",", ":"))),
+                        )
+                        response["account"] = account
+                    complete_idempotency(database, self, payload, path, 201, response)
+                    database.execute(
+                        "INSERT INTO audit_events (user_id, action, collection, record_id, data_json) VALUES (?, ?, ?, ?, ?)",
+                        (current_user["id"], "CREATE", "fuelRecords", item["id"], json.dumps(item, ensure_ascii=False)),
+                    )
+                self.send_json(201, response)
                 return
             if path == "/api/parity/nomina":
                 start = str(payload.get("fecha_inicio") or payload.get("start") or "").strip()
@@ -2782,6 +3004,9 @@ class AppHandler(SimpleHTTPRequestHandler):
                 if collection not in DOMAIN_COLLECTIONS:
                     self.send_json(404, {"error": "Coleccion no disponible"})
                     return
+                if not has_meaningful_domain_payload(payload):
+                    self.send_json(200, {"ok": True, "ignored": True, "collection": collection, "id": str(payload.get("id", "")).strip()})
+                    return
                 identifier = record_id(payload)
                 serialized = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
                 with connection() as database:
@@ -2889,6 +3114,34 @@ class AppHandler(SimpleHTTPRequestHandler):
             return
         if not can_access(self, path, "DELETE"):
             self.send_json(403, {"error": "Permiso insuficiente"})
+            return
+        fuel_match = re.fullmatch(r"/api/parity/gasolina/(\d+)", path)
+        if fuel_match:
+            if not _postgres_enabled():
+                self.send_json(503, {"error": "La gasolina compartida requiere PostgreSQL"})
+                return
+            fuel_id = int(fuel_match.group(1))
+            current_user = authenticated_user(self)
+            with connection() as database:
+                row = database.execute("SELECT * FROM gasolina WHERE id = %s FOR UPDATE", (fuel_id,)).fetchone()
+                if not row:
+                    self.send_json(404, {"error": "Registro de gasolina no encontrado"})
+                    return
+                accounts = database.execute(
+                    "SELECT id, data_json FROM domain_records WHERE tenant_id = ? AND collection = 'accountsPayable'",
+                    (tenant_id(self),),
+                ).fetchall()
+                linked_account = next((item for item in accounts if str(json.loads(item["data_json"] or "{}").get("fuelRecordId") or "") == str(fuel_id)), None)
+                if linked_account:
+                    self.send_json(409, {"error": "No se puede eliminar: este consumo tiene una cuenta por pagar vinculada."})
+                    return
+                item = fuel_record_item(row)
+                database.execute("DELETE FROM gasolina WHERE id = %s", (fuel_id,))
+                database.execute(
+                    "INSERT INTO audit_events (user_id, action, collection, record_id, data_json) VALUES (?, ?, ?, ?, ?)",
+                    (current_user["id"], "DELETE", "fuelRecords", str(fuel_id), json.dumps(item, ensure_ascii=False)),
+                )
+            self.send_json(200, {"ok": True, "id": str(fuel_id), "deleted": True})
             return
         if path.startswith("/api/catalog/store/"):
             user = authenticated_user(self)
@@ -3134,6 +3387,68 @@ class AppHandler(SimpleHTTPRequestHandler):
             if not can_access(self, path, "PUT"):
                 self.send_json(403, {"error": "Permiso insuficiente"})
                 return
+            fuel_match = re.fullmatch(r"/api/parity/gasolina/(\d+)", path)
+            if fuel_match:
+                if not _postgres_enabled():
+                    self.send_json(503, {"error": "La gasolina compartida requiere PostgreSQL"})
+                    return
+                fuel_id = int(fuel_match.group(1))
+                current_user = authenticated_user(self)
+                with connection() as database:
+                    current_row = database.execute("SELECT * FROM gasolina WHERE id = %s FOR UPDATE", (fuel_id,)).fetchone()
+                    if not current_row:
+                        self.send_json(404, {"error": "Registro de gasolina no encontrado"})
+                        return
+                    current = dict(current_row)
+                    values = fuel_record_values(payload, current)
+                    previous_driver = str(current.get("conductor") or "").strip()
+                    payment_status = str(payload.get("paymentStatus") or payload.get("status") or "").strip().lower()
+                    paid_flag = bool(payload.get("paidAtRegistration") is True or payment_status == "paid")
+                    row = database.execute(
+                        "UPDATE gasolina SET fecha = %s, conductor = %s, local = %s, factura = %s WHERE id = %s RETURNING id, fecha, conductor, carro, kilometraje, galones, valor, local, factura",
+                        (values["date"], values["driver"], values["storeId"], values["invoiceNumber"], fuel_id),
+                    ).fetchone()
+                    item = fuel_record_item(row)
+                    if paid_flag:
+                        account, payment = paid_fuel_account_records(item, payload.get("paymentMethod") or "EFECTIVO", current_user)
+                        database.execute(
+                            "INSERT INTO domain_records (tenant_id, collection, id, data_json, version) VALUES (?, ?, ?, ?, 1) ON CONFLICT(tenant_id, collection, id) DO UPDATE SET data_json = excluded.data_json, version = domain_records.version + 1, updated_at = CURRENT_TIMESTAMP",
+                            (tenant_id(self), "accountsPayable", account["id"], json.dumps(account, ensure_ascii=False, separators=(",", ":"))),
+                        )
+                        database.execute(
+                            "INSERT INTO domain_records (tenant_id, collection, id, data_json, version) VALUES (?, ?, ?, ?, 1) ON CONFLICT(tenant_id, collection, id) DO UPDATE SET data_json = excluded.data_json, version = domain_records.version + 1, updated_at = CURRENT_TIMESTAMP",
+                            (tenant_id(self), "supplierPayments", payment["id"], json.dumps(payment, ensure_ascii=False, separators=(",", ":"))),
+                        )
+                    else:
+                        accounts = database.execute(
+                            "SELECT id, data_json FROM domain_records WHERE tenant_id = ? AND collection = 'accountsPayable'",
+                            (tenant_id(self),),
+                        ).fetchall()
+                        for account_row in accounts:
+                            account = json.loads(account_row["data_json"] or "{}")
+                            if str(account.get("fuelRecordId") or "") != str(fuel_id):
+                                continue
+                            account["issueDate"] = values["date"]
+                            account["storeId"] = values["storeId"]
+                            account["totalAmount"] = int(account.get("totalAmount") or item["amount"])
+                            account["paidAmount"] = 0
+                            account["balance"] = int(account.get("totalAmount") or item["amount"])
+                            account["status"] = "PENDIENTE"
+                            if values["driver"] != previous_driver and str(account.get("supplierName") or "") == previous_driver:
+                                account["supplierName"] = values["driver"]
+                                if str(account.get("supplierId") or "") == previous_driver:
+                                    account["supplierId"] = values["driver"]
+                            account["updatedAt"] = datetime.now().isoformat()
+                            database.execute(
+                                "UPDATE domain_records SET data_json = ?, version = version + 1, updated_at = CURRENT_TIMESTAMP WHERE tenant_id = ? AND collection = 'accountsPayable' AND id = ?",
+                                (json.dumps(account, ensure_ascii=False, separators=(",", ":")), tenant_id(self), account_row["id"]),
+                            )
+                    database.execute(
+                        "INSERT INTO audit_events (user_id, action, collection, record_id, data_json) VALUES (?, ?, ?, ?, ?)",
+                        (current_user["id"], "UPDATE", "fuelRecords", str(fuel_id), json.dumps(item, ensure_ascii=False)),
+                    )
+                self.send_json(200, {"ok": True, "id": str(fuel_id), "item": item})
+                return
             if path == "/api/users":
                 current_user = authenticated_user(self)
                 if normalize_role(current_user.get("role")) != "ADMINISTRADOR":
@@ -3141,7 +3456,6 @@ class AppHandler(SimpleHTTPRequestHandler):
                     return
                 identifier = record_id(payload)
                 username = str(payload.get("username", "")).strip()
-                telegram_id = str(payload.get("telegramId", payload.get("telegram_id", ""))).strip()
                 display_name = str(payload.get("displayName", payload.get("name", username))).strip() or username
                 role = str(payload.get("role", "VENDEDOR")).strip().upper()
                 password = str(payload.get("password", ""))
@@ -3152,10 +3466,11 @@ class AppHandler(SimpleHTTPRequestHandler):
                 if password and len(password) < 8:
                     raise ValueError("La clave debe tener al menos 8 caracteres")
                 with connection() as database:
-                    existing = database.execute("SELECT id FROM auth_users WHERE id = ? AND tenant_id = ?", (identifier, tenant_id(self, payload))).fetchone()
+                    existing = database.execute("SELECT id, telegram_id FROM auth_users WHERE id = ? AND tenant_id = ?", (identifier, tenant_id(self, payload))).fetchone()
                     if not existing:
                         self.send_json(404, {"error": "Usuario no encontrado"})
                         return
+                    telegram_id = updated_user_telegram_id(payload, existing)
                     if password:
                         database.execute("UPDATE auth_users SET username = ?, email = ?, phone = ?, role = ?, store_id = ?, active = ?, password_hash = ?, telegram_id = ?, display_name = ? WHERE id = ? AND tenant_id = ?", (username, str(payload.get("email", "")).strip(), str(payload.get("phone", "")).strip(), role, payload.get("storeId"), active, password_hash(password), telegram_id or None, display_name, identifier, tenant_id(self, payload)))
                     else:
@@ -3211,6 +3526,12 @@ class AppHandler(SimpleHTTPRequestHandler):
                             return
                         store_id = str(sale["local_origen"] or "")
                         enforce_user_store_proxy(current_user, store_id)
+                        customer_id = str(payload.get("customerId") or payload.get("cliente") or payload.get("customer") or "").strip()
+                        customer = database.execute(
+                            "SELECT nombre FROM clientes WHERE tenant_id = %s AND (external_id = %s OR id::text = %s)",
+                            (tenant_id(self, payload), customer_id, customer_id),
+                        ).fetchone()
+                        customer_name = str(customer["nombre"]) if customer else customer_id
                         old_items = database.execute("SELECT codigo, cantidad FROM movimiento_productos WHERE movimiento_id = %s FOR UPDATE", (identifier,)).fetchall()
                         for old_item in old_items:
                             database.execute("UPDATE inventarios SET cantidad = cantidad + %s, actualizado = CURRENT_TIMESTAMP WHERE local = %s AND codigo = %s", (int(old_item["cantidad"] or 0), store_id, old_item["codigo"]))
@@ -3232,10 +3553,10 @@ class AppHandler(SimpleHTTPRequestHandler):
                                 database.execute("INSERT INTO movimiento_productos (movimiento_id, codigo, descripcion, cantidad, precio_unitario, precio_total, entrada, salida) VALUES (%s, %s, %s, %s, %s, %s, 0, %s)", (identifier, code, description, quantity, price, quantity * price, quantity))
                                 total += quantity * price
                             sale_date = str(payload.get("date") or payload.get("fecha") or payload.get("createdAt") or "").strip()[:10]
-                            database.execute("UPDATE movimientos SET cliente = %s, metodo_pago = %s, factura = %s, fecha = %s WHERE id = %s", (payload.get("customerId") or payload.get("cliente") or "", str(payload.get("paymentMethod") or payload.get("metodo_pago") or ""), str(payload.get("invoiceNumber") or payload.get("factura") or ""), sale_date or None, identifier))
+                            database.execute("UPDATE movimientos SET cliente = %s, metodo_pago = %s, factura = %s, fecha = %s WHERE id = %s", (customer_name, str(payload.get("paymentMethod") or payload.get("metodo_pago") or ""), str(payload.get("invoiceNumber") or payload.get("factura") or ""), sale_date or None, identifier))
                         else:
                             sale_date = str(payload.get("date") or payload.get("fecha") or payload.get("createdAt") or "").strip()[:10]
-                            database.execute("UPDATE movimientos SET cliente = %s, metodo_pago = %s, fecha = %s WHERE id = %s", (payload.get("customerId") or payload.get("cliente") or "", str(payload.get("paymentMethod") or payload.get("metodo_pago") or ""), sale_date or None, identifier))
+                            database.execute("UPDATE movimientos SET cliente = %s, metodo_pago = %s, fecha = %s WHERE id = %s", (customer_name, str(payload.get("paymentMethod") or payload.get("metodo_pago") or ""), sale_date or None, identifier))
                     self.send_json(200, {"ok": True, "id": identifier})
                     return
                 with connection() as database:
