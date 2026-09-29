@@ -32,7 +32,7 @@ for ($attempt = 0; $attempt -lt 60 -and -not $originReady; $attempt++) {
 if (-not $originReady) {
     throw 'El servidor ERP no respondio en http://127.0.0.1:8024.'
 }
-$process = Start-Process -FilePath $cloudflared -ArgumentList @('tunnel', '--protocol', 'http2', '--url', 'http://127.0.0.1:8024') -WorkingDirectory $root -RedirectStandardOutput $logPath -RedirectStandardError $errorLogPath -PassThru
+$process = Start-Process -FilePath $cloudflared -ArgumentList @('tunnel', '--protocol', 'http2', '--url', 'http://127.0.0.1:8024') -WorkingDirectory $root -RedirectStandardOutput $logPath -RedirectStandardError $errorLogPath -WindowStyle Hidden -PassThru
 $pattern = 'https://[a-z0-9-]+\.trycloudflare\.com'
 $tunnelUrl = $null
 for ($attempt = 0; $attempt -lt 60 -and -not $tunnelUrl; $attempt++) {
