@@ -3,7 +3,7 @@ const text = (value) => value == null || value === 'undefined' || value === 'nul
 const safe = (value, fallback = '-') => {
   const raw = text(value).trim(); return raw ? raw : fallback;
 };
-export function renderClientes(data) { return page('RELACIONES','Clientes','<button class="primary" data-action="new-customer">＋ Nuevo cliente</button>',`<div class="toolbar"><input class="field" data-filter="customers" placeholder="Buscar por nombre, documento o telefono..."></div><div id="customers-table">${customerTable(data.customers)}</div>`); }
+export function renderClientes(data) { return page('RELACIONES','Clientes','<button class="primary" data-action="new-customer">＋ Nuevo cliente</button>',`<div class="toolbar"><label class="input-label">Buscar clientes<input class="field" data-filter="customers" placeholder="Buscar por nombre, documento o telefono..."></label></div><div id="customers-table">${customerTable(data.customers)}</div>`); }
 export function customerTable(items) {
   const rows = Array.isArray(items) ? items : [];
   const isAdmin = String(JSON.parse(localStorage.getItem('famimuebles-user') || '{}').role || '').toUpperCase() === 'ADMINISTRADOR';

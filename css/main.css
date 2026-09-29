@@ -274,6 +274,18 @@ html, body { background: var(--fm-background); color: var(--fm-text); }
 .sidebar-bottom { margin-top: auto; display: grid; gap: 10px; padding-top: 14px; }
 .sidebar-store { display: grid; gap: 6px; padding: 11px; border: 1px solid var(--fm-border); border-radius: 12px; background: var(--fm-surface-soft); color: var(--fm-text-secondary); font-size: 9px; font-weight: 700; letter-spacing: 1px; }
 .sidebar-store .field { width: 100%; min-width: 0; padding: 7px 8px; border-color: var(--fm-border); border-radius: 8px; background: #fff; color: var(--fm-text); font-size: 11px; letter-spacing: 0; }
+
+.toolbar .input-label, .inventory-toolbar .input-label, .talonarios-filters .input-label, .report-filter-row .input-label, .audit-filters .input-label, .parity-filters .input-label { display: grid; gap: 5px; margin: 0; color: var(--fm-text-secondary); font-size: 11px; font-weight: 700; }
+.toolbar .input-label .field, .inventory-toolbar .input-label .field, .talonarios-filters .input-label .field, .report-filter-row .input-label .field, .audit-filters .input-label .field, .parity-filters .input-label .field { min-width: 0; min-height: 40px; border-color: var(--fm-border); border-radius: 8px; background: var(--fm-surface-soft); color: var(--fm-text); }
+.toolbar .input-label .field:focus, .inventory-toolbar .input-label .field:focus, .talonarios-filters .input-label .field:focus, .report-filter-row .input-label .field:focus, .audit-filters .input-label .field:focus, .parity-filters .input-label .field:focus { border-color: var(--fm-blue); box-shadow: 0 0 0 3px rgba(37, 99, 235, .12); }
+.toolbar, .inventory-toolbar { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 190px), 1fr)); align-items: end; gap: 10px; }
+.toolbar .field, .inventory-toolbar .field { max-width: none; }
+.toolbar .input-label, .inventory-toolbar .input-label, .talonarios-filters .input-label, .report-filter-row .input-label, .audit-filters .input-label { min-width: 0; }
+.inventory-toolbar .input-label:first-child { max-width: 230px; }
+@media (max-width: 800px) {
+  .toolbar, .inventory-toolbar { grid-template-columns: 1fr; }
+  .inventory-toolbar .input-label:first-child { max-width: none; }
+}
 .sidebar-tools { display: flex; justify-content: flex-end; gap: 4px; }
 .sidebar-tools .icon-button { width: 38px; height: 36px; padding: 7px; border: 1px solid var(--fm-border); border-radius: 9px; background: #fff; color: var(--fm-text-secondary); }
 .sidebar-user { width: 100%; justify-content: flex-start; padding: 10px; border: 1px solid var(--fm-border); border-radius: 12px; background: var(--fm-surface-soft); color: var(--fm-text); text-align: left; }

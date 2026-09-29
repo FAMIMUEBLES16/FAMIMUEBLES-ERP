@@ -115,6 +115,6 @@ export function renderVentas(data) {
      'OPERACION',
      'Ventas',
      '<button class="primary" data-action="new-sale">＋ Nueva venta</button>',
-    `<div class="toolbar"><input class="field" data-filter="sales" placeholder="Buscar factura o cliente..."><select class="field" data-sales-store><option value="all">Todos los locales</option>${storeOptions}</select><label class="input-label">Mes de ventas<input class="field" type="month" data-sales-month value="${currentMonth}"></label><select class="field" data-sales-status><option value="all">Todos los estados</option></select></div><div data-sales-summary>${salesSummary(sales)}</div><div data-sales-table>${salesTable(data, sales)}</div>`
+    `<div class="toolbar"><label class="input-label">Buscar ventas<input class="field" data-filter="sales" placeholder="Buscar factura o cliente..."></label><label class="input-label">Local<select class="field" data-sales-store><option value="all">Todos los locales</option>${storeOptions}</select></label><label class="input-label">Mes de ventas<input class="field" type="month" data-sales-month value="${currentMonth}"></label><label class="input-label">Estado<select class="field" data-sales-status><option value="all">Todos los estados</option></select></label></div><div data-sales-summary>${salesSummary(sales)}</div><div data-sales-table>${salesTable(data, sales)}</div>`
   );
 }
