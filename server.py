@@ -108,7 +108,7 @@ DOMAIN_COLLECTIONS = {
     "workSchedules", "staffAbsences",
 }
 DEFAULT_TENANT = "tenant-default"
-PUBLISHABLE_FILES = ("index.html", "css/", "js/", "service-worker.js", "server.py", "report_pdf.py")
+PUBLISHABLE_FILES = ("index.html", "css/", "js/", "service-worker.js", "server.py", "report_pdf.py", "tunnel-url.json")
 
 
 def publish_public_version() -> dict:
