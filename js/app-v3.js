@@ -12,7 +12,7 @@ import { showToast } from './components/toast.js';
 import { table } from './components/tables.js';
 import { renderNotifications } from './components/notifications.js';
 import { renderDashboard } from './modules/dashboard-v3.js?v=27';
-import { canonicalSellerName, renderVentas, salesTable, salesSummary, normalizeSales, saleTimestamp } from './modules/ventas.js?v=25';
+import { canonicalSellerName, renderVentas, salesTable, salesSummary, normalizeSales, saleTimestamp, salesMonthKey } from './modules/ventas.js?v=26';
 import { renderFacturacion, cartTotal, productResults, customerResults } from './modules/facturacion.js?v=23';
 import { renderProductos, productTable, productMatches } from './modules/productos.js?v=22';
 import { renderInventario, inventoryContent } from './modules/inventario.js?v=20';
@@ -56,7 +56,8 @@ const state = { cart:[], payment:'Efectivo', customerId:'CLI-00001', storeId:sto
 let sharedRefreshInFlight = false;
 let inventoryViewState = { store:'all', query:'', active:'active', status:'all', sort:'name', version:0 };
 let creditViewState = { filter:'all' };
-let salesViewState = { query:'', store:'all', payment:'all', status:'all', version:0 };
+const currentSalesMonth = (() => { const now = new Date(); return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`; })();
+let salesViewState = { query:'', store:'all', month:currentSalesMonth, status:'all', version:0 };
 let productViewState = { query:'', store:'all', active:'active', version:0 };
 let fuelMonthFilter = 'all';
 let activeCreditPaymentId = '';
@@ -685,11 +686,11 @@ document.addEventListener('change',event=>{if(event.target.matches('#active-stor
 document.addEventListener('change',event=>{if(event.target.matches('[data-talonario-filter]')){setTalonarioFilters({[event.target.dataset.talonarioFilter]:event.target.value});render();}});
 document.addEventListener('input',event=>{if(event.target.matches('[data-talonario-filter="query"]')){setTalonarioFilters({query:event.target.value});render();}});
 function updateSalesViewState(){
-	salesViewState={query:$('[data-filter="sales"]')?.value.trim()||'',store:$('[data-sales-store]')?.value||'all',payment:$('[data-sales-payment]')?.value||'all',status:$('[data-sales-status]')?.value||'all',version:salesViewState.version+1};
+	salesViewState={query:$('[data-filter="sales"]')?.value.trim()||'',store:$('[data-sales-store]')?.value||'all',month:$('[data-sales-month]')?.value||'',status:$('[data-sales-status]')?.value||'all',version:salesViewState.version+1};
 	applySalesFilters();
 }
 document.addEventListener('input',event=>{if(event.target.matches('[data-filter="sales"]'))updateSalesViewState();});
-document.addEventListener('change',event=>{if(event.target.matches('[data-sales-store],[data-sales-payment],[data-sales-status]'))updateSalesViewState();});
+document.addEventListener('change',event=>{if(event.target.matches('[data-sales-store],[data-sales-month],[data-sales-status]'))updateSalesViewState();});
 function updateProductViewState(){productViewState={query:$('[data-filter="products"]')?.value||'',store:$('[data-product-store]')?.value||'all',active:$('[data-product-active]')?.value||'all',version:productViewState.version+1};productPage=1;refreshProducts();}
 document.addEventListener('input',event=>{if(event.target.matches('[data-filter="purchases"]'))filterPurchases();});
 document.addEventListener('change',event=>{if(event.target.matches('[data-purchase-supplier],[data-purchase-store],[data-purchase-status]'))filterPurchases();});
@@ -715,19 +716,17 @@ function applySalesFilters(){
 	const query=salesViewState.query.toLocaleLowerCase();
 	const sales=normalizeSales(store.collection.sales||store.collection.ventas||[]).filter(sale=>{
 		const haystack=Object.values(sale).join(' ').toLocaleLowerCase();
-		return (!query||haystack.includes(query)) && (salesViewState.store==='all'||sale.storeId===salesViewState.store) && (salesViewState.payment==='all'||sale.paymentMethod===salesViewState.payment) && (salesViewState.status==='all'||sale.status===salesViewState.status);
+		return (!query||haystack.includes(query)) && (!salesViewState.month||salesMonthKey(sale.date)===salesViewState.month) && (salesViewState.store==='all'||sale.storeId===salesViewState.store) && (salesViewState.status==='all'||sale.status===salesViewState.status);
 	}).sort((left,right)=>{
 		const leftTime=saleTimestamp(left.date);
 		const rightTime=saleTimestamp(right.date);
 		return rightTime-leftTime;
 	});
-	const paymentValues=[...new Set(normalizeSales(store.collection.sales||[]).map(sale=>sale.paymentMethod).filter(Boolean))].sort();
 	const statusValues=[...new Set(normalizeSales(store.collection.sales||[]).map(sale=>sale.status).filter(Boolean))].sort();
-	const paymentSelect=$('[data-sales-payment]');
+	const monthSelect=$('[data-sales-month]');
 	const statusSelect=$('[data-sales-status]');
-	if(paymentSelect)paymentSelect.innerHTML='<option value="all">Todos los medios</option>'+paymentValues.map(value=>`<option value="${value}">${value}</option>`).join('');
 	if(statusSelect)statusSelect.innerHTML='<option value="all">Todos los estados</option>'+statusValues.map(value=>`<option value="${value}">${value}</option>`).join('');
-	if(paymentSelect)paymentSelect.value=salesViewState.payment;
+	if(monthSelect)monthSelect.value=salesViewState.month;
 	if(statusSelect)statusSelect.value=salesViewState.status;
 	if($('[data-sales-store]'))$('[data-sales-store]').value=salesViewState.store;
 	if($('[data-filter="sales"]'))$('[data-filter="sales"]').value=salesViewState.query;

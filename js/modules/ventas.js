@@ -44,6 +44,21 @@ export function saleTimestamp(value) {
   return Date.UTC(year, month - 1, day, Number(hour), Number(minute), Number(secondValue));
 }
 
+export function salesMonthKey(value) {
+  const text = String(value || '').trim();
+  const isoDate = text.match(/^(\d{4})-(\d{2})/);
+  if (isoDate) return `${isoDate[1]}-${isoDate[2]}`;
+  const localDate = text.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})/);
+  if (localDate) {
+    const year = localDate[3].length === 2 ? `20${localDate[3]}` : localDate[3];
+    return `${year}-${String(localDate[2]).padStart(2, '0')}`;
+  }
+  const timestamp = saleTimestamp(text);
+  if (!timestamp) return '';
+  const date = new Date(timestamp);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+}
+
 export function canonicalSellerName(value) {
   const key = sellerKey(value);
   if (key === 'maria isabel' || key === 'maria isabell cubillos') return 'Maria Isabel Cubillos';
@@ -94,10 +109,12 @@ export function salesSummary(sales) {
 export function renderVentas(data) {
   const sales = normalizeSales(data.sales || data.ventas || []);
   const storeOptions = (data.stores || []).map(store => `<option value="${store.id}">${store.name}</option>`).join('');
+  const now = new Date();
+  const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
   return page(
      'OPERACION',
      'Ventas',
      '<button class="primary" data-action="new-sale">＋ Nueva venta</button>',
-    `<div class="toolbar"><input class="field" data-filter="sales" placeholder="Buscar factura o cliente..."><select class="field" data-sales-store><option value="all">Todos los locales</option>${storeOptions}</select><select class="field" data-sales-payment><option value="all">Todos los medios</option></select><select class="field" data-sales-status><option value="all">Todos los estados</option></select></div><div data-sales-summary>${salesSummary(sales)}</div><div data-sales-table>${salesTable(data, sales)}</div>`
+    `<div class="toolbar"><input class="field" data-filter="sales" placeholder="Buscar factura o cliente..."><select class="field" data-sales-store><option value="all">Todos los locales</option>${storeOptions}</select><label class="input-label">Mes de ventas<input class="field" type="month" data-sales-month value="${currentMonth}"></label><select class="field" data-sales-status><option value="all">Todos los estados</option></select></div><div data-sales-summary>${salesSummary(sales)}</div><div data-sales-table>${salesTable(data, sales)}</div>`
   );
 }
