@@ -144,6 +144,10 @@ export function normalizeActiveTalonarios(items = []) {
         item.status = 'EN_USO';
         continue;
       }
+      if (active && Number(item.startNumber) < Number(active.startNumber)) {
+        item.status = 'TERMINADO';
+        continue;
+      }
       if (isExactSent(item) && current <= start) {
         item.status = 'ENVIADO';
         continue;
@@ -219,6 +223,22 @@ export function missingTalonarioNumbers(talonario, sales = [], justifications = 
   for(let number=Math.max(start, baseline + 1);number<=latest;number+=1)if(!used.has(number)&&!justified.has(number))missing.push(number);
   return missing;
 }
+export function missingTalonarioNumbersForLocal(talonario, talonarios = [], sales = [], justifications = []) {
+  const local = localKey(localLabel(talonario));
+  const type = String(talonario.type || 'REMISION').toUpperCase();
+  return talonarios
+    .filter(item => localKey(localLabel(item)) === local && String(item.type || 'REMISION').toUpperCase() === type)
+    .flatMap(item => {
+      const status = String(item.status || '').toUpperCase();
+      if (status !== 'TERMINADO') return missingTalonarioNumbers(item, sales, justifications);
+      const documents = talonarioSalesDocuments(item, sales);
+      if (!documents.length) return [];
+      const lastRegistered = Math.max(...documents);
+      const justified = new Set(justifications.filter(entry => String(entry.talonarioId) === String(item.id) && String(entry.status || 'JUSTIFICADA').toUpperCase() === 'JUSTIFICADA').map(entry => Number(entry.number)));
+      return Array.from({ length: Math.max(0, Number(item.endNumber) - lastRegistered) }, (_, index) => lastRegistered + index + 1).filter(number => !justified.has(number));
+    })
+    .sort((left, right) => left - right);
+}
 let talonarioFilters = { query:'', type:'all', status:'all', store:'all' };
 export function setTalonarioFilters(filters) { talonarioFilters = { ...talonarioFilters, ...filters }; }
 
@@ -259,7 +279,7 @@ export function renderTalonarios(state) {
     const activeRange = activeRanges[0] || item;
     const current = currentTalonarioNumber(activeRange, sales);
     const remaining = Math.max(0, Number(activeRange.endNumber) - current);
-    const missing = missingTalonarioNumbers(item, sales, justifications);
+    const missing = missingTalonarioNumbersForLocal(item, items, sales, justifications);
     const missingHtml = missing.length ? `<div class="talonario-missing-list">${missing.map(number => `<button type="button" class="table-action danger-text" data-action="justify-talonario-number" data-talonario-id="${item.id}" data-talonario-number="${number}">${numberLabel(number)}</button>`).join(' ')}</div>` : '<span class="muted">Ninguna</span>';
     return `<tr class="${missing.length ? 'talonario-row-missing' : ''}"><td><strong>${localLabel(item)}</strong></td><td>${labelType(item.type)}</td><td>${range(activeRange)}</td><td>${current}</td><td><strong>${remaining}</strong></td><td>${missingHtml}</td></tr>`;
   });

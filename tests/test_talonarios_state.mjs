@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { missingTalonarioNumbers, normalizeActiveTalonarios, talonarioSalesDocuments } from '../js/modules/talonarios.js';
+import { missingTalonarioNumbers, missingTalonarioNumbersForLocal, normalizeActiveTalonarios, talonarioSalesDocuments } from '../js/modules/talonarios.js';
 
 const manablancaTalonario = {
   id: 'MANABLANCA-15751',
@@ -25,6 +25,22 @@ assert.deepEqual(
   missingTalonarioNumbers(manablancaTalonario, [saleFromOtherStore]),
   [],
   'a cross-store sale should not appear as a missing remision'
+);
+assert.deepEqual(
+  missingTalonarioNumbersForLocal(
+    { ...manablancaTalonario, startNumber: 15851, endNumber: 15900 },
+    [
+      { ...manablancaTalonario, id: 'CARTAGENITA-OLD', startNumber: 15401, endNumber: 15450, status: 'TERMINADO' },
+      { ...manablancaTalonario, id: 'CARTAGENITA-CURRENT', startNumber: 15851, endNumber: 15900, consecutiveBaseline: 15850 },
+    ],
+    [
+      { invoiceNumber: '15448', documentType: 'REMISION', storeId: 'INV CARTAGENITA II' },
+      { invoiceNumber: '15851', documentType: 'REMISION', storeId: 'INV CARTAGENITA II' },
+      { invoiceNumber: '15853', documentType: 'REMISION', storeId: 'INV CARTAGENITA II' },
+    ]
+  ),
+  [15449, 15450, 15852],
+  'Cartagenita II should show gaps across the retired and current ranges'
 );
 
 const staleState = [
