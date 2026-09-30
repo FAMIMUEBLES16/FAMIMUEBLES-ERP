@@ -227,7 +227,7 @@ export function missingTalonarioNumbersForLocal(talonario, talonarios = [], sale
   const local = localKey(localLabel(talonario));
   const type = String(talonario.type || 'REMISION').toUpperCase();
   return talonarios
-    .filter(item => localKey(localLabel(item)) === local && String(item.type || 'REMISION').toUpperCase() === type)
+    .filter(item => localKey(localLabel(item)) === local && String(item.type || 'REMISION').toUpperCase() === type && (local !== localKey(CENTRAL) || item.id === talonario.id))
     .flatMap(item => {
       const status = String(item.status || '').toUpperCase();
       if (status !== 'TERMINADO') return missingTalonarioNumbers(item, sales, justifications);

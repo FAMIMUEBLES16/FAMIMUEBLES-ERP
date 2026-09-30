@@ -42,6 +42,18 @@ assert.deepEqual(
   [15449, 15450, 15852],
   'Cartagenita II should show gaps across the retired and current ranges'
 );
+assert.deepEqual(
+  missingTalonarioNumbersForLocal(
+    { id: 'CENTRAL-CURRENT', type: 'REMISION', startNumber: 15801, endNumber: 15850, currentNumber: 15812, consecutiveBaseline: 15808, status: 'EN_USO', storeId: 'INV CRR 5 3 26', destinationName: 'INV CRR 5 3 26' },
+    [
+      { id: 'CENTRAL-CURRENT', type: 'REMISION', startNumber: 15801, endNumber: 15850, currentNumber: 15812, consecutiveBaseline: 15808, status: 'EN_USO', storeId: 'INV CRR 5 3 26', destinationName: 'INV CRR 5 3 26' },
+      { id: 'CENTRAL-OLD', type: 'REMISION', startNumber: 15901, endNumber: 15950, currentNumber: 15950, status: 'TERMINADO', storeId: 'INV CRR 5 3 26', destinationName: 'INV CRR 5 3 26' },
+    ],
+    [{ invoiceNumber: '15812', documentType: 'REMISION', storeId: 'INV CRR 5 3 26' }, { invoiceNumber: '15901', documentType: 'REMISION', storeId: 'INV CRR 5 3 26' }]
+  ),
+  [15809, 15810, 15811],
+  'the central store should only inspect its current range'
+);
 
 const staleState = [
   {
