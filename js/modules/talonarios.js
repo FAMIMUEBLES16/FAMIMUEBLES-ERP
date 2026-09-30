@@ -226,11 +226,12 @@ export function missingTalonarioNumbers(talonario, sales = [], justifications = 
 export function missingTalonarioNumbersForLocal(talonario, talonarios = [], sales = [], justifications = []) {
   const local = localKey(localLabel(talonario));
   const type = String(talonario.type || 'REMISION').toUpperCase();
+  const isCartagenitaIIHistory = item => local === localKey('INV CARTAGENITA II') && Number(item.startNumber) === 15401 && Number(item.endNumber) === 15450;
   return talonarios
-    .filter(item => localKey(localLabel(item)) === local && String(item.type || 'REMISION').toUpperCase() === type && (local !== localKey(CENTRAL) || item.id === talonario.id))
+    .filter(item => (localKey(localLabel(item)) === local || isCartagenitaIIHistory(item)) && String(item.type || 'REMISION').toUpperCase() === type && (local !== localKey(CENTRAL) || item.id === talonario.id))
     .flatMap(item => {
       const status = String(item.status || '').toUpperCase();
-      if (status !== 'TERMINADO') return missingTalonarioNumbers(item, sales, justifications);
+      if (status === 'EN_USO') return missingTalonarioNumbers(item, sales, justifications);
       const documents = talonarioSalesDocuments(item, sales);
       if (!documents.length) return [];
       const lastRegistered = Math.max(...documents);

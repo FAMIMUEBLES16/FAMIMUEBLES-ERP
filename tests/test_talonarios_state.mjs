@@ -44,6 +44,23 @@ assert.deepEqual(
 );
 assert.deepEqual(
   missingTalonarioNumbersForLocal(
+    { ...manablancaTalonario, startNumber: 15851, endNumber: 15900 },
+    [
+      { ...manablancaTalonario, id: 'CARTAGENITA-HISTORICAL-NAME', startNumber: 15401, endNumber: 15450, status: 'TERMINADO', destinationName: 'Cartagenita' },
+      { ...manablancaTalonario, id: 'CARTAGENITA-CURRENT-NAME', startNumber: 15851, endNumber: 15900, consecutiveBaseline: 15850 },
+    ],
+    [
+      { invoiceNumber: '15448', documentType: 'REMISION', storeId: 'INV CARTAGENITA II' },
+      { invoiceNumber: '15450', documentType: 'REMISION', storeId: 'INV CARTAGENITA II' },
+      { invoiceNumber: '15851', documentType: 'REMISION', storeId: 'INV CARTAGENITA II' },
+      { invoiceNumber: '15853', documentType: 'REMISION', storeId: 'INV CARTAGENITA II' },
+    ]
+  ),
+  [15449, 15852],
+  'the historical Cartagenita label should map to Cartagenita II'
+);
+assert.deepEqual(
+  missingTalonarioNumbersForLocal(
     { id: 'CENTRAL-CURRENT', type: 'REMISION', startNumber: 15801, endNumber: 15850, currentNumber: 15812, consecutiveBaseline: 15808, status: 'EN_USO', storeId: 'INV CRR 5 3 26', destinationName: 'INV CRR 5 3 26' },
     [
       { id: 'CENTRAL-CURRENT', type: 'REMISION', startNumber: 15801, endNumber: 15850, currentNumber: 15812, consecutiveBaseline: 15808, status: 'EN_USO', storeId: 'INV CRR 5 3 26', destinationName: 'INV CRR 5 3 26' },
