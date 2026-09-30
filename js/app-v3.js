@@ -310,11 +310,13 @@ async function loadDomainCollection(state, collection, timeout=5000){
 }
 async function hydrateDomainCollections(state){
  const deferredTalonarios=['talonarios','talonarioJustifications'];
+ const deferredAttendance=['workSchedules','staffAbsences'];
  const critical=remoteDomainCollections.filter(collection=>criticalDomainCollections.has(collection)&&!deferredTalonarios.includes(collection));
- const secondary=remoteDomainCollections.filter(collection=>!criticalDomainCollections.has(collection));
+ const secondary=remoteDomainCollections.filter(collection=>!criticalDomainCollections.has(collection)&&!deferredTalonarios.includes(collection)&&!deferredAttendance.includes(collection));
 	await Promise.all(critical.map(collection=>loadDomainCollection(state,collection,5000)));
 	Promise.all(secondary.map(collection=>loadDomainCollection(state,collection,3000))).then(()=>{if(currentRoute()!=='dashboard')render();});
  Promise.all(deferredTalonarios.map(collection=>loadDomainCollection(state,collection,3000))).then(()=>{if(currentRoute()==='talonarios')render();});
+ Promise.all(deferredAttendance.map(collection=>loadDomainCollection(state,collection,3000))).then(()=>{if(currentRoute()==='descansos')render();});
 	return state;
 }
 async function hydrateUsers(state){
@@ -1073,20 +1075,6 @@ async function boot() {
 	await hydrateCatalog(store.state);
 	await hydrateDomainCollections(store.state);
 	store.collection.talonarios = normalizeActiveTalonarios(store.collection.talonarios || []);
-	const initialTalonarioSync = (store.collection.talonarios || []).filter(item => {
-		const status = String(item.status || '').toUpperCase();
-		return ['EN_USO', 'ENVIADO', 'TERMINADO', 'ALMACENADO'].includes(status);
-	});
-	Promise.allSettled(initialTalonarioSync.map(item => persistDomainRecord('talonarios', item))).then(results => results.filter(result => result.status === 'rejected').forEach(result => console.warn('No se pudo sincronizar el estado del talonario:', result.reason?.message || result.reason)));
-	repairTalonario15301().catch(error=>console.warn('No se pudo corregir el talonario 15301-15350:',error.message));
-	Promise.all([seedHistoricalTalonarios(store.state),seedConfiguredTalonariosActivos()]).then(()=>deduplicateTalonarios()).then(async()=>{
-		store.collection.talonarios = normalizeActiveTalonarios(store.collection.talonarios || []);
-		const itemsToPersist=(store.collection.talonarios || []).filter(item => {
-			const status = String(item.status || '').toUpperCase();
-			return ['EN_USO', 'ENVIADO', 'TERMINADO', 'ALMACENADO'].includes(status);
-		});
-		await Promise.allSettled(itemsToPersist.map(item => persistDomainRecord('talonarios', item)));
-	}).then(()=>refreshTalonarioSalesAlerts()).then(()=>{if(currentRoute()==='talonarios')render();}).catch(error=>console.warn('No se pudieron preparar los talonarios:',error.message));
 	await hydrateUsers(store.state);
 	const normalizedPayables=normalizePayableSuppliers(store.state);
 	Promise.allSettled(normalizedPayables.map(account => persistDomainRecord('accountsPayable',account))).then(results => results.filter(result => result.status === 'rejected').forEach(result => console.warn('No se pudo normalizar el proveedor de una cuenta por pagar:', result.reason?.message || result.reason)));
