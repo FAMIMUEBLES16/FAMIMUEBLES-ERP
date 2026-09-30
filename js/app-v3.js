@@ -308,10 +308,12 @@ async function loadDomainCollection(state, collection, timeout=5000){
 	}
 }
 async function hydrateDomainCollections(state){
-	const critical=remoteDomainCollections.filter(collection=>criticalDomainCollections.has(collection));
-	const secondary=remoteDomainCollections.filter(collection=>!criticalDomainCollections.has(collection));
+ const deferredTalonarios=['talonarios','talonarioJustifications'];
+ const critical=remoteDomainCollections.filter(collection=>criticalDomainCollections.has(collection)&&!deferredTalonarios.includes(collection));
+ const secondary=remoteDomainCollections.filter(collection=>!criticalDomainCollections.has(collection));
 	await Promise.all(critical.map(collection=>loadDomainCollection(state,collection,5000)));
 	Promise.all(secondary.map(collection=>loadDomainCollection(state,collection,3000))).then(()=>{if(currentRoute()!=='dashboard')render();});
+ Promise.all(deferredTalonarios.map(collection=>loadDomainCollection(state,collection,3000))).then(()=>{if(currentRoute()==='talonarios')render();});
 	return state;
 }
 async function hydrateUsers(state){
