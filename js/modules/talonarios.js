@@ -234,9 +234,19 @@ export function missingTalonarioNumbersForLocal(talonario, talonarios = [], sale
       if (status === 'EN_USO') return missingTalonarioNumbers(item, sales, justifications);
       const documents = talonarioSalesDocuments(item, sales);
       if (!documents.length) return [];
-      const lastRegistered = Math.max(...documents);
+      const orderedDocuments = [...new Set(documents)].sort((left, right) => left - right);
       const justified = new Set(justifications.filter(entry => String(entry.talonarioId) === String(item.id) && String(entry.status || 'JUSTIFICADA').toUpperCase() === 'JUSTIFICADA').map(entry => Number(entry.number)));
-      return Array.from({ length: Math.max(0, Number(item.endNumber) - lastRegistered) }, (_, index) => lastRegistered + index + 1).filter(number => !justified.has(number));
+      const missing = [];
+      const lastRegistered = orderedDocuments[orderedDocuments.length - 1];
+      const previousRegistered = orderedDocuments.length > 1 ? orderedDocuments[orderedDocuments.length - 2] : lastRegistered;
+      for (let number = previousRegistered + 1; number < lastRegistered; number += 1) {
+          if (!justified.has(number)) missing.push(number);
+      }
+      const historicalEnd = Math.min(Number(item.currentNumber ?? item.endNumber), Number(item.endNumber));
+      for (let number = lastRegistered + 1; number <= historicalEnd; number += 1) {
+        if (!justified.has(number)) missing.push(number);
+      }
+      return missing;
     })
     .sort((left, right) => left - right);
 }

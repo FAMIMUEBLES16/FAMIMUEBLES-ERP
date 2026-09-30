@@ -31,7 +31,7 @@ assert.deepEqual(
     { ...manablancaTalonario, startNumber: 15851, endNumber: 15900 },
     [
       { ...manablancaTalonario, id: 'CARTAGENITA-OLD', startNumber: 15401, endNumber: 15450, status: 'TERMINADO' },
-      { ...manablancaTalonario, id: 'CARTAGENITA-CURRENT', startNumber: 15851, endNumber: 15900, consecutiveBaseline: 15850 },
+      { ...manablancaTalonario, id: 'CARTAGENITA-CURRENT', startNumber: 15851, endNumber: 15900, currentNumber: 15853, consecutiveBaseline: 15850 },
     ],
     [
       { invoiceNumber: '15448', documentType: 'REMISION', storeId: 'INV CARTAGENITA II' },
@@ -40,14 +40,14 @@ assert.deepEqual(
     ]
   ),
   [15449, 15450, 15852],
-  'Cartagenita II should show gaps across the retired and current ranges'
+  'the same local should show gaps across the retired and current ranges'
 );
 assert.deepEqual(
   missingTalonarioNumbersForLocal(
-    { ...manablancaTalonario, startNumber: 15851, endNumber: 15900 },
+    { ...manablancaTalonario, startNumber: 15851, endNumber: 15900, storeId: 'INV CARTAGENITA II', destinationName: 'INV CARTAGENITA II' },
     [
       { ...manablancaTalonario, id: 'CARTAGENITA-HISTORICAL-NAME', startNumber: 15401, endNumber: 15450, status: 'TERMINADO', destinationName: 'Cartagenita' },
-      { ...manablancaTalonario, id: 'CARTAGENITA-CURRENT-NAME', startNumber: 15851, endNumber: 15900, consecutiveBaseline: 15850 },
+      { ...manablancaTalonario, id: 'CARTAGENITA-CURRENT-NAME', startNumber: 15851, endNumber: 15900, currentNumber: 15853, consecutiveBaseline: 15850, storeId: 'INV CARTAGENITA II', destinationName: 'INV CARTAGENITA II' },
     ],
     [
       { invoiceNumber: '15448', documentType: 'REMISION', storeId: 'INV CARTAGENITA II' },
