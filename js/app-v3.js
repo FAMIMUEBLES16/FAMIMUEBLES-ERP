@@ -1061,9 +1061,8 @@ async function boot() {
 	}
 	const normalized = await hydrateStateWithRetry(3);
 	if (!normalized) {
-		localStorage.removeItem('famimuebles-auth-token');
-		localStorage.removeItem('famimuebles-user');
-		authScreen(Boolean(auth?.configured), auth?.telegramLoginConfigured ? auth.telegramBotUsername : '');
+		appHydrating = false;
+		if (appContent) appContent.innerHTML = '<section class="panel app-loading"><strong>No se pudo cargar la informacion.</strong><span>El servidor tardo demasiado en responder.</span><button class="primary" type="button" onclick="location.reload()">Reintentar</button></section>';
 		return;
 	}
 	store.state = normalized;
