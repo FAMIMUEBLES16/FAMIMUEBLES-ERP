@@ -3,7 +3,7 @@ import { page, table, badge } from '../components/tables.js';
 const CENTRAL = 'INV CRR 5 3 26';
 const CURRENT_RANGES = new Map([
   ['INVCARTAGENITA:REMISION', 15451],
-  ['INVCARTAGENITAII:REMISION', 15401],
+  ['INVCARTAGENITAII:REMISION', 15851],
   ['INVCRR5317:REMISION', 14051],
   ['INVCRR5326:REMISION', 15801],
   ['INVCRR5556:REMISION', 15701],
@@ -167,32 +167,6 @@ export function normalizeActiveTalonarios(items = []) {
   }
   return items;
 }
-
-export function duplicateTalonarioIds(items = []) {
-  const groups = new Map();
-  for (const item of Array.isArray(items) ? items : []) {
-    const id = String(item?.id || '').trim();
-    if (!id) continue;
-    const key = [localKey(localLabel(item)), String(item.type || 'REMISION').toUpperCase(), Number(item.startNumber || 0), Number(item.endNumber || 0)].join(':');
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push(item);
-  }
-  const duplicates = new Set();
-  for (const group of groups.values()) {
-    if (group.length < 2) continue;
-    const ranked = [...group].sort((left, right) => {
-      const activeDifference = Number(String(right.status || '').toUpperCase() === 'EN_USO') - Number(String(left.status || '').toUpperCase() === 'EN_USO');
-      if (activeDifference) return activeDifference;
-      return String(right.updatedAt || right.createdAt || '').localeCompare(String(left.updatedAt || left.createdAt || ''));
-    });
-    for (const duplicate of ranked.slice(1)) {
-      const id = String(duplicate.id || '').trim();
-      if (id && id !== String(ranked[0].id)) duplicates.add(id);
-    }
-  }
-  return duplicates;
-}
-
 const numberLabel = value => Number(value).toLocaleString('es-CO');
 const saleNumber = (sale, talonario = null) => {
   const raw = Number(String(sale.invoiceNumber || sale.numero_factura || sale.invoice || '').trim());
@@ -298,7 +272,7 @@ export function renderTalonarios(state) {
   const centralRows = central.map(item => `<tr><td>${labelType(item.type)}</td><td><strong>${range(item)}</strong></td><td>${item.supplierName || 'MISELANEA PAPELERIA'}</td><td>${badge(item.status || 'ALMACENADO')}</td><td><button class="table-action" data-action="send-talonario" data-talonario-id="${item.id}">Enviar</button></td></tr>`);
   const localRows = filteredItems.filter(item => String(item.status || '').toUpperCase() !== 'ALMACENADO').sort((left, right) => Number(right.startNumber || 0) - Number(left.startNumber || 0)).map(item => { const storeId=String(item.destinationName || item.storeId || 'Sin local'); return `<tr><td>${dateLabel(item)}</td><td>${storeNames.get(storeId) || storeId}</td><td>${labelType(item.type)}</td><td><strong>${range(item)}</strong></td><td>${currentTalonarioNumber(item, sales)}</td><td>${badge(item.status || 'EN_USO')}</td></tr>`; });
   const storeOptions = [...new Set([CENTRAL, ...items.filter(item => String(item.storeId || '') !== CENTRAL).map(item => String(item.destinationName || item.storeId || '')).filter(Boolean)])].sort((left, right) => left.localeCompare(right, 'es')).map(store => `<option value="${store}" ${talonarioFilters.store === store ? 'selected' : ''}>${store}</option>`).join('');
-  return page('ADMINISTRACION', 'Talonarios', '<button class="primary" data-action="new-talonario">＋ Registrar talonario</button>', `<section class="panel talonarios-summary"><h3>Facturas disponibles por local</h3><p class="muted">Resumen del talonario actualmente en uso.</p>${table(['Local','Tipo','Talonario','Ultima factura','Le quedan','No registradas'], summaryRows.length ? summaryRows : '<tr><td colspan="6" class="muted">No hay talonarios en uso registrados.</td></tr>')}</section><div class="talonarios-filters"><label class="input-label">Buscar talonarios<input class="field" data-talonario-filter="query" value="${talonarioFilters.query}" placeholder="Buscar rango o local"></label><label class="input-label">Tipo<select class="field" data-talonario-filter="type"><option value="all">Todos los tipos</option><option value="REMISION" ${talonarioFilters.type === 'REMISION' ? 'selected' : ''}>Remisiones</option><option value="RECIBO" ${talonarioFilters.type === 'RECIBO' ? 'selected' : ''}>Recibos</option></select></label><label class="input-label">Local<select class="field" data-talonario-filter="store"><option value="all">Todos los locales</option>${storeOptions}</select></label><label class="input-label">Estado<select class="field" data-talonario-filter="status"><option value="all">Todos los estados</option><option value="ALMACENADO" ${talonarioFilters.status === 'ALMACENADO' ? 'selected' : ''}>Almacenados</option><option value="EN_USO" ${talonarioFilters.status === 'EN_USO' ? 'selected' : ''}>En uso</option><option value="ENVIADO" ${talonarioFilters.status === 'ENVIADO' ? 'selected' : ''}>Enviados</option><option value="TERMINADO" ${talonarioFilters.status === 'TERMINADO' ? 'selected' : ''}>Terminados</option></select></label></div><div class="talonarios-layout">
+  return page('ADMINISTRACION', 'Talonarios', '<button class="primary" data-action="new-talonario">＋ Registrar talonario</button>', `<section class="panel talonarios-summary"><h3>Facturas disponibles por local</h3><p class="muted">Resumen del talonario actualmente en uso.</p>${table(['Local','Tipo','Talonario','Ultima factura','Le quedan','No registradas'], summaryRows.length ? summaryRows : '<tr><td colspan="6" class="muted">No hay talonarios en uso registrados.</td></tr>')}</section><div class="talonarios-filters"><input class="field" data-talonario-filter="query" value="${talonarioFilters.query}" placeholder="Buscar rango o local"><select class="field" data-talonario-filter="type"><option value="all">Todos los tipos</option><option value="REMISION" ${talonarioFilters.type === 'REMISION' ? 'selected' : ''}>Remisiones</option><option value="RECIBO" ${talonarioFilters.type === 'RECIBO' ? 'selected' : ''}>Recibos</option></select><select class="field" data-talonario-filter="store"><option value="all">Todos los locales</option>${storeOptions}</select><select class="field" data-talonario-filter="status"><option value="all">Todos los estados</option><option value="ALMACENADO" ${talonarioFilters.status === 'ALMACENADO' ? 'selected' : ''}>Almacenados</option><option value="EN_USO" ${talonarioFilters.status === 'EN_USO' ? 'selected' : ''}>En uso</option><option value="ENVIADO" ${talonarioFilters.status === 'ENVIADO' ? 'selected' : ''}>Enviados</option><option value="TERMINADO" ${talonarioFilters.status === 'TERMINADO' ? 'selected' : ''}>Terminados</option></select></div><div class="talonarios-layout">
     <section class="panel"><h3>Historial por local</h3><p class="muted">Los consecutivos mas recientes aparecen primero.</p><div class="talonarios-history-scroll">${table(['Fecha','Local','Tipo','Rango','Usando','Estado'], localRows.length ? localRows : '<tr><td colspan="6" class="muted">Aun no hay envios registrados.</td></tr>')}</div></section>
     <section class="panel"><h3>Almacen central · ${CENTRAL}</h3><p class="muted">Talonarios disponibles para enviar a los locales.</p>${table(['Tipo','Consecutivo','Proveedor','Estado','Acciones'], centralRows.length ? centralRows : '<tr><td colspan="5" class="muted">No hay talonarios almacenados.</td></tr>')}</section>
   </div>`);
