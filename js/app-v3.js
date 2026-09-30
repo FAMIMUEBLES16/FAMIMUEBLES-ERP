@@ -316,7 +316,7 @@ async function hydrateDomainCollections(state){
 	await Promise.all(critical.map(collection=>loadDomainCollection(state,collection,5000)));
 	Promise.all(secondary.map(collection=>loadDomainCollection(state,collection,3000))).then(()=>{if(currentRoute()!=='dashboard')render();});
  Promise.all(deferredTalonarios.map(collection=>loadDomainCollection(state,collection,3000))).then(()=>{if(currentRoute()==='talonarios')render();});
- Promise.all(deferredAttendance.map(collection=>loadDomainCollection(state,collection,3000))).then(()=>{if(currentRoute()==='descansos')render();});
+	 await Promise.all(deferredAttendance.map(collection=>loadDomainCollection(state,collection,3000)));
 	return state;
 }
 async function hydrateUsers(state){
