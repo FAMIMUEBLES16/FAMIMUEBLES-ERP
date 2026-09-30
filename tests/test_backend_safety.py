@@ -19,6 +19,212 @@ class BackendSafetyTests(unittest.TestCase):
         second = canonical_request_hash({"id": "VEN-1", "total": 101})
         self.assertNotEqual(first, second)
 
+    def test_empty_domain_payload_is_ignored_without_validating_record_id(self):
+        self.assertFalse(server.has_meaningful_domain_payload({"tenantId": "tenant-default", "requestId": "abc"}))
+        self.assertFalse(server.has_meaningful_domain_payload({"id": "TAL-1", "tenantId": "tenant-default", "status": "EN_USO"}))
+        self.assertTrue(server.has_meaningful_domain_payload({"id": "TAL-1", "tenantId": "tenant-default", "status": "EN_USO", "type": "REMISION"}))
+
+    def test_user_update_preserves_telegram_link_unless_field_is_sent(self):
+        existing = {"telegram_id": "123456"}
+
+        self.assertEqual(server.updated_user_telegram_id({}, existing), "123456")
+        self.assertEqual(server.updated_user_telegram_id({"telegramId": "654321"}, existing), "654321")
+        self.assertIsNone(server.updated_user_telegram_id({"telegramId": ""}, existing))
+
+    def test_fuel_record_values_validate_and_normalize_registration(self):
+        values = server.fuel_record_values({
+            "date": "2026-09-28",
+            "driver": "Ana",
+            "vehicle": "Van",
+            "mileage": "123",
+            "quantity": "4.5",
+            "amount": "89000",
+            "storeId": "LOC-1",
+            "invoiceNumber": "FAC-001",
+        })
+
+        self.assertEqual(values, {
+            "date": "2026-09-28",
+            "driver": "Ana",
+            "vehicle": "Van",
+            "mileage": 123,
+            "quantity": 4.5,
+            "amount": 89000,
+            "storeId": "",
+            "invoiceNumber": "FAC-001",
+        })
+        item = server.fuel_record_item({
+            "id": 42,
+            "fecha": "2026-09-28",
+            "conductor": "Ana",
+            "carro": "Van",
+            "kilometraje": 123,
+            "galones": 4.5,
+            "valor": 89000,
+            "local": "LOC-1",
+            "factura": "FAC-001",
+        })
+        self.assertEqual(item["invoiceNumber"], "FAC-001")
+
+    def test_paid_fuel_account_records_marks_paid_state_and_registers_payment(self):
+        account, payment = server.paid_fuel_account_records({
+            "id": "42",
+            "amount": 125000,
+            "driver": "Ana",
+            "vehicle": "Van",
+            "date": "2026-09-28",
+            "invoiceNumber": "FAC-042",
+            "storeId": "LOC-1",
+        }, "TARJETA", {"username": "Admin"})
+
+        self.assertEqual(account["status"], "PAGADA")
+        self.assertEqual(account["paidAmount"], 125000)
+        self.assertEqual(account["balance"], 0)
+        self.assertEqual(account["storeId"], "")
+        self.assertEqual(payment["accountId"], account["id"])
+        self.assertEqual(payment["method"], "TARJETA")
+        self.assertEqual(payment["reference"], "FAC-042")
+
+    def test_pending_fuel_account_records_creates_open_account_without_payment(self):
+        account, payment = server.pending_fuel_account_records({
+            "id": "43",
+            "amount": 98000,
+            "driver": "Marta",
+            "vehicle": "Camioneta",
+            "date": "2026-09-21",
+            "invoiceNumber": "FAC-043",
+            "storeId": "LOC-2",
+        })
+
+        self.assertEqual(account["status"], "PENDIENTE")
+        self.assertEqual(account["paidAmount"], 0)
+        self.assertEqual(account["balance"], 98000)
+        self.assertEqual(account["storeId"], "")
+        self.assertIsNone(payment)
+
+    def test_fuel_record_crud_uses_gasoline_permissions(self):
+        self.assertEqual(server.permission_target("/api/parity/gasolina", "POST"), ("Gasolina", "create"))
+        self.assertEqual(server.permission_target("/api/parity/gasolina/42", "PUT"), ("Gasolina", "edit"))
+        self.assertEqual(server.permission_target("/api/parity/gasolina/42", "DELETE"), ("Gasolina", "delete"))
+
+    def test_schedule_collections_are_admin_only(self):
+        self.assertIn("workSchedules", server.DOMAIN_COLLECTIONS)
+        self.assertIn("staffAbsences", server.DOMAIN_COLLECTIONS)
+
+        class FakeHandler:
+            headers = {}
+
+        handler = FakeHandler()
+        with patch.object(server, "authenticated_user", return_value={"role": "GERENTE", "tenant_id": "tenant-default"}), \
+             patch.object(server, "tenant_id", return_value="tenant-default"):
+            self.assertFalse(server.can_access(handler, "/api/domain/workSchedules", "POST"))
+
+        with patch.object(server, "authenticated_user", return_value={"role": "ADMINISTRADOR", "tenant_id": "tenant-default"}), \
+             patch.object(server, "tenant_id", return_value="tenant-default"):
+            self.assertTrue(server.can_access(handler, "/api/domain/staffAbsences", "POST"))
+
+    def test_delete_fuel_route_reaches_database_and_deletes_unlinked_record(self):
+        class FakeResult:
+            def __init__(self, row=None, rows=None):
+                self.row = row
+                self.rows = rows or []
+
+            def fetchone(self):
+                return self.row
+
+            def fetchall(self):
+                return self.rows
+
+        class FakeDatabase:
+            def __init__(self):
+                self.deleted = False
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def execute(self, query, params=()):
+                if "SELECT * FROM gasolina" in query:
+                    return FakeResult({"id": 42, "fecha": "2026-09-28", "conductor": "Ana", "carro": "Van", "kilometraje": 123, "galones": 4.5, "valor": 89000, "local": "LOC-1", "factura": "FAC-001"})
+                if "SELECT id, data_json FROM domain_records" in query:
+                    return FakeResult(rows=[])
+                if "DELETE FROM gasolina" in query:
+                    self.deleted = True
+                return FakeResult()
+
+        class FakeHandler:
+            path = "/api/parity/gasolina/42"
+            headers = {}
+
+            def send_json(self, status, payload):
+                self.response = (status, payload)
+
+        database = FakeDatabase()
+        handler = FakeHandler()
+        with patch.object(server, "authenticated_user", return_value={"id": "USR-1"}), \
+             patch.object(server, "requested_tenant_allowed", return_value=True), \
+             patch.object(server, "can_access", return_value=True), \
+             patch.object(server, "_postgres_enabled", return_value=True), \
+             patch.object(server, "connection", return_value=database), \
+             patch.object(server, "tenant_id", return_value="tenant-default"):
+            server.AppHandler.do_DELETE(handler)
+
+        self.assertEqual(handler.response[0], 200)
+        self.assertTrue(database.deleted)
+
+    def test_delete_fuel_route_rejects_records_linked_to_payables(self):
+        class FakeResult:
+            def __init__(self, row=None, rows=None):
+                self.row = row
+                self.rows = rows or []
+
+            def fetchone(self):
+                return self.row
+
+            def fetchall(self):
+                return self.rows
+
+        class FakeDatabase:
+            def __init__(self):
+                self.deleted = False
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def execute(self, query, params=()):
+                if "SELECT * FROM gasolina" in query:
+                    return FakeResult({"id": 42, "fecha": "2026-09-28", "conductor": "Ana", "carro": "Van", "kilometraje": 123, "galones": 4.5, "valor": 89000, "local": "LOC-1", "factura": "FAC-001"})
+                if "SELECT id, data_json FROM domain_records" in query:
+                    return FakeResult(rows=[{"id": "CXP-GAS-42", "data_json": json.dumps({"fuelRecordId": "42"})}])
+                if "DELETE FROM gasolina" in query:
+                    self.deleted = True
+                return FakeResult()
+
+        class FakeHandler:
+            path = "/api/parity/gasolina/42"
+            headers = {}
+
+            def send_json(self, status, payload):
+                self.response = (status, payload)
+
+        database = FakeDatabase()
+        handler = FakeHandler()
+        with patch.object(server, "authenticated_user", return_value={"id": "USR-1"}), \
+             patch.object(server, "requested_tenant_allowed", return_value=True), \
+             patch.object(server, "can_access", return_value=True), \
+             patch.object(server, "_postgres_enabled", return_value=True), \
+             patch.object(server, "connection", return_value=database), \
+             patch.object(server, "tenant_id", return_value="tenant-default"):
+            server.AppHandler.do_DELETE(handler)
+
+        self.assertEqual(handler.response[0], 409)
+        self.assertFalse(database.deleted)
+
     def test_password_hash_round_trip(self):
         stored = password_hash("ClaveSegura123")
         self.assertTrue(password_matches("ClaveSegura123", stored))
@@ -59,6 +265,34 @@ class BackendSafetyTests(unittest.TestCase):
         self.assertEqual(len(items), 1)
         self.assertEqual(items[0]["id"], "CR-1")
         self.assertEqual(items[0]["customer"], "Cliente Demo")
+
+    def test_shared_domain_items_merges_canonical_and_historical_customers(self):
+        class FakeResult:
+            def __init__(self, rows):
+                self.rows = rows
+
+            def fetchall(self):
+                return self.rows
+
+        class FakeDatabase:
+            def execute(self, query, params=()):
+                if "FROM clientes" in query:
+                    return FakeResult([{"id": "CLI-1", "name": "Ana Canonica", "document": "1", "phone": "", "email": "", "status": "Activo"}])
+                if "information_schema.columns" in query:
+                    table = params[0] if params else "creditos"
+                    if table == "movimientos":
+                        return FakeResult([{"column_name": "cliente"}])
+                    return FakeResult([])
+                if "SELECT DISTINCT name, document, phone, customer, id" in query:
+                    return FakeResult([
+                        {"id": "Ana Canonica", "name": "Ana Canonica", "document": "", "phone": "", "customer": "Ana Canonica"},
+                        {"id": "Beatriz Historica", "name": "Beatriz Historica", "document": "", "phone": "", "customer": "Beatriz Historica"},
+                    ])
+                raise AssertionError(f"Unexpected query: {query}")
+
+        items = _shared_domain_items(FakeDatabase(), "customers")
+
+        self.assertEqual([item["name"] for item in items], ["Ana Canonica", "Beatriz Historica"])
 
     def test_shared_domain_items_maps_warranties_collection_to_garantias_table(self):
         class FakeResult:

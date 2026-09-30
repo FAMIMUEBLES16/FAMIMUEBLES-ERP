@@ -202,12 +202,6 @@ const saleNumber = (sale, talonario = null) => {
   return shifted >= Number(talonario.startNumber) && shifted <= Number(talonario.endNumber) ? shifted : raw;
 };
 const saleType = sale => String(sale.documentType || sale.tipo_documento || '').toUpperCase();
-const saleStore = sale => String(sale.storeId || sale.local_id || sale.local || sale.storeName || sale.localName || '');
-const saleStoreMatches = (sale, talonario) => {
-  const saleStores = [saleStore(sale), sale.storeName, sale.localName].filter(Boolean).map(localKey);
-  const talonarioStores = [talonario.storeId, talonario.destinationName].filter(Boolean).map(localKey);
-  return talonarioStores.some(store => saleStores.includes(store));
-};
 export function talonarioSalesDocuments(talonario, sales = []) {
   const start = Number(talonario.startNumber);
   const end = Number(talonario.endNumber);
@@ -215,7 +209,7 @@ export function talonarioSalesDocuments(talonario, sales = []) {
   return sales.filter(sale => {
     const number = saleNumber(sale, talonario);
     const documentType = saleType(sale);
-    return Number.isInteger(number) && number >= start && number <= end && (!documentType || documentType === type) && saleStoreMatches(sale, talonario);
+    return Number.isInteger(number) && number >= start && number <= end && (!documentType || documentType === type);
   }).map(sale => saleNumber(sale, talonario));
 }
 export function currentTalonarioNumber(talonario, sales = []) {

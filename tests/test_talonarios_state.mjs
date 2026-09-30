@@ -1,5 +1,31 @@
 import assert from 'node:assert/strict';
-import { normalizeActiveTalonarios } from '../js/modules/talonarios.js';
+import { missingTalonarioNumbers, normalizeActiveTalonarios, talonarioSalesDocuments } from '../js/modules/talonarios.js';
+
+const manablancaTalonario = {
+  id: 'MANABLANCA-15751',
+  type: 'REMISION',
+  startNumber: 15751,
+  endNumber: 15800,
+  storeId: 'INV MANABLANCA',
+  destinationName: 'INV MANABLANCA',
+  consecutiveBaseline: 15760,
+};
+const saleFromOtherStore = {
+  invoiceNumber: '15761',
+  documentType: 'REMISION',
+  storeId: 'INV CRR 5 3 17',
+};
+
+assert.deepEqual(
+  talonarioSalesDocuments(manablancaTalonario, [saleFromOtherStore]),
+  [15761],
+  'a remision registered from another store should count against its assigned range'
+);
+assert.deepEqual(
+  missingTalonarioNumbers(manablancaTalonario, [saleFromOtherStore]),
+  [],
+  'a cross-store sale should not appear as a missing remision'
+);
 
 const staleState = [
   {
