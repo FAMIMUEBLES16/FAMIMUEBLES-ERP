@@ -144,8 +144,8 @@ assert.equal(
 );
 assert.equal(
   normalized.find((item) => item.id === 'OLD-CRR5326')?.status,
-  'TERMINADO',
-  'old local range should not stay active when a newer configured range exists'
+  'ALMACENADO',
+  'an old central range without send evidence should remain stored'
 );
 assert.equal(
   normalized.find((item) => item.id === 'RECEIPT-5651')?.status,
