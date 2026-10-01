@@ -266,7 +266,7 @@ function generateCharts(data = {}) {
         <div class="dashboard-card-title-wrap">
           <span class="chart-header-icon ranking">🏆</span>
           <div>
-            <h3>Ranking del día</h3>
+            <h3>Ranking</h3>
             <p>Top 5 vendedores por ventas</p>
           </div>
         </div>
