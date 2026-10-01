@@ -59,6 +59,25 @@ export function salesMonthKey(value) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
 }
 
+function localKey(value) {
+  return String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+}
+
+export function filterSales(sales, { query = '', store = 'all', month = '', payment = 'all', status = 'all', stores = [] } = {}) {
+  const normalizedQuery = String(query).toLocaleLowerCase();
+  const selectedStore = stores.find(item => String(item.id) === String(store));
+  const selectedStoreKey = localKey(selectedStore?.name || store);
+  return sales.filter(sale => {
+    const haystack = Object.values(sale).join(' ').toLocaleLowerCase();
+    const storeMatches = store === 'all' || String(sale.storeId) === String(store) || localKey(sale.storeId) === selectedStoreKey;
+    return (!normalizedQuery || haystack.includes(normalizedQuery))
+      && storeMatches
+      && (!month || salesMonthKey(sale.date) === month)
+      && (payment === 'all' || sale.paymentMethod === payment)
+      && (status === 'all' || sale.status === status);
+  });
+}
+
 export function canonicalSellerName(value) {
   const key = sellerKey(value);
   if (key === 'maria isabel' || key === 'maria isabell cubillos') return 'Maria Isabel Cubillos';

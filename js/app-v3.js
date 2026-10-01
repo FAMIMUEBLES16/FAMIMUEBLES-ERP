@@ -12,7 +12,7 @@ import { showToast } from './components/toast.js';
 import { table } from './components/tables.js';
 import { renderNotifications } from './components/notifications.js';
 import { renderDashboard } from './modules/dashboard-v3.js?v=27';
-import { canonicalSellerName, renderVentas, salesTable, salesSummary, normalizeSales, saleTimestamp } from './modules/ventas.js?v=25';
+import { canonicalSellerName, renderVentas, salesTable, salesSummary, normalizeSales, saleTimestamp, filterSales } from './modules/ventas.js?v=26';
 import { renderFacturacion, cartTotal, productResults, customerResults } from './modules/facturacion.js?v=23';
 import { renderProductos, productTable, productMatches } from './modules/productos.js?v=22';
 import { renderInventario, inventoryContent } from './modules/inventario.js?v=20';
@@ -56,7 +56,7 @@ const state = { cart:[], payment:'Efectivo', customerId:'CLI-00001', storeId:sto
 let sharedRefreshInFlight = false;
 let inventoryViewState = { store:'all', query:'', active:'active', status:'all', sort:'name', version:0 };
 let creditViewState = { filter:'all' };
-let salesViewState = { query:'', store:'all', payment:'all', status:'all', version:0 };
+let salesViewState = { query:'', store:'all', month:`${new Date().getFullYear()}-${String(new Date().getMonth()+1).padStart(2,'0')}`, payment:'all', status:'all', version:0 };
 let productViewState = { query:'', store:'all', active:'active', version:0 };
 let activeCreditPaymentId = '';
 function syncCustomerBalances(){
@@ -304,8 +304,10 @@ async function loadDomainCollection(state, collection, timeout=5000){
 		const payload=await api.get(`/api/domain/${encodeURIComponent(collection)}`,{headers:{'X-Tenant-ID':activeTenantId()},cache:'no-store',timeout});
 		const items=Array.isArray(payload.items)?payload.items:[];
 		if(items.length||!Array.isArray(state[collection])||state[collection].length===0)state[collection]=items;
+		return true;
 	} catch(error) {
 		console.warn(`No se pudo cargar ${collection}:`,error.message);
+		return false;
 	}
 }
 async function hydrateDomainCollections(state){
@@ -314,8 +316,19 @@ async function hydrateDomainCollections(state){
  const critical=remoteDomainCollections.filter(collection=>criticalDomainCollections.has(collection)&&!deferredTalonarios.includes(collection));
  const secondary=remoteDomainCollections.filter(collection=>!criticalDomainCollections.has(collection)&&!deferredTalonarios.includes(collection)&&!deferredAttendance.includes(collection));
 	await Promise.all(critical.map(collection=>loadDomainCollection(state,collection,5000)));
+	const talonarioResults=await Promise.all(deferredTalonarios.map(collection=>loadDomainCollection(state,collection,10000)));
+	if(talonarioResults[0]){
+		store.collection.talonarios=normalizeActiveTalonarios(store.collection.talonarios||[]);
+		Promise.resolve().then(async()=>{
+			await seedHistoricalTalonarios(state);
+			await removeActiveTalonarioDuplicates();
+			await seedConfiguredTalonariosActivos();
+			store.collection.talonarios=normalizeActiveTalonarios(store.collection.talonarios||[]);
+			await refreshTalonarioSalesAlerts();
+			if(currentRoute()==='talonarios')render();
+		}).catch(error=>console.warn('No se pudieron preparar los talonarios:',error.message));
+	}
 	Promise.all(secondary.map(collection=>loadDomainCollection(state,collection,3000))).then(()=>{if(currentRoute()!=='dashboard')render();});
- Promise.all(deferredTalonarios.map(collection=>loadDomainCollection(state,collection,3000))).then(()=>{if(currentRoute()==='talonarios')render();});
 	 await Promise.all(deferredAttendance.map(collection=>loadDomainCollection(state,collection,3000)));
 	return state;
 }
@@ -662,11 +675,11 @@ document.addEventListener('change',event=>{if(event.target.matches('#active-stor
 document.addEventListener('change',event=>{if(event.target.matches('[data-talonario-filter]')){setTalonarioFilters({[event.target.dataset.talonarioFilter]:event.target.value});render();}});
 document.addEventListener('input',event=>{if(event.target.matches('[data-talonario-filter="query"]')){setTalonarioFilters({query:event.target.value});render();}});
 function updateSalesViewState(){
-	salesViewState={query:$('[data-filter="sales"]')?.value.trim()||'',store:$('[data-sales-store]')?.value||'all',payment:$('[data-sales-payment]')?.value||'all',status:$('[data-sales-status]')?.value||'all',version:salesViewState.version+1};
+	salesViewState={query:$('[data-filter="sales"]')?.value.trim()||'',store:$('[data-sales-store]')?.value||'all',month:$('[data-sales-month]')?.value||'',payment:$('[data-sales-payment]')?.value||'all',status:$('[data-sales-status]')?.value||'all',version:salesViewState.version+1};
 	applySalesFilters();
 }
 document.addEventListener('input',event=>{if(event.target.matches('[data-filter="sales"]'))updateSalesViewState();});
-document.addEventListener('change',event=>{if(event.target.matches('[data-sales-store],[data-sales-payment],[data-sales-status]'))updateSalesViewState();});
+document.addEventListener('change',event=>{if(event.target.matches('[data-sales-store],[data-sales-month],[data-sales-payment],[data-sales-status]'))updateSalesViewState();});
 function updateProductViewState(){productViewState={query:$('[data-filter="products"]')?.value||'',store:$('[data-product-store]')?.value||'all',active:$('[data-product-active]')?.value||'all',version:productViewState.version+1};productPage=1;refreshProducts();}
 document.addEventListener('input',event=>{if(event.target.matches('[data-filter="purchases"]'))filterPurchases();});
 document.addEventListener('change',event=>{if(event.target.matches('[data-purchase-supplier],[data-purchase-store],[data-purchase-status]'))filterPurchases();});
@@ -689,11 +702,8 @@ document.addEventListener('input',event=>{if(event.target.matches('[data-filter=
 document.addEventListener('change',event=>{if(event.target.matches('[data-payable-status],[data-payable-supplier]'))filterPayables();});
 function filterPayables(){const query=$('[data-filter="payables"]')?.value.toLowerCase()||'',status=$('[data-payable-status]')?.value||'all',supplierId=$('[data-payable-supplier]')?.value||'all';const matches=(store.collection.accountsPayable||[]).filter(account=>{const supplier=store.collection.suppliers.find(item=>String(item.id)===String(account.supplierId));updateAccountPayableStatus(store.collection,account);return `${account.id} ${account.invoiceNumber} ${supplier?.name||account.supplierName||''} ${supplier?.document||''}`.toLowerCase().includes(query)&&(status==='all'||account.status===status)&&(supplierId==='all'||String(account.supplierId)===String(supplierId));});if($('#payables-table'))$('#payables-table').innerHTML=payableTable(store.collection,matches);}
 function applySalesFilters(){
-	const query=salesViewState.query.toLocaleLowerCase();
-	const sales=normalizeSales(store.collection.sales||store.collection.ventas||[]).filter(sale=>{
-		const haystack=Object.values(sale).join(' ').toLocaleLowerCase();
-		return (!query||haystack.includes(query)) && (salesViewState.store==='all'||sale.storeId===salesViewState.store) && (salesViewState.payment==='all'||sale.paymentMethod===salesViewState.payment) && (salesViewState.status==='all'||sale.status===salesViewState.status);
-	}).sort((left,right)=>{
+	const allSales=normalizeSales(store.collection.sales||store.collection.ventas||[]);
+	const sales=filterSales(allSales,{...salesViewState,stores:store.collection.stores}).sort((left,right)=>{
 		const leftTime=saleTimestamp(left.date);
 		const rightTime=saleTimestamp(right.date);
 		return rightTime-leftTime;
@@ -707,6 +717,7 @@ function applySalesFilters(){
 	if(paymentSelect)paymentSelect.value=salesViewState.payment;
 	if(statusSelect)statusSelect.value=salesViewState.status;
 	if($('[data-sales-store]'))$('[data-sales-store]').value=salesViewState.store;
+	if($('[data-sales-month]'))$('[data-sales-month]').value=salesViewState.month;
 	if($('[data-filter="sales"]'))$('[data-filter="sales"]').value=salesViewState.query;
 	if($('[data-sales-summary]'))$('[data-sales-summary]').innerHTML=salesSummary(sales);
 	if($('[data-sales-table]'))$('[data-sales-table]').innerHTML=salesTable(store.collection,sales);
@@ -1497,7 +1508,7 @@ async function removeActiveTalonarioDuplicates(){
 	];
 	for(const [startNumber,endNumber,localName] of activeRanges){
 		const matches=(store.collection.talonarios||[]).filter(item=>String(item.type).toUpperCase()==='REMISION'&&Number(item.startNumber)===startNumber&&Number(item.endNumber)===endNumber);
-		const active=matches.find(item=>String(item.status||'').toUpperCase()==='EN_USO');
+		const active=matches.filter(item=>String(item.status||'').toUpperCase()==='EN_USO').sort((left,right)=>Number(right.currentNumber||0)-Number(left.currentNumber||0))[0];
 		if(!active||matches.length<2)continue;
 		for(const duplicate of matches.filter(item=>item!==active)){
 			try{await persistCatalogRecord(`/api/domain/talonarios/${encodeURIComponent(duplicate.id)}`,{},'DELETE');}catch(error){console.warn('No se pudo eliminar duplicado activo:',error.message);}
