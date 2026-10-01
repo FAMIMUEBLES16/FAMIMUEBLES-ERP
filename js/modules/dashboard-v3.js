@@ -270,7 +270,7 @@ function generateCharts(data = {}) {
             <p>Top 5 vendedores por ventas</p>
           </div>
         </div>
-        <input class="chart-filter" type="month" data-ranking-month aria-label="Mes del ranking" value="${calendarDate().slice(0, 7)}">
+        <div class="ranking-filters">${periodOptions()}<input class="chart-filter" type="month" data-ranking-month aria-label="Mes específico del ranking" value="${calendarDate().slice(0, 7)}"></div>
       </div>
       <div class="rank-list-modern" data-ranking-list="true">${rankingItems || '<div class="chart-legend-empty">No hay ventas registradas hoy.</div>'}</div>
       <div class="team-message"><span>¡Gran trabajo equipo!</span><small>Juntos hacemos crecer FAMIMUEBLES</small></div>
