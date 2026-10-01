@@ -270,7 +270,7 @@ function generateCharts(data = {}) {
             <p>Top 5 vendedores por ventas</p>
           </div>
         </div>
-        ${periodOptions()}
+        <input class="chart-filter" type="month" data-ranking-month aria-label="Mes del ranking" value="${calendarDate().slice(0, 7)}">
       </div>
       <div class="rank-list-modern" data-ranking-list="true">${rankingItems || '<div class="chart-legend-empty">No hay ventas registradas hoy.</div>'}</div>
       <div class="team-message"><span>¡Gran trabajo equipo!</span><small>Juntos hacemos crecer FAMIMUEBLES</small></div>
@@ -336,8 +336,10 @@ function initCharts(data) {
 
     const storeLabels = (data.stores || []).map(s => s.name || s.code || 'Sin local');
     const allSales = data.sales || [];
-    const renderRanking = period => {
-      const filtered = periodSales(allSales, period, today);
+    const renderRanking = (period, monthMode = false) => {
+      const filtered = monthMode
+        ? allSales.filter(sale => calendarDate(saleDate(sale)).startsWith(period))
+        : periodSales(allSales, period, today);
       const ranking = sellerRanking({ ...data, sales: filtered }, null).slice(0, 5);
       const rankingList = document.querySelector('[data-ranking-list]');
       if (!rankingList) return;
@@ -397,10 +399,12 @@ function initCharts(data) {
       if (target === 'all' || target === 'ranking') renderRanking(period);
     };
     renderPeriod('today');
+    renderRanking(today.slice(0, 7), true);
     document.querySelectorAll('[data-chart-filter]').forEach((filter, index) => {
       const targets = ['store', 'payment', 'seller', 'ranking'];
       filter.addEventListener('change', event => renderPeriod(event.target.value, targets[index] || 'all'));
     });
+    document.querySelector('[data-ranking-month]')?.addEventListener('change', event => renderRanking(event.target.value || today.slice(0, 7), true));
 
   }, 100);
 }
