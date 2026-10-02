@@ -300,6 +300,7 @@ async function refreshTalonarioSalesAlerts(){
 }
 const criticalDomainCollections = new Set(['customers','suppliers','purchases','accountsPayable','supplierPayments','talonarios','talonarioJustifications','credits','expenses']);
 async function loadDomainCollection(state, collection, timeout=5000){
+	if(Array.isArray(state[collection])&&state[collection].length)return true;
 	try {
 		const payload=await api.get(`/api/domain/${encodeURIComponent(collection)}`,{headers:{'X-Tenant-ID':activeTenantId()},cache:'no-store',timeout});
 		const items=Array.isArray(payload.items)?payload.items:[];
@@ -310,26 +311,35 @@ async function loadDomainCollection(state, collection, timeout=5000){
 		return false;
 	}
 }
-async function hydrateDomainCollections(state){
+function hydrateSecondaryDomainCollections(state){
+	const deferredTalonarios=['talonarios','talonarioJustifications'];
+	const deferredAttendance=['workSchedules','staffAbsences'];
+	const secondary=remoteDomainCollections.filter(collection=>!criticalDomainCollections.has(collection)&&!deferredTalonarios.includes(collection)&&!deferredAttendance.includes(collection));
+	Promise.all(secondary.map(collection=>loadDomainCollection(state,collection,3000))).then(()=>{if(currentRoute()!=='dashboard')render();});
+}
+async function hydrateDomainCollections(state, loadSecondary=true){
  const deferredTalonarios=['talonarios','talonarioJustifications'];
  const deferredAttendance=['workSchedules','staffAbsences'];
  const critical=remoteDomainCollections.filter(collection=>criticalDomainCollections.has(collection)&&!deferredTalonarios.includes(collection));
- const secondary=remoteDomainCollections.filter(collection=>!criticalDomainCollections.has(collection)&&!deferredTalonarios.includes(collection)&&!deferredAttendance.includes(collection));
-	await Promise.all(critical.map(collection=>loadDomainCollection(state,collection,5000)));
-	const talonarioResults=await Promise.all(deferredTalonarios.map(collection=>loadDomainCollection(state,collection,10000)));
+ const loadResults=await Promise.all([
+  Promise.all([
+   ...critical.map(collection=>loadDomainCollection(state,collection,5000)),
+   ...deferredAttendance.map(collection=>loadDomainCollection(state,collection,3000))
+  ]),
+  Promise.all(deferredTalonarios.map(collection=>loadDomainCollection(state,collection,5000)))
+ ]);
+ const talonarioResults=loadResults[1];
 	if(talonarioResults[0]){
 		store.collection.talonarios=normalizeActiveTalonarios(store.collection.talonarios||[]);
 		Promise.resolve().then(async()=>{
 			await seedHistoricalTalonarios(state);
-			await removeActiveTalonarioDuplicates();
 			await seedConfiguredTalonariosActivos();
 			store.collection.talonarios=normalizeActiveTalonarios(store.collection.talonarios||[]);
 			await refreshTalonarioSalesAlerts();
 			if(currentRoute()==='talonarios')render();
 		}).catch(error=>console.warn('No se pudieron preparar los talonarios:',error.message));
 	}
-	Promise.all(secondary.map(collection=>loadDomainCollection(state,collection,3000))).then(()=>{if(currentRoute()!=='dashboard')render();});
-	 await Promise.all(deferredAttendance.map(collection=>loadDomainCollection(state,collection,3000)));
+	if(loadSecondary)hydrateSecondaryDomainCollections(state);
 	return state;
 }
 async function hydrateUsers(state){
@@ -490,7 +500,7 @@ function openSaleEditModal(saleId){
 	const saleDate=String(sale.date||sale.fecha||sale.fecha_venta||sale.created_at||sale.createdAt||'').slice(0,10)||localDateValue();
 	$('#modal-root').innerHTML=`<div class="modal-backdrop"><form class="modal" id="sale-edit-modal"><button type="button" class="modal-close">×</button><p class="eyebrow">ADMINISTRACION</p><h2>Editar venta ${sale.id}</h2><label class="input-label">Fecha de venta<input class="field" type="date" name="date" value="${saleDate}" required></label><label class="input-label">Cliente<select class="field" name="customerId">${customers}</select></label><label class="input-label">Metodo de pago<select class="field" name="paymentMethod">${paymentOptions}</select></label><button class="primary wide">Guardar cambios</button></form></div>`;
 	$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';
-	$('#sale-edit-modal').onsubmit=async event=>{event.preventDefault();try{const values=Object.fromEntries(new FormData(event.target));await persistCatalogRecord('/api/catalog/sale',{...sale,...values,paymentMethod:values.paymentMethod||currentPayment},'PUT');const normalized=await hydrateState();if(normalized){store.state=normalized;await hydrateCatalog(store.state);}$('#modal-root').innerHTML='';render();showToast('Venta actualizada correctamente.');}catch(error){showToast(error.message,'error');}};
+	$('#sale-edit-modal').onsubmit=async event=>{event.preventDefault();try{const values=Object.fromEntries(new FormData(event.target));await persistCatalogRecord('/api/catalog/sale',{...sale,...values,paymentMethod:values.paymentMethod||currentPayment},'PUT');Object.assign(sale,values,{paymentMethod:values.paymentMethod||currentPayment});await hydrateCatalog(store.state);$('#modal-root').innerHTML='';render();showToast('Venta actualizada correctamente.');}catch(error){showToast(error.message,'error');}};
 }
 async function deleteSale(saleId){if(!window.confirm('¿Anular esta venta? El inventario sera revertido y quedara registro de auditoria.'))return;try{await persistCatalogRecord(`/api/catalog/sale/${encodeURIComponent(saleId)}`,{},'DELETE');const normalized=await hydrateState();if(normalized){store.state=normalized;await hydrateCatalog(store.state);}$('#modal-root').innerHTML='';render();showToast('Venta anulada e inventario revertido.');}catch(error){showToast(error.message,'error');}}
 function deleteLocalTransfer(transferId){if(!window.confirm('¿Eliminar este traslado?'))return;const transfer=store.collection.transfers.find(item=>String(item.id)===String(transferId));if(!transfer)return;try{runTransaction(store.collection,()=>{if(transfer.status==='EN_TRANSITO')transfer.items.forEach(item=>increaseStock(store.collection,item.productId,transfer.originStoreId,item.quantity,transfer.id,'ANULACION_TRASLADO'));if(transfer.status==='RECIBIDO'){transfer.items.forEach(item=>{decreaseStock(store.collection,item.productId,transfer.destinationStoreId,item.quantity,transfer.id,'ANULACION_TRASLADO');increaseStock(store.collection,item.productId,transfer.originStoreId,item.quantity,transfer.id,'ANULACION_TRASLADO');});}store.collection.transfers=store.collection.transfers.filter(item=>item.id!==transfer.id);store.collection.auditLog.push({id:generateId('AUD',store.collection.auditLog),date:new Date().toISOString(),userId:'USR-00001',action:'Eliminar traslado',transferId:transfer.id});});store.save();render();showToast('Traslado eliminado e inventario revertido.');}catch(error){showToast(error.message,'error');}}
@@ -1099,6 +1109,7 @@ async function boot() {
 		authScreen(true);
 		return;
 	}
+	const permissionsPromise=hydrateCurrentUserPermissions();
 	const normalized = await hydrateStateWithRetry(3);
 	if (!normalized) {
 		appHydrating = false;
@@ -1107,13 +1118,13 @@ async function boot() {
 	}
 	store.state = normalized;
 	store.collection.demoMode = false;
-	await hydrateCatalog(store.state);
-	await hydrateDomainCollections(store.state);
-	store.collection.talonarios = normalizeActiveTalonarios(store.collection.talonarios || []);
-	await hydrateUsers(store.state);
+	await hydrateCatalog(store.state,true);
+	hydrateUsers(store.state).then(() => {
+		if (currentRoute() === 'usuarios') render();
+	}).catch(error => console.warn('No se pudieron actualizar los usuarios:', error.message));
 	const normalizedPayables=normalizePayableSuppliers(store.state);
 	Promise.allSettled(normalizedPayables.map(account => persistDomainRecord('accountsPayable',account))).then(results => results.filter(result => result.status === 'rejected').forEach(result => console.warn('No se pudo normalizar el proveedor de una cuenta por pagar:', result.reason?.message || result.reason)));
-	await hydrateCurrentUserPermissions();
+	await permissionsPromise;
 	store.save();
 	state.storeId = resolveActiveStore();
 	appHydrating = false;
@@ -1122,6 +1133,7 @@ async function boot() {
 	syncActiveStoreSelector();
 	syncCustomerBalances();
 	render();
+	hydrateDomainCollections(store.state).catch(error => console.warn('No se pudieron cargar los datos adicionales:', error.message));
 }
 document.addEventListener('click', async event => {
 	if (!event.target.closest('#sync-data')) return;
@@ -1438,29 +1450,6 @@ async function repairTalonario15301(){
 	item.currentNumber=Math.max(Number(item.currentNumber||0),15347);
 	try{await persistDomainRecord('talonarios',item);}catch(error){console.warn('No se pudo actualizar el talonario 15301-15350:',error.message);}
 }
-async function deduplicateTalonarios(){
-	const groups=new Map();
-	for(const item of (store.collection.talonarios||[])){
-		const type=String(item.type||'').toUpperCase();
-		const start=Number(item.startNumber), end=Number(item.endNumber);
-		if(!type||!Number.isInteger(start)||!Number.isInteger(end))continue;
-		const key=`${type}:${start}:${end}`;
-		if(!groups.has(key))groups.set(key,[]);
-		groups.get(key).push(item);
-	}
-	const statusPriority={EN_USO:3,ENVIADO:2,ALMACENADO:1};
-	const duplicates=[];
-	const keepIds=new Set();
-	for(const matches of groups.values()){
-		matches.sort((left,right)=>(statusPriority[String(right.status||'').toUpperCase()]||0)-(statusPriority[String(left.status||'').toUpperCase()]||0)||Number(right.currentNumber||0)-Number(left.currentNumber||0)||String(right.sentAt||right.createdAt||'').localeCompare(String(left.sentAt||left.createdAt||''))||String(left.id).localeCompare(String(right.id)));
-		keepIds.add(matches[0].id);
-		duplicates.push(...matches.slice(1));
-	}
-	for(const duplicate of duplicates){
-		try{await persistCatalogRecord(`/api/domain/talonarios/${encodeURIComponent(duplicate.id)}`,{},'DELETE');}catch(error){console.warn('No se pudo eliminar duplicado de talonario:',error.message);}
-	}
-	if(duplicates.length)store.collection.talonarios=(store.collection.talonarios||[]).filter(item=>keepIds.has(item.id));
-}
 const configuredTalonariosActivos=[
 	{local:'INV CARTAGENITA',type:'REMISION',startNumber:15451,endNumber:15500,currentNumber:15473},
 	{local:'INV CARTAGENITA II',type:'REMISION',startNumber:15851,endNumber:15900,currentNumber:15851},
@@ -1515,29 +1504,6 @@ async function seedConfiguredTalonariosActivos(){
 	if(canonical15701){
 		canonical15701.storeId='INV CRR 5 5 56';canonical15701.destinationName='INV CRR 5 5 56';canonical15701.status='EN_USO';
 		try{await persistDomainRecord('talonarios',canonical15701);}catch(error){console.warn('No se pudo marcar talonario enviado:',error.message);}
-		for(const duplicate of sent15701.slice(1)){
-			try{await persistCatalogRecord(`/api/domain/talonarios/${encodeURIComponent(duplicate.id)}`,{},'DELETE');}catch(error){console.warn('No se pudo eliminar duplicado de talonario:',error.message);}
-		}
-		store.collection.talonarios=store.collection.talonarios.filter(item=>item===canonical15701||!sent15701.includes(item));
-	}
-}
-async function removeActiveTalonarioDuplicates(){
-	const activeRanges=[
-		[15651,15700,'INV CRR 7 6A 15'],
-		[15601,15650,'INV CRR 5 5 56'],
-		[15751,15800,'INV MANABLANCA'],
-		[15451,15500,'INV CARTAGENITA'],
-		[15401,15450,'INV CARTAGENITA II'],
-		[15851,15900,'INV CARTAGENITA II']
-	];
-	for(const [startNumber,endNumber,localName] of activeRanges){
-		const matches=(store.collection.talonarios||[]).filter(item=>String(item.type).toUpperCase()==='REMISION'&&Number(item.startNumber)===startNumber&&Number(item.endNumber)===endNumber);
-		const active=matches.filter(item=>String(item.status||'').toUpperCase()==='EN_USO').sort((left,right)=>Number(right.currentNumber||0)-Number(left.currentNumber||0))[0];
-		if(!active||matches.length<2)continue;
-		for(const duplicate of matches.filter(item=>item!==active)){
-			try{await persistCatalogRecord(`/api/domain/talonarios/${encodeURIComponent(duplicate.id)}`,{},'DELETE');}catch(error){console.warn('No se pudo eliminar duplicado activo:',error.message);}
-		}
-		store.collection.talonarios=store.collection.talonarios.filter(item=>item===active||!matches.includes(item));
 	}
 }
 function openTalonarioJustificationModal(talonarioId, number){
