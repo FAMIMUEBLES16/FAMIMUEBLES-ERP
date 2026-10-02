@@ -32,11 +32,12 @@ const dashboardCenterTextPlugin = {
     const { ctx, chartArea } = chart;
     if (!chartArea) return;
 
+    const options = chart.config.options?.plugins?.centerText;
+    if (!options) return;
     const centerX = (chartArea.left + chartArea.right) / 2;
     const centerY = (chartArea.top + chartArea.bottom) / 2;
-    const options = chart.config.options?.plugins?.centerText || {};
     const title = options.title || 'Total';
-    const value = options.value || '$ 0';
+    const value = options.value ?? '$ 0';
     const trend = options.trend || '';
     const trendColor = options.trendColor || '#16A36A';
 
@@ -174,6 +175,10 @@ function periodSales(sales, period, today = calendarDate()) {
 }
 
 function generateCharts(data = {}) {
+  const month = calendarDate().slice(0, 7);
+  const monthTotal = (data.sales || [])
+    .filter(sale => calendarDate(saleDate(sale)).startsWith(month))
+    .reduce((sum, sale) => sum + safeNumber(sale.total), 0);
   const todayRanking = sellerRanking(data, calendarDate()).slice(0, 5);
   const rankingItems = todayRanking.map((item, index) => {
     const medal = ['🥇', '🥈', '🥉'][index] || '✨';
@@ -191,7 +196,7 @@ function generateCharts(data = {}) {
   }).join('');
 
   return `<div class="charts-grid dashboard-charts">
-    <div class="chart-card chart-card-main"><div class="chart-card-heading"><div><span class="chart-kicker">TENDENCIA</span><h3>Ventas del mes</h3></div><span class="chart-unit">COP</span></div><canvas id="salesChart"></canvas></div>
+    <div class="chart-card chart-card-main"><div class="chart-card-heading"><div><span class="chart-kicker">TENDENCIA</span><h3>Ventas del mes</h3></div><div class="chart-main-total"><span>Total del mes</span><strong>${money(monthTotal)}</strong><small>COP</small></div></div><canvas id="salesChart"></canvas></div>
     <div class="chart-card chart-card-small dashboard-chart-card">
       <div class="dashboard-card-header">
         <div class="dashboard-card-title-wrap">
@@ -435,7 +440,7 @@ export function renderDashboard(data) {
     const amount = safeNumber(item.amount || item.installmentAmount || item.valor_programado);
     return customer && customer !== 'Cliente' && amount > 0;
   }).slice(0, 4);
-  const chartsHtml = generateCharts(data);
+  const chartsHtml = generateCharts({ ...data, sales });
   initCharts({...data, sales});
   return page('RESUMEN GENERAL','Dashboard','<button class="primary" data-action="new-sale">＋ Nueva venta</button>',`<p class="date-line">${formatDate()} · Resumen operativo de FAMIMUEBLES</p>
     <div class="metric-grid dashboard-metrics">
