@@ -11,7 +11,7 @@ import { navItems, navGroups } from './components/sidebar.js?v=22';
 import { showToast } from './components/toast.js';
 import { table } from './components/tables.js';
 import { renderNotifications } from './components/notifications.js';
-import { renderDashboard } from './modules/dashboard-v3.js?v=20261002135342';
+import { renderDashboard } from './modules/dashboard-v3.js?v=20261003091041';
 import { canonicalSellerName, renderVentas, salesTable, salesSummary, normalizeSales, salesMonthKey, saleTimestamp, filterSales } from './modules/ventas.js?v=26';
 import { renderFacturacion, cartTotal, productResults, customerResults } from './modules/facturacion.js?v=23';
 import { renderProductos, productTable, productMatches } from './modules/productos.js?v=22';
@@ -526,7 +526,43 @@ async function deleteLocalPurchase(purchaseId){
 document.addEventListener('click',event=>{const button=event.target.closest('[data-action]');if(!button)return;const storeId=button.dataset.storeId;if(button.dataset.action==='toggle-store')toggleStore(storeId);if(button.dataset.action==='delete-store')deleteStore(storeId);});
 async function toggleStore(storeId){const storeItem=store.collection.stores.find(item=>String(item.id)===String(storeId));if(!storeItem)return;try{await persistCatalogRecord('/api/catalog/store',{...storeItem,status:storeItem.status==='Inactivo'?'Activo':'Inactivo',active:storeItem.status==='Inactivo'},'PUT');storeItem.status=storeItem.status==='Inactivo'?'Activo':'Inactivo';storeItem.active=storeItem.status==='Activo';store.save();render();showToast(`Local ${storeItem.status==='Activo'?'activado':'desactivado'}.`);}catch(error){showToast(error.message,'error');}}
 async function deleteStore(storeId){if(!window.confirm('¿Eliminar este local? Solo se permite si no tiene información relacionada.'))return;try{await persistCatalogRecord(`/api/catalog/store/${encodeURIComponent(storeId)}`,{},'DELETE');store.collection.stores=store.collection.stores.filter(item=>String(item.id)!==String(storeId));store.save();render();showToast('Local eliminado correctamente.');}catch(error){showToast(error.message,'error');}}
-function openApartadoEditModal(id){const item=store.collection.apartados.find(entry=>String(entry.id)===String(id));if(!item)return;$('#modal-root').innerHTML=`<div class="modal-backdrop"><form class="modal" id="apartado-edit-form"><button type="button" class="modal-close">×</button><p class="eyebrow">APARTADOS</p><h2>Editar apartado ${item.id}</h2><label class="input-label">Cliente<input class="field" name="customer" value="${item.customer||item.clienteNombre||item.cliente_nombre||item.cliente||''}" required></label><label class="input-label">Telefono<input class="field" name="phone" value="${item.phone||item.clienteTelefono||item.cliente_telefono||item.telefono||''}"></label><label class="input-label">Direccion<input class="field" name="address" value="${item.address||item.direccion||''}"></label><label class="input-label">Estado<select class="field" name="status"><option ${String(item.status).toUpperCase()==='PENDIENTE'?'selected':''}>PENDIENTE</option><option ${String(item.status).toUpperCase()==='ENTREGADO'?'selected':''}>ENTREGADO</option><option ${String(item.status).toUpperCase()==='CANCELADO'?'selected':''}>CANCELADO</option></select></label><button class="primary wide">Guardar cambios</button></form></div>`;$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';$('#apartado-edit-form').onsubmit=async event=>{event.preventDefault();try{const values=Object.fromEntries(new FormData(event.target));await persistCatalogRecord('/api/shared-apartado',{id:item.id,...values});const normalized=await hydrateState();if(normalized){store.state=normalized;await hydrateCatalog(store.state);}$('#modal-root').innerHTML='';render();showToast('Apartado actualizado correctamente.');}catch(error){showToast(error.message,'error');}};}
+function openApartadoEditModal(id){
+	const item=store.collection.apartados.find(entry=>String(entry.id)===String(id));
+	if(!item)return;
+	const escapeHtml=value=>String(value??'').replace(/[&<>"']/g,character=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[character]));
+	const items=Array.isArray(item.items)?item.items:[];
+	const currentStatus=String(item.status||item.estado||'PENDIENTE').toUpperCase();
+	const statuses=[...new Set(['PENDIENTE','PAGADO','ENTREGADO','CANCELADO',currentStatus])];
+	const detailFields=items.map((product,index)=>`<fieldset class="apartado-edit-item"><legend>Producto ${index+1}</legend><label class="input-label">Codigo<input class="field" name="item-${index}-code" value="${escapeHtml(product.code||product.productId||product.codigo||'')}" required></label><label class="input-label">Producto<input class="field" name="item-${index}-product" value="${escapeHtml(product.product||product.name||product.productName||'')}" required></label><label class="input-label">Cantidad<input class="field" name="item-${index}-quantity" type="number" min="1" step="1" value="${Number(product.quantity??product.cantidad??1)}" required></label><label class="input-label">Valor unitario<input class="field" name="item-${index}-unit-price" type="number" min="0" step="1" value="${Number(product.unitPrice??product.valor_unitario??product.price??0)}" required></label><label class="input-label"><input type="checkbox" name="item-${index}-remove"> Quitar este producto</label><input type="hidden" name="item-${index}-id" value="${escapeHtml(product.id)}"></fieldset>`).join('');
+	$('#modal-root').innerHTML=`<div class="modal-backdrop"><form class="modal" id="apartado-edit-form"><button type="button" class="modal-close">×</button><p class="eyebrow">APARTADOS</p><h2>Editar apartado ${escapeHtml(item.id)}</h2><label class="input-label">Cliente<input class="field" name="customer" value="${escapeHtml(item.customer||item.clienteNombre||item.cliente_nombre||item.cliente||'')}" required></label><label class="input-label">Telefono<input class="field" name="phone" value="${escapeHtml(item.phone||item.clienteTelefono||item.cliente_telefono||item.telefono||'')}"></label><label class="input-label">Direccion<input class="field" name="address" value="${escapeHtml(item.address||item.direccion||'')}"></label><label class="input-label">Estado<select class="field" name="status">${statuses.map(status=>`<option value="${status}" ${status===currentStatus?'selected':''}>${status}</option>`).join('')}</select></label><h3>Productos y valores</h3>${detailFields||'<p class="danger-text">Este apartado no tiene productos en el detalle y no puede editarse desde aquí.</p>'}<button class="primary wide" ${items.length?'':'disabled'}>Guardar cambios</button></form></div>`;
+	$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';
+	$('#apartado-edit-form').onsubmit=async event=>{
+		event.preventDefault();
+		const form=event.currentTarget;
+		const values=Object.fromEntries(new FormData(form));
+		const editedItems=items.map((product,index)=>({
+			id:values[`item-${index}-id`],
+			code:values[`item-${index}-code`],
+			product:values[`item-${index}-product`],
+			quantity:values[`item-${index}-quantity`],
+			unitPrice:values[`item-${index}-unit-price`],
+			remove:form.elements[`item-${index}-remove`].checked,
+		}));
+		const button=form.querySelector('button.primary');
+		button.disabled=true;
+		try{
+			await persistCatalogRecord('/api/shared-apartado',{id:item.id,customer:values.customer,phone:values.phone,address:values.address,status:values.status,items:editedItems});
+			const normalized=await hydrateState();
+			if(normalized){store.state=normalized;await hydrateCatalog(store.state);}
+			$('#modal-root').innerHTML='';
+			render();
+			showToast('Apartado y productos actualizados correctamente.');
+		}catch(error){
+			showToast(error.message,'error');
+			button.disabled=false;
+		}
+	};
+}
 function openPurchaseEditModal(purchase,targetCollection='purchases'){
 	const suppliers=store.collection.suppliers||[];
 	const stores=store.collection.stores||[];
