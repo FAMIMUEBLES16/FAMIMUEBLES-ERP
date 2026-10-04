@@ -299,40 +299,57 @@ async function refreshTalonarioSalesAlerts(){
 	store.save();
 }
 const criticalDomainCollections = new Set(['customers','suppliers','purchases','accountsPayable','supplierPayments','talonarios','talonarioJustifications','credits','expenses','transfers']);
-async function loadDomainCollection(state, collection, timeout=5000){
+async function loadDomainCollection(state, collection, timeout=5000, retries=0){
 	if(collection!=='transfers'&&Array.isArray(state[collection])&&state[collection].length)return true;
-	try {
-		const payload=await api.get(`/api/domain/${encodeURIComponent(collection)}`,{headers:{'X-Tenant-ID':activeTenantId()},cache:'no-store',timeout});
-		const items=Array.isArray(payload.items)?payload.items:[];
-		if(items.length||!Array.isArray(state[collection])||state[collection].length===0)state[collection]=items;
-		return true;
-	} catch(error) {
-		console.warn(`No se pudo cargar ${collection}:`,error.message);
-		return false;
+	for(let attempt=0;attempt<=retries;attempt++){
+		try {
+			const payload=await api.get(`/api/domain/${encodeURIComponent(collection)}`,{headers:{'X-Tenant-ID':activeTenantId()},cache:'no-store',timeout});
+			const items=Array.isArray(payload.items)?payload.items:[];
+			if(items.length||!Array.isArray(state[collection])||state[collection].length===0)state[collection]=items;
+			return true;
+		} catch(error) {
+			const retryable=error.status===0||[408,429,502,503,504].includes(error.status);
+			if(attempt<retries&&retryable){
+				await new Promise(resolve=>setTimeout(resolve,500*(attempt+1)));
+				continue;
+			}
+			console.warn(`No se pudo cargar ${collection}:`,error.message);
+			return false;
+		}
 	}
+	return false;
+}
+async function loadDomainCollections(state,collections,timeout=5000,concurrency=3,retries=0){
+	const results=[];
+	for(let index=0;index<collections.length;index+=concurrency){
+		const batch=collections.slice(index,index+concurrency);
+		results.push(...await Promise.all(batch.map(collection=>loadDomainCollection(state,collection,timeout,retries))));
+	}
+	return results;
 }
 function hydrateSecondaryDomainCollections(state){
 	const deferredTalonarios=['talonarios','talonarioJustifications'];
 	const deferredAttendance=['workSchedules','staffAbsences'];
 	const secondary=remoteDomainCollections.filter(collection=>!criticalDomainCollections.has(collection)&&!deferredTalonarios.includes(collection)&&!deferredAttendance.includes(collection));
-	Promise.all(secondary.map(collection=>loadDomainCollection(state,collection,3000))).then(()=>{if(currentRoute()!=='dashboard')render();});
+	loadDomainCollections(state,secondary,3000,3).then(()=>{if(currentRoute()!=='dashboard')render();});
 }
 async function hydrateDomainCollections(state, loadSecondary=true){
  const deferredTalonarios=['talonarios','talonarioJustifications'];
  const deferredAttendance=['workSchedules','staffAbsences'];
  const critical=remoteDomainCollections.filter(collection=>criticalDomainCollections.has(collection)&&!deferredTalonarios.includes(collection));
- const loadResults=await Promise.all([
-  Promise.all([
-   ...critical.map(collection=>loadDomainCollection(state,collection,5000)),
-   ...deferredAttendance.map(collection=>loadDomainCollection(state,collection,3000))
-  ]),
-  Promise.all(deferredTalonarios.map(collection=>loadDomainCollection(state,collection,5000)))
- ]);
+ const payableCollections=['suppliers','accountsPayable'].filter(collection=>critical.includes(collection));
+ await loadDomainCollections(state,payableCollections,10000,2,1);
  const normalizedPayables=normalizePayableSuppliers(state);
  if(normalizedPayables.length){
   store.save();
   Promise.allSettled(normalizedPayables.map(account=>persistDomainRecord('accountsPayable',account))).then(results=>results.filter(result=>result.status==='rejected').forEach(result=>console.warn('No se pudo normalizar el proveedor de una cuenta por pagar:',result.reason?.message||result.reason)));
  }
+ if(loadSecondary&&['dashboard','cuentas-por-pagar'].includes(currentRoute()))render();
+ const remainingCritical=critical.filter(collection=>!payableCollections.includes(collection));
+ const loadResults=await Promise.all([
+  loadDomainCollections(state,[...remainingCritical,...deferredAttendance],5000,3),
+  loadDomainCollections(state,deferredTalonarios,5000,2)
+ ]);
  const talonarioResults=loadResults[1];
 	if(talonarioResults[0]){
 		store.collection.talonarios=normalizeActiveTalonarios(store.collection.talonarios||[]);
