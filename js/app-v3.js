@@ -12,7 +12,7 @@ import { showToast } from './components/toast.js';
 import { table } from './components/tables.js';
 import { renderNotifications } from './components/notifications.js';
 import { renderDashboard } from './modules/dashboard-v3.js?v=20261004105826';
-import { canonicalSellerName, renderVentas, salesTable, salesSummary, normalizeSales, salesMonthKey, saleTimestamp, filterSales } from './modules/ventas.js?v=26';
+import { canonicalSellerName, renderVentas, salesTable, salesSummary, normalizeSales, salesMonthKey, saleTimestamp, filterSales, salesPaymentMethods } from './modules/ventas.js?v=27';
 import { renderFacturacion, cartTotal, productResults, customerResults } from './modules/facturacion.js?v=23';
 import { renderProductos, productTable, productMatches } from './modules/productos.js?v=22';
 import { renderInventario, inventoryContent } from './modules/inventario.js?v=20';
@@ -44,9 +44,9 @@ import { renderProveedores, supplierTable } from './modules/proveedores.js?v=15'
 import { renderCompras, purchaseTable, purchaseSummary } from './modules/compras.js?v=22';
 import { purchaseTotal, createPurchase, orderPurchase, receivePurchase, receiveTalonarioPurchase, cancelPurchase } from './services/purchase-service.js?v=16';
 import { purchaseDetail } from './modules/purchase-detail.js?v=16';
-import { renderCuentasPorPagar, payableTable } from './modules/cuentas-por-pagar.js?v=15';
+import { renderCuentasPorPagar, payableTable } from './modules/cuentas-por-pagar.js?v=20261004-payable-supplier-filter-1';
 import { accountsPayableDetail } from './modules/accounts-payable-detail.js?v=14';
-import { calculateBalance, registerPayment as registerSupplierPayment, updateAccountPayableStatus } from './services/accounts-payable-service.js?v=14';
+import { calculateBalance, filterAccountsPayable, normalizePayableSuppliers, registerPayment as registerSupplierPayment, updateAccountPayableStatus } from './services/accounts-payable-service.js?v=20261004-payable-supplier-filter-1';
 import { renderOperaciones, advancedModal, nextAdvancedId } from './modules/operaciones.js?v=2';
 import { renderParidad, payrollModal, payrollConfigModal, countModal, sistecreditoModal, formatParityResult, sistecreditoSummary, sistecreditoTable } from './modules/paridad.js?v=4';
 import { api } from './services/api-client.js?v=8';
@@ -55,7 +55,7 @@ const state = { cart:[], payment:'Efectivo', customerId:'CLI-00001', storeId:sto
 let sharedRefreshInFlight = false;
 let inventoryViewState = { store:'all', query:'', active:'active', status:'all', sort:'name', version:0 };
 let creditViewState = { filter:'all' };
-let salesViewState = { query:'', store:'all', month:`${new Date().getFullYear()}-${String(new Date().getMonth()+1).padStart(2,'0')}`, payment:'all', status:'all', version:0 };
+let salesViewState = { query:'', store:'all', month:`${new Date().getFullYear()}-${String(new Date().getMonth()+1).padStart(2,'0')}`, payment:'all', version:0 };
 let productViewState = { query:'', store:'all', active:'active', version:0 };
 let activeCreditPaymentId = '';
 function syncCustomerBalances(){
@@ -328,6 +328,11 @@ async function hydrateDomainCollections(state, loadSecondary=true){
   ]),
   Promise.all(deferredTalonarios.map(collection=>loadDomainCollection(state,collection,5000)))
  ]);
+ const normalizedPayables=normalizePayableSuppliers(state);
+ if(normalizedPayables.length){
+  store.save();
+  Promise.allSettled(normalizedPayables.map(account=>persistDomainRecord('accountsPayable',account))).then(results=>results.filter(result=>result.status==='rejected').forEach(result=>console.warn('No se pudo normalizar el proveedor de una cuenta por pagar:',result.reason?.message||result.reason)));
+ }
  const talonarioResults=loadResults[1];
 	if(talonarioResults[0]){
 		store.collection.talonarios=normalizeActiveTalonarios(store.collection.talonarios||[]);
@@ -812,11 +817,11 @@ document.addEventListener('change',event=>{if(event.target.matches('#active-stor
 document.addEventListener('change',event=>{if(event.target.matches('[data-talonario-filter]')){setTalonarioFilters({[event.target.dataset.talonarioFilter]:event.target.value});render();}});
 document.addEventListener('input',event=>{if(event.target.matches('[data-talonario-filter="query"]')){setTalonarioFilters({query:event.target.value});render();}});
 function updateSalesViewState(){
-	salesViewState={query:$('[data-filter="sales"]')?.value.trim()||'',store:$('[data-sales-store]')?.value||'all',month:$('[data-sales-month]')?.value||'',payment:$('[data-sales-payment]')?.value||'all',status:$('[data-sales-status]')?.value||'all',version:salesViewState.version+1};
+	salesViewState={query:$('[data-filter="sales"]')?.value.trim()||'',store:$('[data-sales-store]')?.value||'all',month:$('[data-sales-month]')?.value||'',payment:$('[data-sales-payment]')?.value||'all',version:salesViewState.version+1};
 	applySalesFilters();
 }
 document.addEventListener('input',event=>{if(event.target.matches('[data-filter="sales"]'))updateSalesViewState();});
-document.addEventListener('change',event=>{if(event.target.matches('[data-sales-store],[data-sales-month],[data-sales-payment],[data-sales-status]'))updateSalesViewState();});
+document.addEventListener('change',event=>{if(event.target.matches('[data-sales-store],[data-sales-month],[data-sales-payment]'))updateSalesViewState();});
 function updateProductViewState(){productViewState={query:$('[data-filter="products"]')?.value||'',store:$('[data-product-store]')?.value||'all',active:$('[data-product-active]')?.value||'all',version:productViewState.version+1};productPage=1;refreshProducts();}
 document.addEventListener('input',event=>{if(event.target.matches('[data-filter="purchases"]'))filterPurchases();});
 document.addEventListener('change',event=>{if(event.target.matches('[data-purchase-supplier],[data-purchase-store],[data-purchase-status]'))filterPurchases();});
@@ -837,7 +842,7 @@ document.addEventListener('input',event=>{if(event.target.matches('[data-filter=
 document.addEventListener('change',event=>{if(event.target.matches('[data-purchase-supplier],[data-purchase-store],[data-purchase-status]'))filterSharedPurchases();});
 document.addEventListener('input',event=>{if(event.target.matches('[data-filter="payables"]'))filterPayables();});
 document.addEventListener('change',event=>{if(event.target.matches('[data-payable-status],[data-payable-supplier]'))filterPayables();});
-function filterPayables(){const query=$('[data-filter="payables"]')?.value.toLowerCase()||'',status=$('[data-payable-status]')?.value||'all',supplierId=$('[data-payable-supplier]')?.value||'all';const matches=(store.collection.accountsPayable||[]).filter(account=>{const supplier=store.collection.suppliers.find(item=>String(item.id)===String(account.supplierId));updateAccountPayableStatus(store.collection,account);return `${account.id} ${account.invoiceNumber} ${supplier?.name||account.supplierName||''} ${supplier?.document||''}`.toLowerCase().includes(query)&&(status==='all'||account.status===status)&&(supplierId==='all'||String(account.supplierId)===String(supplierId));});if($('#payables-table'))$('#payables-table').innerHTML=payableTable(store.collection,matches);}
+function filterPayables(){const query=$('[data-filter="payables"]')?.value||'',status=$('[data-payable-status]')?.value||'all',supplierId=$('[data-payable-supplier]')?.value||'all';const matches=filterAccountsPayable(store.collection,{query,status,supplierId});if($('#payables-table'))$('#payables-table').innerHTML=payableTable(store.collection,matches);}
 function applySalesFilters(){
 	const allSales=normalizeSales(store.collection.sales||store.collection.ventas||[]);
 	const sales=filterSales(allSales,{...salesViewState,stores:store.collection.stores}).sort((left,right)=>{
@@ -845,14 +850,10 @@ function applySalesFilters(){
 		const rightTime=saleTimestamp(right.date);
 		return rightTime-leftTime;
 	});
-	const paymentValues=[...new Set(normalizeSales(store.collection.sales||[]).map(sale=>sale.paymentMethod).filter(Boolean))].sort();
-	const statusValues=[...new Set(normalizeSales(store.collection.sales||[]).map(sale=>sale.status).filter(Boolean))].sort();
+	const paymentValues=salesPaymentMethods(allSales);
 	const paymentSelect=$('[data-sales-payment]');
-	const statusSelect=$('[data-sales-status]');
 	if(paymentSelect)paymentSelect.innerHTML='<option value="all">Todos los medios</option>'+paymentValues.map(value=>`<option value="${value}">${value}</option>`).join('');
-	if(statusSelect)statusSelect.innerHTML='<option value="all">Todos los estados</option>'+statusValues.map(value=>`<option value="${value}">${value}</option>`).join('');
-	if(paymentSelect)paymentSelect.value=salesViewState.payment;
-	if(statusSelect)statusSelect.value=salesViewState.status;
+	if(paymentSelect){paymentSelect.value=salesViewState.payment;if(paymentSelect.value!==salesViewState.payment)salesViewState.payment='all';}
 	if($('[data-sales-store]'))$('[data-sales-store]').value=salesViewState.store;
 	if($('[data-sales-month]'))$('[data-sales-month]').value=salesViewState.month;
 	if($('[data-filter="sales"]'))$('[data-filter="sales"]').value=salesViewState.query;
@@ -861,8 +862,6 @@ function applySalesFilters(){
 }
 async function readAttachment(file){if(!file)return null;if(file.size>5*1024*1024)throw new Error('El soporte no puede superar 5 MB.');return new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve({name:file.name,type:file.type,data:reader.result});reader.onerror=()=>reject(new Error('No se pudo leer el soporte.'));reader.readAsDataURL(file);});}
 function externalPayableModal(){const stores=store.collection.stores.map(item=>`<option value="${item.id}">${item.name}</option>`).join('');$('#modal-root').innerHTML=`<div class="modal-backdrop"><form class="modal" id="external-payable-form"><button type="button" class="modal-close">×</button><p class="eyebrow">FINANZAS</p><h2>Registrar factura pendiente</h2><p class="muted">Esta carga no recibe mercancía ni modifica el inventario.</p><label class="input-label">Tipo<select class="field" name="type" required><option value="SERVICIO">Servicio (luz, internet, etc.)</option><option value="GASTO">Gasto (pendones, publicidad, etc.)</option><option value="MERCANCIA_EXISTENTE">Mercancía ya registrada en inventario</option></select></label><label class="input-label">Proveedor / acreedor<input class="field" name="supplierName" required></label><label class="input-label">Número de factura o referencia<input class="field" name="invoiceNumber" required></label><label class="input-label">Valor total<input class="field" name="totalAmount" type="number" min="1" step="0.01" required></label><label class="input-label">Fecha de emisión<input class="field" name="issueDate" type="date" value="${new Date().toISOString().slice(0,10)}" required></label><label class="input-label">Fecha límite de pago<input class="field" name="dueDate" type="date" required></label><label class="input-label">Local<select class="field" name="storeId"><option value="">Sin local / empresa</option>${stores}</select></label><label class="input-label">Descripción<textarea class="field" name="description" rows="3" required></textarea></label><label class="input-label">Soporte de la factura<input class="field" name="attachment" type="file" accept="image/*,.pdf"></label><button class="primary wide">Guardar cuenta por pagar</button></form></div>`;$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';$('#external-payable-form').onsubmit=async event=>{event.preventDefault();const form=event.target;const button=form.querySelector('button.primary');button.disabled=true;try{const values=Object.fromEntries(new FormData(form));const attachment=await readAttachment(form.elements.attachment.files[0]);const account={id:generateId('CXP',store.collection.accountsPayable||[]),supplierId:`EXT-${Date.now()}`,supplierName:String(values.supplierName).trim(),invoiceNumber:String(values.invoiceNumber).trim(),type:values.type,description:String(values.description).trim(),storeId:values.storeId||'',issueDate:values.issueDate,dueDate:values.dueDate,totalAmount:Number(values.totalAmount),paidAmount:0,balance:Number(values.totalAmount),status:'PENDIENTE',paymentTerms:'Credito',noInventory:true,source:'external-invoice',attachment,createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()};if(!Number.isFinite(account.totalAmount)||account.totalAmount<=0)throw new Error('El valor total debe ser mayor que cero.');await persistDomainRecord('accountsPayable',account);store.collection.accountsPayable.push(account);$('#modal-root').innerHTML='';render();showToast('Factura pendiente registrada sin afectar inventario.');}catch(error){showToast(error.message,'error');}finally{button.disabled=false;}};}
-function supplierKey(value){return String(value||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]/gi,'').toUpperCase();}
-function normalizePayableSuppliers(state){const suppliers=state.suppliers||[];const changed=[];const findSupplier=account=>{if(suppliers.some(item=>String(item.id)===String(account.supplierId)))return suppliers.find(item=>String(item.id)===String(account.supplierId));const source=supplierKey(account.supplierName||account.supplier||account.proveedor);if(!source)return null;return suppliers.find(item=>{const target=supplierKey(item.name);return target===source||target.includes(source)||source.includes(target)||source.replace(/SA|SAS|LTDA|LIMITADA/g,'')===target.replace(/SA|SAS|LTDA|LIMITADA/g,'');});};(state.accountsPayable||[]).forEach(account=>{const supplier=findSupplier(account);if(supplier&&(String(account.supplierId)!==String(supplier.id)||account.supplierName!==supplier.name)){account.supplierId=supplier.id;account.supplierName=supplier.name;changed.push(account);}});return changed;}
 async function createExpenseFromPaidAccount(account,payment){if(!['SERVICIO','GASTO'].includes(String(account.type||'').toUpperCase())||account.expenseCreatedAt)return;if(!Array.isArray(store.collection.expenses))store.collection.expenses=[];const expense={id:generateId('GAS',store.collection.expenses),date:payment.date||new Date().toISOString().slice(0,10),storeId:account.storeId||'',category:String(account.type).toUpperCase()==='SERVICIO'?'Servicios':'Publicidad',description:account.description||account.invoiceNumber,amount:Number(account.totalAmount||0),paymentMethod:payment.method||'EFECTIVO',createdBy:'USR-00001',provider:account.supplierName||'',sourceAccountId:account.id};await persistDomainRecord('expenses',expense);store.collection.expenses.push(expense);account.expenseCreatedAt=new Date().toISOString();await persistDomainRecord('accountsPayable',account);}
 function payablePaymentModal(accountId){const account=store.collection.accountsPayable.find(item=>item.id===accountId);if(!account)return;$('#modal-root').innerHTML=`<div class="modal-backdrop"><form class="modal" id="payable-payment-form"><button type="button" class="modal-close">×</button><p class="eyebrow">FINANZAS</p><h2>Registrar pago</h2><p>Saldo: <strong>${money(calculateBalance(account))}</strong></p><label class="input-label">Fecha<input class="field" name="date" type="date" value="${new Date().toISOString().slice(0,10)}" required></label><label class="input-label">Monto<input class="field" name="amount" type="number" min="1" max="${calculateBalance(account)}" required></label><label class="input-label">Metodo<select class="field" name="method"><option>EFECTIVO</option><option>TRANSFERENCIA</option><option>CONSIGNACION</option><option>CHEQUE</option><option>OTRO</option></select></label><label class="input-label">Referencia<input class="field" name="reference" required></label><label class="input-label">Observacion<input class="field" name="note"></label><button class="primary wide">Guardar pago</button></form></div>`;$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';$('#payable-payment-form').onsubmit=async event=>{event.preventDefault();const form=event.target;try{const values=Object.fromEntries(new FormData(form));const payment=registerSupplierPayment(store.collection,accountId,values);await persistDomainRecord('supplierPayments',payment);await persistDomainRecord('accountsPayable',account);if(account.status==='PAGADA')await createExpenseFromPaidAccount(account,payment);store.save();$('#modal-root').innerHTML='';render();showToast(account.status==='PAGADA'&&['SERVICIO','GASTO'].includes(String(account.type||'').toUpperCase())?'Pago registrado y gasto creado.':'Pago registrado correctamente.');}catch(error){showToast(error.message,'error');}};}
 async function saveSupplierPayment(account, values, amount, reference){const payment=registerSupplierPayment(store.collection,account.id,{...values,amount,reference});await persistDomainRecord('supplierPayments',payment);await persistDomainRecord('accountsPayable',account);if(account.status==='PAGADA')await createExpenseFromPaidAccount(account,payment);return payment;}
@@ -1254,8 +1253,6 @@ async function boot() {
 	hydrateUsers(store.state).then(() => {
 		if (currentRoute() === 'usuarios') render();
 	}).catch(error => console.warn('No se pudieron actualizar los usuarios:', error.message));
-	const normalizedPayables=normalizePayableSuppliers(store.state);
-	Promise.allSettled(normalizedPayables.map(account => persistDomainRecord('accountsPayable',account))).then(results => results.filter(result => result.status === 'rejected').forEach(result => console.warn('No se pudo normalizar el proveedor de una cuenta por pagar:', result.reason?.message || result.reason)));
 	await permissionsPromise;
 	store.save();
 	state.storeId = resolveActiveStore();

@@ -1,16 +1,30 @@
 import { page, table, badge } from '../components/tables.js';
 
 function normalizeUserName(user) {
-  return user?.name || user?.username || user?.nombre || user?.usuario || user?.empleado || 'Usuario sin nombre';
+  const displayName = user?.displayName || user?.display_name || user?.name || user?.nombre || user?.empleado;
+  if (displayName) return displayName;
+  const username = user?.username || user?.usuario;
+  return /^telegram_\d+$/i.test(String(username || '')) ? 'Usuario sin nombre' : username || 'Usuario sin nombre';
 }
 
 function normalizeRole(user) {
   return String(user?.role || user?.rol || 'VENDEDOR').toUpperCase();
 }
 
-function normalizeStatus(user) {
-  const active = user?.active === true || user?.active === 1 || user?.active === '1' || user?.active === 'true' || String(user?.status || '').toUpperCase() === 'ACTIVO';
-  return active ? 'Activo' : 'Inactivo';
+function hasManagedAccount(user) {
+  return user?.managedAccount === true;
+}
+
+function isUserActive(user) {
+  const active = user?.active ?? user?.activo;
+  if (active !== undefined && active !== null && active !== '') {
+    return ![false, 0, '0', 'false', 'inactivo', 'inactive', 'no'].includes(
+      typeof active === 'string' ? active.trim().toLowerCase() : active
+    );
+  }
+  return !['inactivo', 'inactive', 'false', '0', 'no'].includes(
+    String(user?.status || user?.estado || '').trim().toLowerCase()
+  );
 }
 
 function normalizeDocument(user) {
@@ -24,12 +38,18 @@ export function renderUsuarios(state) {
   }
 
   const rows = users.map(user => {
-    const active = user.active !== false && user.active !== 0 && user.active !== '0' && String(user.status || '').toUpperCase() !== 'INACTIVO';
+    const active = isUserActive(user);
     const rowStatus = active ? 'Activo' : 'Inactivo';
     const rowName = normalizeUserName(user);
     const contactEmail = user.email || user.correo || '-';
     const contactPhone = user.phone || user.telefono || '-';
     const document = normalizeDocument(user);
+    const userId = user.id || user.id_telegram || user.idTelegram || '';
+    const actions = hasManagedAccount(user)
+      ? `<button class="table-action" data-action="edit-user" data-user-id="${userId}">Editar</button>
+          <button class="table-action" data-action="user-permissions" data-user-id="${userId}">Permisos</button>
+          <button class="table-action" data-action="toggle-user-active" data-user-id="${userId}" data-active="${active ? 'true' : 'false'}">${active ? 'Desactivar' : 'Activar'}</button>`
+      : '<span class="muted">Sin cuenta de acceso</span>';
     return `<tr>
       <td><strong>${rowName}</strong></td>
       <td>${contactEmail}</td>
@@ -39,10 +59,8 @@ export function renderUsuarios(state) {
       <td>${badge(rowStatus)}</td>
       <td>
         <div class="table-actions compact">
-          <button class="table-action" data-action="view-user" data-user-id="${user.id || user.id_telegram || user.idTelegram || ''}">Ver</button>
-          <button class="table-action" data-action="edit-user" data-user-id="${user.id || user.id_telegram || user.idTelegram || ''}">Editar</button>
-          <button class="table-action" data-action="user-permissions" data-user-id="${user.id || user.id_telegram || user.idTelegram || ''}">Permisos</button>
-          <button class="table-action" data-action="toggle-user-active" data-user-id="${user.id || user.id_telegram || user.idTelegram || ''}" data-active="${active ? 'true' : 'false'}">${active ? 'Desactivar' : 'Activar'}</button>
+          <button class="table-action" data-action="view-user" data-user-id="${userId}">Ver</button>
+          ${actions}
         </div>
       </td>
     </tr>`;
