@@ -4,14 +4,14 @@ function showTransferDetail(transferId){const transfer=transferRecord(transferId
 function editTransfer(transferId){const transfer=transferRecord(transferId);if(!transfer)return showToast('No se encontro el traslado.','error');$('#modal-root').innerHTML=`<div class="modal-backdrop"><form class="modal" id="transfer-edit-form"><button type="button" class="modal-close">×</button><p class="eyebrow">INVENTARIO</p><h2>Editar traslado</h2><textarea class="field" name="data" rows="12" required>${JSON.stringify(transfer,null,2)}</textarea><button class="primary wide">Guardar cambios</button></form></div>`;$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';$('#transfer-edit-form').onsubmit=async event=>{event.preventDefault();try{const updated=JSON.parse(new FormData(event.target).get('data'));if(String(updated.id)!==String(transfer.id))throw new Error('El ID no puede cambiarse.');await persistDomainRecord('transfers',updated);store.collection.transfers=[...(store.collection.transfers||[]).filter(item=>String(item.id)!==String(updated.id)),updated];$('#modal-root').innerHTML='';render();showToast('Traslado actualizado correctamente.');}catch(error){showToast(error.message,'error');}};}
 async function deleteTransferRemote(transferId){if(!window.confirm('¿Eliminar este traslado?'))return;try{await persistCatalogRecord(`/api/domain/transfers/${encodeURIComponent(transferId)}`,{},'DELETE');store.collection.transfers=(store.collection.transfers||[]).filter(item=>String(item.id)!==String(transferId));$('#modal-root').innerHTML='';render();showToast('Traslado eliminado correctamente.');}catch(error){showToast(error.message,'error');}}
 import { store } from './data/store.js?v=20';
-import { hydrateState, hydrateStateWithRetry, hydrateCatalog, saveState, authHeaders, activeTenantId, isStaticDeployment } from './data/storage.js?v=26';
+import { hydrateState, hydrateStateWithRetry, hydrateCatalog, saveState, authHeaders, activeTenantId, isStaticDeployment } from './data/storage.js?v=27';
 import { generateId } from './utils/ids.js';
 import { currentRoute, startRouter } from './router.js?v=18';
 import { navItems, navGroups } from './components/sidebar.js?v=22';
 import { showToast } from './components/toast.js';
 import { table } from './components/tables.js';
 import { renderNotifications } from './components/notifications.js';
-import { renderDashboard } from './modules/dashboard-v3.js?v=20261003091041';
+import { renderDashboard } from './modules/dashboard-v3.js?v=20261004105826';
 import { canonicalSellerName, renderVentas, salesTable, salesSummary, normalizeSales, salesMonthKey, saleTimestamp, filterSales } from './modules/ventas.js?v=26';
 import { renderFacturacion, cartTotal, productResults, customerResults } from './modules/facturacion.js?v=23';
 import { renderProductos, productTable, productMatches } from './modules/productos.js?v=22';
@@ -26,7 +26,7 @@ import { renderReportes, renderReportPreview, reportDefinition } from './modules
 import { renderConfiguracion } from './modules/configuracion.js?v=18';
 import { renderGastos } from './modules/gastos.js?v=19';
 import { renderGasolina } from './modules/gasolina.js?v=18';
-import { renderUsuarios } from './modules/usuarios.js?v=19';
+import { renderUsuarios } from './modules/usuarios.js?v=20';
 import { renderDescansos } from './modules/descansos.js?v=6';
 import { renderAuditoria, setAuditFilters } from './modules/auditoria.js?v=23';
 import { renderTalonarios, talonarioModal, setTalonarioFilters, currentTalonarioNumber, normalizeActiveTalonarios } from './modules/talonarios.js?v=17';
@@ -37,7 +37,6 @@ import { formatCurrency as money } from './utils/currency.js?v=18';
 
 let appHydrating = true;
 import { adjustStock, increaseStock, decreaseStock } from './services/inventory-service.js?v=18';
-import { createTransfer } from './services/transfer-service.js?v=18';
 import { createProduct, updateProduct, setProductActive, generateTestProducts, searchProducts, categoryFromProductName } from './services/product-service.js?v=21';
 import { productDetail } from './modules/product-detail.js?v=14';
 import { importPreview, importPreviewRows, importProducts } from './modules/product-import.js?v=15';
@@ -84,6 +83,7 @@ function syncCustomerBalances(){
 	});
 }
 const transferDraft = [];
+let transferRequestId = '';
 let productPage = 1;
 let purchaseDraft = [];
 let userPermissions = null;
@@ -158,8 +158,8 @@ async function loadRemoteCatalog(){ try { const catalog=await fetchOperationalDa
 function refreshProducts(){ const query=$('[data-filter="products"]')?.value||'',storeId=$('[data-product-store]')?.value||'all',active=$('[data-product-active]')?.value||'all',limit=50,stockMap=new Map(store.collection.products.map(product=>[product.id,store.collection.inventoryByStore.filter(row=>row.productId===product.id&&(storeId==='all'||String(row.storeId)===String(storeId))).reduce((sum,row)=>sum+Number(row.quantity||0),0)]));let items=store.collection.products.filter(product=>productMatches(product,{query,active,stockMap}));const pages=Math.max(1,Math.ceil(items.length/limit));productPage=Math.min(productPage,pages);if($('#products-table'))$('#products-table').innerHTML=productTable(items,store.collection.stores,limit,productPage,store.collection,storeId);if($('[data-product-count]'))$('[data-product-count]').textContent=`${items.length} productos`;if($('[data-product-page-label]'))$('[data-product-page-label]').textContent=`Pagina ${productPage} de ${pages}`;}
 function clearProductFilters(){ const defaults={'[data-filter="products"]':'','[data-product-store]':'all','[data-product-active]':'active'};Object.entries(defaults).forEach(([selector,value])=>{const element=$(selector);if(element)element.value=value;});productPage=1;refreshProducts();}
 function modal(title, fields, onSubmit){ $('#modal-root').innerHTML=`<div class="modal-backdrop"><form class="modal" id="data-modal"><button type="button" class="modal-close">×</button><p class="eyebrow">FAMIMUEBLES ERP</p><h2>${title}</h2>${fields.map(field=>`<label class="input-label">${field.label}<input class="field" name="${field.name}" type="${field.type||'text'}" value="${field.value||''}" ${field.required===false?'':'required'}></label>`).join('')}<button class="primary wide">Guardar</button></form></div>`; $('.modal-close').onclick=()=>$('#modal-root').innerHTML=''; $('#data-modal').onsubmit=async event=>{event.preventDefault();const button=event.target.querySelector('button.primary');button.disabled=true;try{await onSubmit(Object.fromEntries(new FormData(event.target)));}catch(error){showToast(error.message,'error');}finally{button.disabled=false;}}; }
-async function persistCatalogRecord(path, record, method='POST'){ const requestId=method==='POST'?(globalThis.crypto?.randomUUID?crypto.randomUUID():`${path}-${Date.now()}-${Math.random()}`):''; const options={headers:{'X-Tenant-ID':activeTenantId(),...(requestId?{'Idempotency-Key':requestId}: {})}}; const body={...record,...(requestId?{requestId}:{}),tenantId:activeTenantId()}; try { return method==='PUT' ? await api.put(path,body,options) : method==='DELETE' ? await api.delete(path,body,options) : await api.post(path,body,options); } catch(error) { if(error.status===401){localStorage.removeItem('famimuebles-auth-token');localStorage.removeItem('famimuebles-user');throw new Error('La sesion expiro. Inicia sesion nuevamente para guardar cambios.');} throw error; } }
-const remoteDomainCollections=['customers','suppliers','purchases','credits','expenses','accountsPayable','supplierPayments','customerAccounts','returns','supplierReturns','stockCounts','reservations','warranties','damagedStock','cashSessions','cashMovements','bankAccounts','quotes','orders','deliveries','creditNotes','talonarios','talonarioJustifications'];
+async function persistCatalogRecord(path, record, method='POST', stableRequestId=''){ const requestId=method==='POST'?(stableRequestId||(globalThis.crypto?.randomUUID?crypto.randomUUID():`${path}-${Date.now()}-${Math.random()}`)):''; const options={headers:{'X-Tenant-ID':activeTenantId(),...(requestId?{'Idempotency-Key':requestId}: {})}}; const body={...record,...(requestId?{requestId}:{}),tenantId:activeTenantId()}; try { return method==='PUT' ? await api.put(path,body,options) : method==='DELETE' ? await api.delete(path,body,options) : await api.post(path,body,options); } catch(error) { if(error.status===401){localStorage.removeItem('famimuebles-auth-token');localStorage.removeItem('famimuebles-user');throw new Error('La sesion expiro. Inicia sesion nuevamente para guardar cambios.');} throw error; } }
+const remoteDomainCollections=['customers','suppliers','purchases','credits','expenses','accountsPayable','supplierPayments','customerAccounts','returns','supplierReturns','stockCounts','reservations','warranties','damagedStock','cashSessions','cashMovements','bankAccounts','quotes','orders','deliveries','creditNotes','transfers','talonarios','talonarioJustifications'];
 async function persistDomainRecord(collection, record){
 	const path=`/api/domain/${encodeURIComponent(collection)}`;
 	const payload={...record,tenantId:activeTenantId()};
@@ -298,9 +298,9 @@ async function refreshTalonarioSalesAlerts(){
 	}
 	store.save();
 }
-const criticalDomainCollections = new Set(['customers','suppliers','purchases','accountsPayable','supplierPayments','talonarios','talonarioJustifications','credits','expenses']);
+const criticalDomainCollections = new Set(['customers','suppliers','purchases','accountsPayable','supplierPayments','talonarios','talonarioJustifications','credits','expenses','transfers']);
 async function loadDomainCollection(state, collection, timeout=5000){
-	if(Array.isArray(state[collection])&&state[collection].length)return true;
+	if(collection!=='transfers'&&Array.isArray(state[collection])&&state[collection].length)return true;
 	try {
 		const payload=await api.get(`/api/domain/${encodeURIComponent(collection)}`,{headers:{'X-Tenant-ID':activeTenantId()},cache:'no-store',timeout});
 		const items=Array.isArray(payload.items)?payload.items:[];
@@ -343,21 +343,44 @@ async function hydrateDomainCollections(state, loadSecondary=true){
 	if(loadSecondary)hydrateSecondaryDomainCollections(state);
 	return state;
 }
+function isUserActive(user){
+	const active=user?.active;
+	if(active!==undefined&&active!==null&&active!==''){
+		return ![false,0,'0','false','inactivo','inactive','no'].includes(typeof active==='string'?active.trim().toLowerCase():active);
+	}
+	return !['inactivo','inactive','false','0','no'].includes(String(user?.status||user?.estado||'').trim().toLowerCase());
+}
+function hasManagedUserAccount(user){
+	return user?.managedAccount===true;
+}
 async function hydrateUsers(state){
 	const normalize=(item,source)=>{
-		const name=String(item?.name||item?.nombre||item?.username||item?.usuario||item?.empleado||'').trim();
 		const username=String(item?.username||item?.usuario||'').trim();
+		const displayName=String(item?.displayName||item?.display_name||item?.name||item?.nombre||item?.empleado||'').trim();
+		const name=displayName||(/^telegram_\d+$/i.test(username)?'Usuario sin nombre':username);
 		const id=String(item?.id||item?.id_telegram||item?.telegram_id||item?.usuario_id||'').trim();
-		return {...item,id,name:name||username||id||'Usuario sin nombre',username,email:String(item?.email||item?.correo||'').trim(),phone:String(item?.phone||item?.telefono||'').trim(),role:String(item?.role||item?.rol||'VENDEDOR').trim().toUpperCase(),status:source==='auth'?(item?.active?'Activo':'Inactivo'):String(item?.status||item?.estado||'Activo')};
+		const active=source==='auth'?isUserActive(item):isUserActive({...item,active:item?.active??item?.activo});
+		return {...item,id,name:name||username||id||'Usuario sin nombre',username,email:String(item?.email||item?.correo||'').trim(),phone:String(item?.phone||item?.telefono||'').trim(),role:String(item?.role||item?.rol||'VENDEDOR').trim().toUpperCase(),active,managedAccount:source==='auth'||item?.managedAccount===true,status:active?'Activo':'Inactivo'};
 	};
 	const merge=(items)=>{
 		const users=new Map();
 		items.forEach(({item,source})=>{
 			const user=normalize(item,source);
-			const identity=String(user.name||user.username||user.id).normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,' ').trim().toLowerCase();
+			const appIdentity=String(user.telegramId||user.telegram_id||user.id_telegram||'').trim();
+			const identity=appIdentity?`telegram:${appIdentity}`:String(user.username||user.name||user.id).normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,' ').trim().toLowerCase();
 			if(!identity)return;
 			const existing=users.get(identity)||{};
-			users.set(identity,{...existing,...user,email:user.email||existing.email||'',phone:user.phone||existing.phone||''});
+			const merged={...existing,...user,email:user.email||existing.email||'',phone:user.phone||existing.phone||''};
+			const appRecord=user.appSource?user:existing.appSource?existing:null;
+			if(appRecord&&source==='auth'){
+				merged.active=appRecord.active;
+				merged.status=appRecord.status;
+				merged.role=appRecord.role;
+				merged.name=appRecord.name;
+				merged.displayName=appRecord.displayName;
+				merged.appSource=appRecord.appSource;
+			}
+			users.set(identity,merged);
 		});
 		return [...users.values()];
 	};
@@ -436,8 +459,51 @@ async function refreshSharedState(){
 		sharedRefreshInFlight=false;
 	}
 }
-function openUserModal(){ const stores=store.collection.stores.map(item=>`<option value="${item.id}">${item.name}</option>`).join('');$('#modal-root').innerHTML=`<div class="modal-backdrop"><form class="modal" id="user-form"><button type="button" class="modal-close">x</button><p class="eyebrow">ADMINISTRACION</p><h2>Nuevo usuario</h2><label class="input-label">Usuario<input class="field" name="username" minlength="3" required></label><label class="input-label">Correo<input class="field" name="email" type="email"></label><label class="input-label">Telefono<input class="field" name="phone" type="tel"></label><label class="input-label">Clave<input class="field" name="password" type="password" minlength="8" required></label><label class="input-label">Rol<select class="field" name="role"><option>VENDEDOR</option><option>CAJERO</option><option>BODEGA</option><option>SUPERVISOR</option><option>CONTADOR</option><option>GERENTE</option><option>ADMINISTRADOR</option></select></label><label class="input-label">Local<select class="field" name="storeId"><option value="">Todos</option>${stores}</select></label><p class="danger-text" data-user-error></p><button class="primary wide">Crear usuario</button></form></div>`;$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';$('#user-form').onsubmit=async event=>{event.preventDefault();const form=event.target;try{await persistCatalogRecord('/api/users',Object.fromEntries(new FormData(form)));const payload=await api.get('/api/users',{headers:{'X-Tenant-ID':activeTenantId()}});store.collection.users=payload.items||[];$('#modal-root').innerHTML='';render();showToast('Usuario creado correctamente.');}catch(error){form.querySelector('[data-user-error]').textContent=error.message;}}; }
-function openEditUserModal(userId){ const user=store.collection.users.find(item=>String(item.id)===String(userId));if(!user)return;const stores=store.collection.stores.map(item=>`<option value="${item.id}" ${String(item.id)===String(user.storeId)?'selected':''}>${item.name}</option>`).join('');$('#modal-root').innerHTML=`<div class="modal-backdrop"><form class="modal" id="edit-user-form"><button type="button" class="modal-close">x</button><p class="eyebrow">ADMINISTRACION</p><h2>Editar usuario</h2><label class="input-label">Usuario<input class="field" name="username" minlength="3" value="${user.username||user.name||''}" required></label><label class="input-label">Nueva clave<input class="field" name="password" type="password" minlength="8" placeholder="Dejar vacia para conservarla"></label><label class="input-label">Rol<select class="field" name="role">${['VENDEDOR','CAJERO','BODEGA','SUPERVISOR','CONTADOR','GERENTE','ADMINISTRADOR'].map(role=>`<option ${role===String(user.role).toUpperCase()?'selected':''}>${role}</option>`).join('')}</select></label><label class="input-label">Local<select class="field" name="storeId"><option value="">Todos</option>${stores}</select></label><label class="input-label">Estado<select class="field" name="active"><option value="true" ${user.active!==false?'selected':''}>Activo</option><option value="false" ${user.active===false?'selected':''}>Inactivo</option></select></label><p class="danger-text" data-user-error></p><button class="primary wide">Guardar cambios</button></form></div>`;$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';$('#edit-user-form').onsubmit=async event=>{event.preventDefault();const form=event.target;const values=Object.fromEntries(new FormData(form));values.id=user.id;values.active=values.active==='true';if(!values.password)delete values.password;try{await persistCatalogRecord('/api/users',values,'PUT');await hydrateUsers(store.state);$('#modal-root').innerHTML='';render();showToast('Usuario actualizado correctamente.');}catch(error){form.querySelector('[data-user-error]').textContent=error.message;}}; }
+function openUserModal(){
+	const stores=store.collection.stores.map(item=>`<option value="${item.id}">${item.name}</option>`).join('');
+	$('#modal-root').innerHTML=`<div class="modal-backdrop"><form class="modal" id="user-form"><button type="button" class="modal-close">x</button><p class="eyebrow">ADMINISTRACION</p><h2>Nuevo usuario</h2><label class="input-label">Usuario<input class="field" name="username" minlength="3" required></label><label class="input-label">Correo<input class="field" name="email" type="email"></label><label class="input-label">Telefono<input class="field" name="phone" type="tel"></label><label class="input-label">Clave<input class="field" name="password" type="password" minlength="8" required></label><label class="input-label">Rol<select class="field" name="role"><option>VENDEDOR</option><option>CAJERO</option><option>BODEGA</option><option>SUPERVISOR</option><option>CONTADOR</option><option>GERENTE</option><option>ADMINISTRADOR</option></select></label><label class="input-label">Local<select class="field" name="storeId"><option value="">Todos</option>${stores}</select></label><p class="danger-text" data-user-error></p><button class="primary wide">Crear usuario</button></form></div>`;
+	$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';
+	$('#user-form').onsubmit=async event=>{
+		event.preventDefault();
+		const form=event.target;
+		try{
+			await persistCatalogRecord('/api/users',Object.fromEntries(new FormData(form)));
+			await hydrateUsers(store.state);
+			store.save();
+			$('#modal-root').innerHTML='';
+			render();
+			showToast('Usuario creado correctamente.');
+		}catch(error){
+			form.querySelector('[data-user-error]').textContent=error.message;
+		}
+	};
+}
+function openEditUserModal(userId){
+	const user=store.collection.users.find(item=>String(item.id)===String(userId)&&hasManagedUserAccount(item));
+	if(!user)return;
+	const stores=store.collection.stores.map(item=>`<option value="${item.id}" ${String(item.id)===String(user.storeId)?'selected':''}>${item.name}</option>`).join('');
+	$('#modal-root').innerHTML=`<div class="modal-backdrop"><form class="modal" id="edit-user-form"><button type="button" class="modal-close">x</button><p class="eyebrow">ADMINISTRACION</p><h2>Editar usuario</h2><label class="input-label">Usuario<input class="field" name="username" minlength="3" value="${user.username||user.name||''}" required></label><label class="input-label">Correo<input class="field" name="email" type="email" value="${user.email||''}"></label><label class="input-label">Telefono<input class="field" name="phone" type="tel" value="${user.phone||''}"></label><label class="input-label">Nueva clave<input class="field" name="password" type="password" minlength="8" placeholder="Dejar vacia para conservarla"></label><label class="input-label">Rol<select class="field" name="role">${['VENDEDOR','CAJERO','BODEGA','SUPERVISOR','CONTADOR','GERENTE','ADMINISTRADOR'].map(role=>`<option ${role===String(user.role).toUpperCase()?'selected':''}>${role}</option>`).join('')}</select></label><label class="input-label">Local<select class="field" name="storeId"><option value="">Todos</option>${stores}</select></label><label class="input-label">Estado<select class="field" name="active"><option value="true" ${isUserActive(user)?'selected':''}>Activo</option><option value="false" ${!isUserActive(user)?'selected':''}>Inactivo</option></select></label><p class="danger-text" data-user-error></p><button class="primary wide">Guardar cambios</button></form></div>`;
+	$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';
+	$('#edit-user-form').onsubmit=async event=>{
+		event.preventDefault();
+		const form=event.target;
+		const values=Object.fromEntries(new FormData(form));
+		values.id=user.id;
+		values.active=values.active==='true';
+		values.displayName=user.displayName||user.name||user.username||values.username;
+		if(!values.password)delete values.password;
+		try{
+			await persistCatalogRecord('/api/users',values,'PUT');
+			await hydrateUsers(store.state);
+			store.save();
+			$('#modal-root').innerHTML='';
+			render();
+			showToast('Usuario actualizado correctamente.');
+		}catch(error){
+			form.querySelector('[data-user-error]').textContent=error.message;
+		}
+	};
+}
 function authScreen(configured, telegramBotUsername=''){ const telegramMarkup=telegramBotUsername?'<div class="telegram-login-wrap"><p class="muted">Acceso seguro con Telegram</p><div id="telegram-login"></div><p class="muted">Tu Telegram debe estar vinculado a un usuario ERP activo.</p></div>':''; document.body.innerHTML=`<main class="auth-screen"><section class="auth-card"><p class="eyebrow">FAMIMUEBLES ERP</p><h1>${configured?'Iniciar sesion':'Configurar administrador'}</h1><p class="muted">${configured?'Accede a tu empresa para continuar.':'Crea el primer usuario administrador de esta instalacion.'}</p>${telegramMarkup}<form id="auth-form"><label class="input-label">Usuario<input class="field" name="username" minlength="3" required autocomplete="username"></label><label class="input-label">Clave<input class="field" name="password" type="password" minlength="8" required autocomplete="current-password"></label><button class="primary wide">${configured?'Entrar':'Crear administrador'}</button><p id="auth-error" class="danger-text" role="alert"></p></form></section></main>`; if(telegramBotUsername){window.onTelegramAuth=async user=>{try{const payload=await api.post('/api/auth/telegram',user);localStorage.setItem('famimuebles-auth-token',payload.token);localStorage.setItem('famimuebles-user',JSON.stringify(payload.user));location.reload();}catch(error){const message=document.querySelector('#auth-error');if(message)message.textContent=error.message;}};const script=document.createElement('script');script.src='https://telegram.org/js/telegram-widget.js?22';script.async=true;script.dataset.telegramLogin=telegramBotUsername;script.dataset.size='large';script.dataset.userpic='false';script.dataset.requestAccess='write';script.dataset.onauth='onTelegramAuth(user)';document.querySelector('#telegram-login').appendChild(script);}$('#auth-form').onsubmit=async event=>{event.preventDefault();const values=Object.fromEntries(new FormData(event.target));const endpoint=configured?'/api/auth/login':'/api/auth/setup';try{const payload=await api.post(endpoint,values);if(payload.token)localStorage.setItem('famimuebles-auth-token',payload.token);localStorage.setItem('famimuebles-user',JSON.stringify(payload.user||{username:values.username,role:'ADMINISTRADOR'}));location.reload();}catch(error){document.querySelector('#auth-error').textContent=error.message;}}; }
 function openNotifications(){ const pending=store.collection.notifications.filter(item=>!item.read); $('#modal-root').innerHTML='<div class="modal-backdrop"><section class="modal notification-modal"><button type="button" class="modal-close">×</button><p class="eyebrow">CENTRO DE AVISOS</p><h2>Notificaciones</h2><div class="notification-list">'+renderNotifications(pending)+'</div><button class="outline wide" data-action="mark-notifications-read" '+(!pending.length?'disabled':'')+'>Marcar como leidas</button></section></div>'; $('.modal-close').onclick=()=>$('#modal-root').innerHTML=''; }
 function creditPaymentModal(creditId){ const credit=store.collection.credits.find(item=>item.id===creditId); if(!credit)return; const balance=Math.max(0,Number(credit.total||credit.originalAmount||0)-Number(credit.initial||credit.downPayment||0)-Number(credit.paid||0)); $('#modal-root').innerHTML=`<div class="modal-backdrop"><form class="modal" id="credit-payment-form"><button type="button" class="modal-close">×</button><p class="eyebrow">CARTERA</p><h2>Registrar abono</h2><p>Cliente: <strong>${credit.customer||credit.cliente||'Sin nombre'}</strong></p><p>Saldo pendiente: <strong>${money(balance)}</strong></p><label class="input-label">Monto<input class="field" name="amount" type="number" min="1" max="${balance}" required></label><label class="input-label">Numero de recibo<input class="field" name="receiptNumber" required placeholder="Recibo del abono"></label><label class="input-label">Metodo<select class="field" name="method"><option>Efectivo</option><option>Transferencia</option><option>Consignacion</option><option>Tarjeta</option></select></label><button class="primary wide">Guardar abono</button></form></div>`; $('.modal-close').onclick=()=>$('#modal-root').innerHTML=''; $('#credit-payment-form').onsubmit=event=>{event.preventDefault();try{const values=Object.fromEntries(new FormData(event.target));registerPayment(store.collection,{kind:'credit',id:creditId,receiptNumber:values.receiptNumber},values.amount,values.method);store.save();$('#modal-root').innerHTML='';render();showToast('Abono registrado correctamente.');}catch(error){showToast(error.message,'error');}}; }
@@ -737,7 +803,7 @@ async function finishSale(){
     showToast(error.message, 'error');
   }
 }
-function transferField(name){return document.querySelector(`.transfer-modal [data-transfer-${name}]`);} function updateTransferAvailability(){const row=inventoryEntry(store.collection,transferField('product')?.value,transferField('origin')?.value);document.querySelector('[data-transfer-origin-stock]')?.replaceChildren(String(row?.quantity||0));} function openTransfer(){transferDraft.length=0;$('#modal-root').innerHTML=transferModal(store.collection);$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';const origin=transferField('origin');if(origin)origin.value=state.storeId;updateTransferAvailability();} function addTransferItem(){const origin=transferField('origin').value,destination=transferField('destination').value,productId=transferField('product').value,quantity=Number(transferField('quantity').value),row=inventoryEntry(store.collection,productId,origin);if(origin===destination)return showToast('El origen y destino deben ser diferentes.','error');if(!row||quantity<=0||quantity>row.quantity)return showToast('La cantidad supera el stock disponible.','error');transferDraft.push({productId,quantity});$('#transfer-items').innerHTML=transferDraft.map(item=>`<p>${store.collection.products.find(product=>product.id===item.productId)?.name} · ${item.quantity} unidades</p>`).join('');}
+function transferField(name){return document.querySelector(`.transfer-modal [data-transfer-${name}]`);} function updateTransferAvailability(){const row=inventoryEntry(store.collection,transferField('product')?.value,transferField('origin')?.value);document.querySelector('[data-transfer-origin-stock]')?.replaceChildren(String(row?.quantity||0));} function openTransfer(){transferDraft.length=0;transferRequestId=globalThis.crypto?.randomUUID?crypto.randomUUID():`transfer-${Date.now()}-${Math.random()}`;$('#modal-root').innerHTML=transferModal(store.collection);$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';const origin=transferField('origin');if(origin)origin.value=state.storeId;updateTransferAvailability();} function addTransferItem(){const origin=transferField('origin').value,destination=transferField('destination').value,productId=transferField('product').value,quantity=Number(transferField('quantity').value),row=inventoryEntry(store.collection,productId,origin);if(origin===destination)return showToast('El origen y destino deben ser diferentes.','error');if(!row||quantity<=0||quantity>row.quantity)return showToast('La cantidad supera el stock disponible.','error');transferDraft.push({productId,quantity});$('#transfer-items').innerHTML=transferDraft.map(item=>`<p>${store.collection.products.find(product=>product.id===item.productId)?.name} · ${item.quantity} unidades</p>`).join('');}
 document.addEventListener('click',event=>{const action=event.target.closest('[data-action]')?.dataset.action;if(action==='new-sale')location.hash='#facturacion';else if(action==='new-store')openStoreModal();else if(action==='edit-store')openStoreModal(event.target.closest('[data-store-id]')?.dataset.storeId);else if(action==='local-detail')showStoreDetail(event.target.closest('[data-store-id]')?.dataset.storeId);else if(action==='local-inventory'){const storeId=event.target.closest('[data-store-id]')?.dataset.storeId;if(storeId){state.storeId=storeId;location.hash='#inventario';render();}}else if(action==='local-transfer'){const storeId=event.target.closest('[data-store-id]')?.dataset.storeId;if(storeId){state.storeId=storeId;openTransfer();}}else if(action==='adjust-inventory')openAdjustment(event.target.closest('[data-product-id]')?.dataset.productId,event.target.closest('[data-store-id]')?.dataset.storeId);else if(action==='new-product')openProductEditor();else if(action==='edit-product'){const product=store.collection.products.find(item=>item.id===event.target.closest('[data-product-id]')?.dataset.productId);openProductEditor(product?.id);}else if(action==='toggle-product'){const product=store.collection.products.find(item=>item.id===event.target.closest('[data-product-id]')?.dataset.productId);if(product){setProductActive(store.collection,product.id,product.active===false);store.save();render();}}else if(action==='new-supplier')openSupplierModal();else if(action==='edit-supplier')openSupplierModal(event.target.closest('[data-supplier-id]')?.dataset.supplierId);else if(action==='new-customer')openCustomerModal();else if(action==='edit-customer')openCustomerModal(event.target.closest('[data-customer-id]')?.dataset.customerId);else if(action==='toggle-supplier'){const supplier=store.collection.suppliers.find(item=>item.id===event.target.closest('[data-supplier-id]')?.dataset.supplierId);if(supplier){supplier.active=supplier.active===false;store.save();render();}}else if(action==='product-detail'){const id=event.target.closest('[data-product-id]')?.dataset.productId;$('#modal-root').innerHTML=productDetail(store.collection,id);$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';}else if(action==='import-products')openImportModal();else if(action==='preview-import')previewImport();else if(action==='confirm-import')confirmImport();else if(['new-credit','new-expense','new-fuel','new-user'].includes(action))openModal(action.replace('new-',''));else if(action==='finish-sale')finishSaleLegacy();else if(action==='cancel-invoice'){state.cart=[];render();}else if(action==='add-product')addProduct(event.target.closest('[data-product-id]')?.dataset.productId);else if(action==='new-transfer')openTransfer();else if(action==='payment')showToast('Registra abonos desde el modulo de cartera.','info');if(event.target.dataset.productId&&!action)addProduct(event.target.dataset.productId);if(event.target.dataset.customerId){state.customerId=event.target.dataset.customerId;render();}if(event.target.dataset.payment){state.payment=event.target.dataset.payment;render();}if(event.target.closest('[data-transfer-add]'))addTransferItem();});
 document.addEventListener('click',event=>{if(event.target.dataset.remove){state.cart=state.cart.filter(item=>String(item.id)!==event.target.dataset.remove);render();}if(event.target.dataset.increase){const item=state.cart.find(entry=>entry.id===event.target.dataset.increase);const row=item&&inventoryEntry(store.collection,item.id,state.storeId);if(item&&row)item.quantity=Math.min(row.quantity,item.quantity+1);render();}if(event.target.dataset.decrease){const item=state.cart.find(entry=>entry.id===event.target.dataset.decrease);if(item)item.quantity=Math.max(1,item.quantity-1);render();}});
 document.addEventListener('input',event=>{if(event.target.id==='billing-product'){const available=document.querySelector('[data-billing-available]')?.checked!==false;$('#product-results').innerHTML=productResults(store.collection.products,state.storeId,store.collection,event.target.value,available);}if(event.target.id==='customer-search')$('#customer-results').innerHTML=customerResults(store.collection.customers.filter(item=>`${item.name} ${item.document} ${item.phone} ${item.id}`.toLowerCase().includes(event.target.value.toLowerCase())),state.customerId);if(event.target.matches('[data-filter="products"]'))updateProductViewState();if(event.target.dataset.quantity){const item=state.cart.find(entry=>String(entry.id)===event.target.dataset.quantity);const row=item&&inventoryEntry(store.collection,item.id,state.storeId);const requested=Number(event.target.value)||0;if(item&&row){item.quantity=Math.max(1,requested);item.quantityInvalid=requested>row.quantity;if(item.quantityInvalid)showToast('Stock insuficiente en este local.','error');render();}}if(event.target.dataset.price){const item=state.cart.find(entry=>String(entry.id)===event.target.dataset.price);if(item)item.priceVenta=Math.max(item.minimumPrice,Number(event.target.value)||0);}});
@@ -881,7 +947,7 @@ document.addEventListener('click',event=>{const button=event.target.closest('[da
 	}
 };if(actions[button.dataset.action])actions[button.dataset.action]();});
 document.addEventListener('click',event=>{const button=event.target.closest('[data-action="edit-sale"]');if(!button)return;setTimeout(()=>{const sale=store.collection.sales.find(item=>String(item.id)===String(button.dataset.saleId));const form=$('#sale-edit-modal');if(!sale||!form||form.querySelector('[name="items"]'))return;const input=document.createElement('input');input.type='hidden';input.name='items';input.value=JSON.stringify((sale.items||[]).map(item=>({productId:item.productId,quantity:Number(item.quantity||0),unitPrice:Number(item.unitPrice??item.price??0),price:Number(item.unitPrice??item.price??0),taxRate:Number(item.taxRate||0)})));form.append(input);const lines=document.createElement('div');lines.innerHTML='<h3>Productos</h3>'+((sale.items||[]).map((item,index)=>`<label class="input-label">Producto ${index+1}<select class="field" data-sale-product="${index}">${store.collection.products.map(product=>`<option value="${product.id}" ${product.id===item.productId?'selected':''}>${product.name}</option>`).join('')}</select><input class="field" type="number" min="1" value="${item.quantity}" data-sale-quantity="${index}" placeholder="Cantidad"><input class="field" type="number" min="0" value="${item.unitPrice??item.price??0}" data-sale-price="${index}" placeholder="Precio"></label>`).join(''));form.querySelector('button.primary')?.before(lines);const sync=()=>{const items=(sale.items||[]).map((item,index)=>({productId:$(`[data-sale-product="${index}"]`).value,quantity:Number($(`[data-sale-quantity="${index}"]`).value||0),unitPrice:Number($(`[data-sale-price="${index}"]`).value||0),price:Number($(`[data-sale-price="${index}"]`).value||0),taxRate:Number(item.taxRate||0)}));input.value=JSON.stringify(items);};form.addEventListener('input',sync);form.addEventListener('change',sync);},0);});
-document.addEventListener('submit',async event=>{if(!event.target.matches('.transfer-modal'))return;event.preventDefault();if(!transferDraft.length)return showToast('Agrega al menos un producto.','error');try{const transfer=createTransfer(store.collection,{originStoreId:transferField('origin').value,destinationStoreId:transferField('destination').value,items:transferDraft,createdBy:JSON.parse(localStorage.getItem('famimuebles-user')||'{}').username||'ERP'});await persistDomainRecord('transfers',transfer);store.save();$('#modal-root').innerHTML='';render();showToast('Traslado guardado en PostgreSQL.');}catch(error){showToast(error.message,'error');}});
+document.addEventListener('submit',async event=>{if(!event.target.matches('.transfer-modal'))return;event.preventDefault();if(!transferDraft.length)return showToast('Agrega al menos un producto.','error');const button=event.target.querySelector('button.primary');button.disabled=true;try{const result=await persistCatalogRecord('/api/shared-transfer',{originStoreId:transferField('origin').value,destinationStoreId:transferField('destination').value,items:transferDraft},'POST',transferRequestId);if(!result?.transfer||!Array.isArray(result.inventory))throw new Error('El servidor no confirmo el traslado.');for(const update of result.inventory){let row=inventoryEntry(store.collection,update.productId,update.storeId);if(!row){row={id:`TRANSFER-${result.transfer.sourceId}-${store.collection.inventoryByStore.length+1}`,productId:update.productId,storeId:update.storeId};store.collection.inventoryByStore.push(row);}row.quantity=Number(update.quantity);row.updatedAt=result.transfer.createdAt;}store.collection.transfers=(store.collection.transfers||[]).filter(item=>String(item.id)!==String(result.transfer.id));store.collection.transfers.push(result.transfer);store.save();$('#modal-root').innerHTML='';render();showToast(`Traslado ${result.transfer.id} realizado: inventario actualizado en ambos locales.`);}catch(error){button.disabled=false;showToast(error.message,'error');}});
 function addSaleItemToEditForm(form,sale){
 	if(!canPerform('Ventas','edit'))return;
 	const storeId=sale.storeId||sale.local_id||sale.local;
@@ -1119,6 +1185,35 @@ if(localStorage.getItem('famimuebles-theme')==='dark')document.body.classList.ad
 document.addEventListener('click',event=>{if(event.target.closest('[data-action="finish-sale"]')){event.stopImmediatePropagation();finishSale();}},true);
 document.addEventListener('click',event=>{if(event.target.closest('[data-action="new-user"]')){event.stopImmediatePropagation();openUserModal();}},true);
 document.addEventListener('click',event=>{const button=event.target.closest('[data-action="edit-user"]');if(button){event.stopImmediatePropagation();openEditUserModal(button.dataset.userId);}},true);
+document.addEventListener('click',async event=>{
+	const button=event.target.closest('[data-action="toggle-user-active"]');
+	if(!button)return;
+	event.stopImmediatePropagation();
+	const user=store.collection.users.find(item=>String(item.id)===String(button.dataset.userId)&&hasManagedUserAccount(item));
+	if(!user)return showToast('No se encontro la cuenta de usuario.','error');
+	const active=!isUserActive(user);
+	const action=active?'activar':'desactivar';
+	if(!window.confirm(`¿Deseas ${action} al usuario ${user.username||user.name}?`))return;
+	try{
+		await persistCatalogRecord('/api/users',{
+			id:user.id,
+			username:user.username||user.name,
+			displayName:user.displayName||user.name||user.username,
+			email:user.email||'',
+			phone:user.phone||'',
+			role:user.role,
+			storeId:user.storeId||'',
+			telegramId:user.telegramId||'',
+			active
+		},'PUT');
+		await hydrateUsers(store.state);
+		store.save();
+		render();
+		showToast(`Usuario ${active?'activado':'desactivado'} correctamente.`);
+	}catch(error){
+		showToast(error.message,'error');
+	}
+},true);
 document.addEventListener('submit',async event=>{if(!event.target.matches('#purchase-modal'))return;event.preventDefault();event.stopImmediatePropagation();if(!purchaseDraft.length)return showToast('Agrega al menos un producto.','error');try{const values=Object.fromEntries(new FormData(event.target));const purchase={id:generateId('COM',store.collection.purchases),...values,items:purchaseDraft,createdAt:new Date().toISOString(),status:'BORRADOR'};await persistDomainRecord('purchases',purchase);store.collection.purchases.push(purchase);$('#modal-root').innerHTML='';location.hash='#compras';render();showToast('Compra guardada en PostgreSQL.');}catch(error){showToast(error.message,'error');}},true);
 async function boot() {
 	const appContent = $('#app-content');
@@ -1262,8 +1357,6 @@ document.addEventListener('click', event => {
 		}, 0);
 	}
 });
-const userContactObserver=new MutationObserver(()=>{const form=document.querySelector('#edit-user-form');if(!form||form.querySelector('[data-user-contact-fields]'))return;const username=form.querySelector('[name="username"]')?.value;const user=store.collection.users.find(item=>(item.username||item.name)===username);const fields=document.createElement('div');fields.dataset.userContactFields='true';fields.innerHTML=`<label class="input-label">Correo<input class="field" name="email" type="email" value="${user?.email||''}"></label><label class="input-label">Telefono<input class="field" name="phone" type="tel" value="${user?.phone||''}"></label>`;form.querySelector('[name="password"]')?.parentElement.before(fields);});userContactObserver.observe(document.querySelector('#modal-root'),{childList:true,subtree:true});
-const userRemoteContactObserver=new MutationObserver(async()=>{const form=document.querySelector('#edit-user-form');if(!form||form.dataset.remoteContactLoaded)return;form.dataset.remoteContactLoaded='true';try{const payload=await api.get('/api/users',{headers:{'X-Tenant-ID':activeTenantId()},cache:'no-store'});const username=form.querySelector('[name="username"]')?.value;const user=(payload.items||[]).find(item=>item.username===username);if(user){form.querySelector('[name="email"]').value=user.email||'';form.querySelector('[name="phone"]').value=user.phone||'';}}catch(error){}});userRemoteContactObserver.observe(document.querySelector('#modal-root'),{childList:true,subtree:true});
 async function deleteProduct(productId){const product=store.collection.products.find(item=>String(item.id)===String(productId));if(!product||!window.confirm(`¿Eliminar el producto ${product.name}?`))return;try{await persistCatalogRecord(`/api/catalog/product/${encodeURIComponent(product.id)}`,{},'DELETE');store.collection.products=store.collection.products.filter(item=>item.id!==product.id);store.collection.inventoryByStore=store.collection.inventoryByStore.filter(item=>item.productId!==product.id);store.save();$('#modal-root').innerHTML='';render();showToast('Producto eliminado correctamente.');}catch(error){showToast(error.message,'error');}}
 function renderPurchaseDraft(){const container=$('.purchase-draft');if(!container)return;container.innerHTML=purchaseDraft.map((item,index)=>`<p>${store.collection.products.find(product=>product.id===item.productId)?.name} · ${item.quantity} · ${money(item.unitCost)} <button type="button" class="table-action" data-action="remove-purchase-line" data-purchase-line="${index}" aria-label="Quitar producto">×</button></p>`).join('');}
 document.addEventListener('click',event=>{if(event.target.closest('[data-action="add-purchase-line"]'))setTimeout(renderPurchaseDraft,0);const removeButton=event.target.closest('[data-action="remove-purchase-line"]');if(removeButton){purchaseDraft.splice(Number(removeButton.dataset.purchaseLine),1);renderPurchaseDraft();}});
