@@ -4,15 +4,15 @@ function showTransferDetail(transferId){const transfer=transferRecord(transferId
 function editTransfer(transferId){const transfer=transferRecord(transferId);if(!transfer)return showToast('No se encontro el traslado.','error');$('#modal-root').innerHTML=`<div class="modal-backdrop"><form class="modal" id="transfer-edit-form"><button type="button" class="modal-close">×</button><p class="eyebrow">INVENTARIO</p><h2>Editar traslado</h2><textarea class="field" name="data" rows="12" required>${JSON.stringify(transfer,null,2)}</textarea><button class="primary wide">Guardar cambios</button></form></div>`;$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';$('#transfer-edit-form').onsubmit=async event=>{event.preventDefault();try{const updated=JSON.parse(new FormData(event.target).get('data'));if(String(updated.id)!==String(transfer.id))throw new Error('El ID no puede cambiarse.');await persistDomainRecord('transfers',updated);store.collection.transfers=[...(store.collection.transfers||[]).filter(item=>String(item.id)!==String(updated.id)),updated];$('#modal-root').innerHTML='';render();showToast('Traslado actualizado correctamente.');}catch(error){showToast(error.message,'error');}};}
 async function deleteTransferRemote(transferId){if(!window.confirm('¿Eliminar este traslado?'))return;try{await persistCatalogRecord(`/api/domain/transfers/${encodeURIComponent(transferId)}`,{},'DELETE');store.collection.transfers=(store.collection.transfers||[]).filter(item=>String(item.id)!==String(transferId));$('#modal-root').innerHTML='';render();showToast('Traslado eliminado correctamente.');}catch(error){showToast(error.message,'error');}}
 import { store } from './data/store.js?v=20';
-import { hydrateState, hydrateStateWithRetry, hydrateCatalog, saveState, authHeaders, activeTenantId, isStaticDeployment } from './data/storage.js?v=26';
+import { hydrateState, hydrateStateWithRetry, hydrateCatalog, saveState, authHeaders, activeTenantId, isStaticDeployment } from './data/storage.js?v=28';
 import { generateId } from './utils/ids.js';
 import { currentRoute, startRouter } from './router.js?v=18';
 import { navItems, navGroups } from './components/sidebar.js?v=22';
 import { showToast } from './components/toast.js';
 import { table } from './components/tables.js';
 import { renderNotifications } from './components/notifications.js';
-import { renderDashboard } from './modules/dashboard-v3.js?v=30';
-import { canonicalSellerName, renderVentas, salesTable, salesSummary, normalizeSales, salesMonthKey, saleTimestamp, filterSales } from './modules/ventas.js?v=26';
+import { renderDashboard } from './modules/dashboard-v3.js?v=20261004105826';
+import { canonicalSellerName, renderVentas, salesTable, salesSummary, normalizeSales, salesMonthKey, saleTimestamp, filterSales, salesPaymentMethods } from './modules/ventas.js?v=27';
 import { renderFacturacion, cartTotal, productResults, customerResults } from './modules/facturacion.js?v=23';
 import { renderProductos, productTable, productMatches } from './modules/productos.js?v=22';
 import { renderInventario, inventoryContent } from './modules/inventario.js?v=20';
@@ -26,7 +26,7 @@ import { renderReportes, renderReportPreview, reportDefinition } from './modules
 import { renderConfiguracion } from './modules/configuracion.js?v=18';
 import { renderGastos } from './modules/gastos.js?v=19';
 import { renderGasolina } from './modules/gasolina.js?v=18';
-import { renderUsuarios } from './modules/usuarios.js?v=19';
+import { renderUsuarios } from './modules/usuarios.js?v=20';
 import { renderDescansos } from './modules/descansos.js?v=6';
 import { renderAuditoria, setAuditFilters } from './modules/auditoria.js?v=23';
 import { renderTalonarios, talonarioModal, setTalonarioFilters, currentTalonarioNumber, normalizeActiveTalonarios } from './modules/talonarios.js?v=17';
@@ -37,7 +37,6 @@ import { formatCurrency as money } from './utils/currency.js?v=18';
 
 let appHydrating = true;
 import { adjustStock, increaseStock, decreaseStock } from './services/inventory-service.js?v=18';
-import { createTransfer } from './services/transfer-service.js?v=18';
 import { createProduct, updateProduct, setProductActive, generateTestProducts, searchProducts, categoryFromProductName } from './services/product-service.js?v=21';
 import { productDetail } from './modules/product-detail.js?v=14';
 import { importPreview, importPreviewRows, importProducts } from './modules/product-import.js?v=15';
@@ -45,18 +44,20 @@ import { renderProveedores, supplierTable } from './modules/proveedores.js?v=15'
 import { renderCompras, purchaseTable, purchaseSummary } from './modules/compras.js?v=22';
 import { purchaseTotal, createPurchase, orderPurchase, receivePurchase, receiveTalonarioPurchase, cancelPurchase } from './services/purchase-service.js?v=16';
 import { purchaseDetail } from './modules/purchase-detail.js?v=16';
-import { renderCuentasPorPagar, payableTable } from './modules/cuentas-por-pagar.js?v=15';
+import { renderCuentasPorPagar, payableTable } from './modules/cuentas-por-pagar.js?v=20261004-payable-supplier-filter-1';
 import { accountsPayableDetail } from './modules/accounts-payable-detail.js?v=14';
-import { calculateBalance, registerPayment as registerSupplierPayment, updateAccountPayableStatus } from './services/accounts-payable-service.js?v=14';
+import { calculateBalance, filterAccountsPayable, normalizePayableSuppliers, registerPayment as registerSupplierPayment, updateAccountPayableStatus } from './services/accounts-payable-service.js?v=20261004-payable-supplier-filter-1';
 import { renderOperaciones, advancedModal, nextAdvancedId } from './modules/operaciones.js?v=2';
 import { renderParidad, payrollModal, payrollConfigModal, countModal, sistecreditoModal, formatParityResult, sistecreditoSummary, sistecreditoTable } from './modules/paridad.js?v=4';
 import { api } from './services/api-client.js?v=8';
 
 const state = { cart:[], payment:'Efectivo', customerId:'CLI-00001', storeId:store.collection.stores[0]?.id || '', transport:0, transportDestination:'', transportNote:'' };
 let sharedRefreshInFlight = false;
+let sharedRefreshTimer = null;
+let automaticSharedRefreshEnabled = false;
 let inventoryViewState = { store:'all', query:'', active:'active', status:'all', sort:'name', version:0 };
 let creditViewState = { filter:'all' };
-let salesViewState = { query:'', store:'all', month:`${new Date().getFullYear()}-${String(new Date().getMonth()+1).padStart(2,'0')}`, payment:'all', status:'all', version:0 };
+let salesViewState = { query:'', store:'all', month:`${new Date().getFullYear()}-${String(new Date().getMonth()+1).padStart(2,'0')}`, payment:'all', version:0 };
 let productViewState = { query:'', store:'all', active:'active', version:0 };
 let activeCreditPaymentId = '';
 function syncCustomerBalances(){
@@ -84,6 +85,7 @@ function syncCustomerBalances(){
 	});
 }
 const transferDraft = [];
+let transferRequestId = '';
 let productPage = 1;
 let purchaseDraft = [];
 let userPermissions = null;
@@ -158,8 +160,8 @@ async function loadRemoteCatalog(){ try { const catalog=await fetchOperationalDa
 function refreshProducts(){ const query=$('[data-filter="products"]')?.value||'',storeId=$('[data-product-store]')?.value||'all',active=$('[data-product-active]')?.value||'all',limit=50,stockMap=new Map(store.collection.products.map(product=>[product.id,store.collection.inventoryByStore.filter(row=>row.productId===product.id&&(storeId==='all'||String(row.storeId)===String(storeId))).reduce((sum,row)=>sum+Number(row.quantity||0),0)]));let items=store.collection.products.filter(product=>productMatches(product,{query,active,stockMap}));const pages=Math.max(1,Math.ceil(items.length/limit));productPage=Math.min(productPage,pages);if($('#products-table'))$('#products-table').innerHTML=productTable(items,store.collection.stores,limit,productPage,store.collection,storeId);if($('[data-product-count]'))$('[data-product-count]').textContent=`${items.length} productos`;if($('[data-product-page-label]'))$('[data-product-page-label]').textContent=`Pagina ${productPage} de ${pages}`;}
 function clearProductFilters(){ const defaults={'[data-filter="products"]':'','[data-product-store]':'all','[data-product-active]':'active'};Object.entries(defaults).forEach(([selector,value])=>{const element=$(selector);if(element)element.value=value;});productPage=1;refreshProducts();}
 function modal(title, fields, onSubmit){ $('#modal-root').innerHTML=`<div class="modal-backdrop"><form class="modal" id="data-modal"><button type="button" class="modal-close">×</button><p class="eyebrow">FAMIMUEBLES ERP</p><h2>${title}</h2>${fields.map(field=>`<label class="input-label">${field.label}<input class="field" name="${field.name}" type="${field.type||'text'}" value="${field.value||''}" ${field.required===false?'':'required'}></label>`).join('')}<button class="primary wide">Guardar</button></form></div>`; $('.modal-close').onclick=()=>$('#modal-root').innerHTML=''; $('#data-modal').onsubmit=async event=>{event.preventDefault();const button=event.target.querySelector('button.primary');button.disabled=true;try{await onSubmit(Object.fromEntries(new FormData(event.target)));}catch(error){showToast(error.message,'error');}finally{button.disabled=false;}}; }
-async function persistCatalogRecord(path, record, method='POST'){ const requestId=method==='POST'?(globalThis.crypto?.randomUUID?crypto.randomUUID():`${path}-${Date.now()}-${Math.random()}`):''; const options={headers:{'X-Tenant-ID':activeTenantId(),...(requestId?{'Idempotency-Key':requestId}: {})}}; const body={...record,...(requestId?{requestId}:{}),tenantId:activeTenantId()}; try { return method==='PUT' ? await api.put(path,body,options) : method==='DELETE' ? await api.delete(path,body,options) : await api.post(path,body,options); } catch(error) { if(error.status===401){localStorage.removeItem('famimuebles-auth-token');localStorage.removeItem('famimuebles-user');throw new Error('La sesion expiro. Inicia sesion nuevamente para guardar cambios.');} throw error; } }
-const remoteDomainCollections=['customers','suppliers','purchases','credits','expenses','accountsPayable','supplierPayments','customerAccounts','returns','supplierReturns','stockCounts','reservations','warranties','damagedStock','cashSessions','cashMovements','bankAccounts','quotes','orders','deliveries','creditNotes','talonarios','talonarioJustifications'];
+async function persistCatalogRecord(path, record, method='POST', stableRequestId=''){ const requestId=method==='POST'?(stableRequestId||(globalThis.crypto?.randomUUID?crypto.randomUUID():`${path}-${Date.now()}-${Math.random()}`)):''; const options={headers:{'X-Tenant-ID':activeTenantId(),...(requestId?{'Idempotency-Key':requestId}: {})}}; const body={...record,...(requestId?{requestId}:{}),tenantId:activeTenantId()}; try { return method==='PUT' ? await api.put(path,body,options) : method==='DELETE' ? await api.delete(path,body,options) : await api.post(path,body,options); } catch(error) { if(error.status===401){localStorage.removeItem('famimuebles-auth-token');localStorage.removeItem('famimuebles-user');throw new Error('La sesion expiro. Inicia sesion nuevamente para guardar cambios.');} throw error; } }
+const remoteDomainCollections=['customers','suppliers','purchases','credits','expenses','accountsPayable','supplierPayments','customerAccounts','returns','supplierReturns','stockCounts','reservations','warranties','damagedStock','cashSessions','cashMovements','bankAccounts','quotes','orders','deliveries','creditNotes','transfers','talonarios','talonarioJustifications'];
 async function persistDomainRecord(collection, record){
 	const path=`/api/domain/${encodeURIComponent(collection)}`;
 	const payload={...record,tenantId:activeTenantId()};
@@ -298,55 +300,120 @@ async function refreshTalonarioSalesAlerts(){
 	}
 	store.save();
 }
-const criticalDomainCollections = new Set(['customers','suppliers','purchases','accountsPayable','supplierPayments','talonarios','talonarioJustifications','credits','expenses']);
-async function loadDomainCollection(state, collection, timeout=5000){
-	try {
-		const payload=await api.get(`/api/domain/${encodeURIComponent(collection)}`,{headers:{'X-Tenant-ID':activeTenantId()},cache:'no-store',timeout});
-		const items=Array.isArray(payload.items)?payload.items:[];
-		if(items.length||!Array.isArray(state[collection])||state[collection].length===0)state[collection]=items;
-		return true;
-	} catch(error) {
-		console.warn(`No se pudo cargar ${collection}:`,error.message);
-		return false;
+const criticalDomainCollections = new Set(['customers','suppliers','purchases','accountsPayable','supplierPayments','talonarios','talonarioJustifications','credits','expenses','transfers']);
+async function loadDomainCollection(state, collection, timeout=5000, retries=0){
+	if(collection!=='transfers'&&Array.isArray(state[collection])&&state[collection].length)return true;
+	for(let attempt=0;attempt<=retries;attempt++){
+		try {
+			const payload=await api.get(`/api/domain/${encodeURIComponent(collection)}`,{headers:{'X-Tenant-ID':activeTenantId()},cache:'no-store',timeout});
+			const items=Array.isArray(payload.items)?payload.items:[];
+			if(items.length||!Array.isArray(state[collection])||state[collection].length===0)state[collection]=items;
+			return true;
+		} catch(error) {
+			const retryable=error.status===0||[408,429,502,503,504].includes(error.status);
+			if(attempt<retries&&retryable){
+				await new Promise(resolve=>setTimeout(resolve,500*(attempt+1)));
+				continue;
+			}
+			console.warn(`No se pudo cargar ${collection}:`,error.message);
+			return false;
+		}
 	}
+	return false;
 }
-async function hydrateDomainCollections(state){
+async function loadDomainCollections(state,collections,timeout=5000,concurrency=3,retries=0){
+	const results=[];
+	for(let index=0;index<collections.length;index+=concurrency){
+		const batch=collections.slice(index,index+concurrency);
+		results.push(...await Promise.all(batch.map(collection=>loadDomainCollection(state,collection,timeout,retries))));
+	}
+	return results;
+}
+function hydrateSecondaryDomainCollections(state, renderWhenLoaded=true, requireComplete=false){
+	const deferredTalonarios=['talonarios','talonarioJustifications'];
+	const deferredAttendance=['workSchedules','staffAbsences'];
+	const secondary=remoteDomainCollections.filter(collection=>!criticalDomainCollections.has(collection)&&!deferredTalonarios.includes(collection)&&!deferredAttendance.includes(collection));
+	return loadDomainCollections(state,secondary,3000,3).then(results=>{
+		if(requireComplete&&results.some(result=>!result))throw new Error('No se pudieron cargar todas las colecciones compartidas.');
+		if(renderWhenLoaded&&currentRoute()!=='dashboard')render();
+		return results;
+	});
+}
+async function hydrateDomainCollections(state, loadSecondary=true, allowSideEffects=true, requireComplete=false){
  const deferredTalonarios=['talonarios','talonarioJustifications'];
  const deferredAttendance=['workSchedules','staffAbsences'];
  const critical=remoteDomainCollections.filter(collection=>criticalDomainCollections.has(collection)&&!deferredTalonarios.includes(collection));
- const secondary=remoteDomainCollections.filter(collection=>!criticalDomainCollections.has(collection)&&!deferredTalonarios.includes(collection)&&!deferredAttendance.includes(collection));
-	await Promise.all(critical.map(collection=>loadDomainCollection(state,collection,5000)));
-	const talonarioResults=await Promise.all(deferredTalonarios.map(collection=>loadDomainCollection(state,collection,10000)));
+ const payableCollections=['suppliers','accountsPayable'].filter(collection=>critical.includes(collection));
+ const payableResults=await loadDomainCollections(state,payableCollections,10000,2,1);
+ if(requireComplete&&payableResults.some(result=>!result))throw new Error('No se pudieron cargar todas las cuentas por pagar.');
+ const normalizedPayables=normalizePayableSuppliers(state);
+ if(allowSideEffects&&normalizedPayables.length){
+  store.save();
+  Promise.allSettled(normalizedPayables.map(account=>persistDomainRecord('accountsPayable',account))).then(results=>results.filter(result=>result.status==='rejected').forEach(result=>console.warn('No se pudo normalizar el proveedor de una cuenta por pagar:',result.reason?.message||result.reason)));
+ }
+ if(loadSecondary&&['dashboard','cuentas-por-pagar'].includes(currentRoute()))render();
+ const remainingCritical=critical.filter(collection=>!payableCollections.includes(collection));
+ const loadResults=await Promise.all([
+  loadDomainCollections(state,[...remainingCritical,...deferredAttendance],5000,3),
+  loadDomainCollections(state,deferredTalonarios,5000,2)
+ ]);
+ if(requireComplete&&loadResults.flat().some(result=>!result))throw new Error('No se pudieron cargar todas las colecciones compartidas.');
+ const talonarioResults=loadResults[1];
 	if(talonarioResults[0]){
+		state.talonarios=normalizeActiveTalonarios(state.talonarios||[]);
+	}
+	if(talonarioResults[0]&&allowSideEffects){
 		store.collection.talonarios=normalizeActiveTalonarios(store.collection.talonarios||[]);
 		Promise.resolve().then(async()=>{
 			await seedHistoricalTalonarios(state);
-			await removeActiveTalonarioDuplicates();
 			await seedConfiguredTalonariosActivos();
 			store.collection.talonarios=normalizeActiveTalonarios(store.collection.talonarios||[]);
 			await refreshTalonarioSalesAlerts();
 			if(currentRoute()==='talonarios')render();
 		}).catch(error=>console.warn('No se pudieron preparar los talonarios:',error.message));
 	}
-	Promise.all(secondary.map(collection=>loadDomainCollection(state,collection,3000))).then(()=>{if(currentRoute()!=='dashboard')render();});
-	 await Promise.all(deferredAttendance.map(collection=>loadDomainCollection(state,collection,3000)));
+	if(loadSecondary&&['dashboard','cuentas-por-pagar'].includes(currentRoute()))render();
+	if(loadSecondary)hydrateSecondaryDomainCollections(state);
 	return state;
+}
+function isUserActive(user){
+	const active=user?.active;
+	if(active!==undefined&&active!==null&&active!==''){
+		return ![false,0,'0','false','inactivo','inactive','no'].includes(typeof active==='string'?active.trim().toLowerCase():active);
+	}
+	return !['inactivo','inactive','false','0','no'].includes(String(user?.status||user?.estado||'').trim().toLowerCase());
+}
+function hasManagedUserAccount(user){
+	return user?.managedAccount===true;
 }
 async function hydrateUsers(state){
 	const normalize=(item,source)=>{
-		const name=String(item?.name||item?.nombre||item?.username||item?.usuario||item?.empleado||'').trim();
 		const username=String(item?.username||item?.usuario||'').trim();
+		const displayName=String(item?.displayName||item?.display_name||item?.name||item?.nombre||item?.empleado||'').trim();
+		const name=displayName||(/^telegram_\d+$/i.test(username)?'Usuario sin nombre':username);
 		const id=String(item?.id||item?.id_telegram||item?.telegram_id||item?.usuario_id||'').trim();
-		return {...item,id,name:name||username||id||'Usuario sin nombre',username,email:String(item?.email||item?.correo||'').trim(),phone:String(item?.phone||item?.telefono||'').trim(),role:String(item?.role||item?.rol||'VENDEDOR').trim().toUpperCase(),status:source==='auth'?(item?.active?'Activo':'Inactivo'):String(item?.status||item?.estado||'Activo')};
+		const active=source==='auth'?isUserActive(item):isUserActive({...item,active:item?.active??item?.activo});
+		return {...item,id,name:name||username||id||'Usuario sin nombre',username,email:String(item?.email||item?.correo||'').trim(),phone:String(item?.phone||item?.telefono||'').trim(),role:String(item?.role||item?.rol||'VENDEDOR').trim().toUpperCase(),active,managedAccount:source==='auth'||item?.managedAccount===true,status:active?'Activo':'Inactivo'};
 	};
 	const merge=(items)=>{
 		const users=new Map();
 		items.forEach(({item,source})=>{
 			const user=normalize(item,source);
-			const identity=String(user.name||user.username||user.id).normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,' ').trim().toLowerCase();
+			const appIdentity=String(user.telegramId||user.telegram_id||user.id_telegram||'').trim();
+			const identity=appIdentity?`telegram:${appIdentity}`:String(user.username||user.name||user.id).normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,' ').trim().toLowerCase();
 			if(!identity)return;
 			const existing=users.get(identity)||{};
-			users.set(identity,{...existing,...user,email:user.email||existing.email||'',phone:user.phone||existing.phone||''});
+			const merged={...existing,...user,email:user.email||existing.email||'',phone:user.phone||existing.phone||''};
+			const appRecord=user.appSource?user:existing.appSource?existing:null;
+			if(appRecord&&source==='auth'){
+				merged.active=appRecord.active;
+				merged.status=appRecord.status;
+				merged.role=appRecord.role;
+				merged.name=appRecord.name;
+				merged.displayName=appRecord.displayName;
+				merged.appSource=appRecord.appSource;
+			}
+			users.set(identity,merged);
 		});
 		return [...users.values()];
 	};
@@ -362,9 +429,12 @@ async function hydrateUsers(state){
 	return state;
 }
 async function hydrateCurrentUserPermissions(){const user=JSON.parse(localStorage.getItem('famimuebles-user')||'{}');if(!user.id){userPermissions=[];return;}try{const payload=await api.get(`/api/users/${encodeURIComponent(user.id)}/permissions`,{headers:{'X-Tenant-ID':activeTenantId()},cache:'no-store',timeout:4000});userPermissions=Array.isArray(payload.items)?payload.items:[];}catch(error){userPermissions=[];}}
-async function refreshSharedState(){
-	if(document.querySelector('.modal-backdrop') || sharedRefreshInFlight)return;
+async function refreshSharedState(automatic=false){
+	if(document.querySelector('.modal-backdrop') || sharedRefreshInFlight)return false;
 	sharedRefreshInFlight=true;
+	const previousState=store.state;
+	const viewSnapshot=captureViewState();
+	let replacedState=false;
 	try{
 		const route=currentRoute();
 		const inventoryVersion=inventoryViewState.version;
@@ -374,21 +444,34 @@ async function refreshSharedState(){
 		const productVersion=productViewState.version;
 		const productFilters=route==='productos' ? {...productViewState} : null;
 		const normalized=await hydrateState();
-		if(!normalized)return;
-		store.state=normalized;
-		await hydrateCatalog(store.state);
-		await hydrateDomainCollections(store.state);
-		repairTalonario15301().catch(error=>console.warn('No se pudo corregir el talonario 15301-15350:',error.message));
-		refreshTalonarioSalesAlerts().then(()=>{if(currentRoute()==='talonarios')render();}).catch(error=>console.warn('No se pudieron actualizar las alertas de talonarios:',error.message));
-		await hydrateUsers(store.state);
+		if(!normalized)return false;
+		if(automatic){
+			await hydrateCatalog(normalized,false,true);
+			await hydrateDomainCollections(normalized,false,false,true);
+			await hydrateSecondaryDomainCollections(normalized,false,true);
+			await hydrateUsers(normalized);
+			if(document.querySelector('.modal-backdrop') || document.activeElement?.matches('input,select,textarea'))return true;
+			store.state=normalized;
+			replacedState=true;
+		}else{
+			store.state=normalized;
+			replacedState=true;
+			await hydrateCatalog(store.state);
+			await hydrateDomainCollections(store.state);
+			repairTalonario15301().catch(error=>console.warn('No se pudo corregir el talonario 15301-15350:',error.message));
+			refreshTalonarioSalesAlerts().then(()=>{if(currentRoute()==='talonarios')render();}).catch(error=>console.warn('No se pudieron actualizar las alertas de talonarios:',error.message));
+			await hydrateUsers(store.state);
+		}
 		normalizePayableSuppliers(store.state);
 		syncCustomerBalances();
-		try {
-			await parityPost('/api/shared-payment', { kind:'mora', amount:0 });
-			const overdue = await api.get('/api/parity/mora', {headers:{'X-Tenant-ID':activeTenantId()}, cache:'no-store'});
-			const existing = new Set(store.collection.notifications.map(item=>item.key));
-			(overdue.items || []).forEach(item=>{ const key=`overdue-quota:${item.id}`; if(!existing.has(key))store.collection.notifications.push({id:`MORA-${item.id}`,key,text:`Cuota vencida de ${item.cliente || 'cliente'} por ${money(Number(item.valor_programado || 0) - Number(item.valor_pagado || 0))}.`,type:'danger',action:'credit-payment',targetId:item.credito_id,read:false,createdAt:new Date().toISOString()}); });
-		} catch (error) { }
+		if(!automatic){
+			try {
+				await parityPost('/api/shared-payment', { kind:'mora', amount:0 });
+				const overdue = await api.get('/api/parity/mora', {headers:{'X-Tenant-ID':activeTenantId()}, cache:'no-store'});
+				const existing = new Set(store.collection.notifications.map(item=>item.key));
+				(overdue.items || []).forEach(item=>{ const key=`overdue-quota:${item.id}`; if(!existing.has(key))store.collection.notifications.push({id:`MORA-${item.id}`,key,text:`Cuota vencida de ${item.cliente || 'cliente'} por ${money(Number(item.valor_programado || 0) - Number(item.valor_pagado || 0))}.`,type:'danger',action:'credit-payment',targetId:item.credito_id,read:false,createdAt:new Date().toISOString()}); });
+			} catch (error) { }
+		}
 		if(!store.collection.stores.some(item=>String(item.id)===String(state.storeId)))state.storeId=resolveActiveStore();
 		if(inventoryFilters && currentRoute()==='inventario'){
 			const currentFilters=inventoryViewState.version===inventoryVersion ? inventoryFilters : inventoryViewState;
@@ -419,14 +502,91 @@ async function refreshSharedState(){
 			render();
 			restoreViewState(viewSnapshot);
 		}
+		return true;
 	}catch(error){
+		if(replacedState){
+			store.state=previousState;
+			render();
+			restoreViewState(viewSnapshot);
+		}
 		console.warn('No se pudo actualizar la informacion compartida:',error.message);
+		return false;
 	}finally{
 		sharedRefreshInFlight=false;
 	}
 }
-function openUserModal(){ const stores=store.collection.stores.map(item=>`<option value="${item.id}">${item.name}</option>`).join('');$('#modal-root').innerHTML=`<div class="modal-backdrop"><form class="modal" id="user-form"><button type="button" class="modal-close">x</button><p class="eyebrow">ADMINISTRACION</p><h2>Nuevo usuario</h2><label class="input-label">Usuario<input class="field" name="username" minlength="3" required></label><label class="input-label">Correo<input class="field" name="email" type="email"></label><label class="input-label">Telefono<input class="field" name="phone" type="tel"></label><label class="input-label">Clave<input class="field" name="password" type="password" minlength="8" required></label><label class="input-label">Rol<select class="field" name="role"><option>VENDEDOR</option><option>CAJERO</option><option>BODEGA</option><option>SUPERVISOR</option><option>CONTADOR</option><option>GERENTE</option><option>ADMINISTRADOR</option></select></label><label class="input-label">Local<select class="field" name="storeId"><option value="">Todos</option>${stores}</select></label><p class="danger-text" data-user-error></p><button class="primary wide">Crear usuario</button></form></div>`;$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';$('#user-form').onsubmit=async event=>{event.preventDefault();const form=event.target;try{await persistCatalogRecord('/api/users',Object.fromEntries(new FormData(form)));const payload=await api.get('/api/users',{headers:{'X-Tenant-ID':activeTenantId()}});store.collection.users=payload.items||[];$('#modal-root').innerHTML='';render();showToast('Usuario creado correctamente.');}catch(error){form.querySelector('[data-user-error]').textContent=error.message;}}; }
-function openEditUserModal(userId){ const user=store.collection.users.find(item=>String(item.id)===String(userId));if(!user)return;const stores=store.collection.stores.map(item=>`<option value="${item.id}" ${String(item.id)===String(user.storeId)?'selected':''}>${item.name}</option>`).join('');$('#modal-root').innerHTML=`<div class="modal-backdrop"><form class="modal" id="edit-user-form"><button type="button" class="modal-close">x</button><p class="eyebrow">ADMINISTRACION</p><h2>Editar usuario</h2><label class="input-label">Usuario<input class="field" name="username" minlength="3" value="${user.username||user.name||''}" required></label><label class="input-label">Nueva clave<input class="field" name="password" type="password" minlength="8" placeholder="Dejar vacia para conservarla"></label><label class="input-label">Rol<select class="field" name="role">${['VENDEDOR','CAJERO','BODEGA','SUPERVISOR','CONTADOR','GERENTE','ADMINISTRADOR'].map(role=>`<option ${role===String(user.role).toUpperCase()?'selected':''}>${role}</option>`).join('')}</select></label><label class="input-label">Local<select class="field" name="storeId"><option value="">Todos</option>${stores}</select></label><label class="input-label">Estado<select class="field" name="active"><option value="true" ${user.active!==false?'selected':''}>Activo</option><option value="false" ${user.active===false?'selected':''}>Inactivo</option></select></label><p class="danger-text" data-user-error></p><button class="primary wide">Guardar cambios</button></form></div>`;$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';$('#edit-user-form').onsubmit=async event=>{event.preventDefault();const form=event.target;const values=Object.fromEntries(new FormData(form));values.id=user.id;values.active=values.active==='true';if(!values.password)delete values.password;try{await persistCatalogRecord('/api/users',values,'PUT');await hydrateUsers(store.state);$('#modal-root').innerHTML='';render();showToast('Usuario actualizado correctamente.');}catch(error){form.querySelector('[data-user-error]').textContent=error.message;}}; }
+function stopAutomaticSharedRefresh(){
+	automaticSharedRefreshEnabled=false;
+	if(sharedRefreshTimer){
+		clearInterval(sharedRefreshTimer);
+		sharedRefreshTimer=null;
+	}
+}
+async function runAutomaticSharedRefresh(){
+	if(!automaticSharedRefreshEnabled || document.hidden || navigator.onLine===false || document.querySelector('.modal-backdrop') || sharedRefreshInFlight)return;
+	const activeElement=document.activeElement;
+	if(activeElement?.matches('input,select,textarea'))return;
+	const refreshed=await refreshSharedState(true);
+	if(!refreshed){
+		stopAutomaticSharedRefresh();
+		console.warn('Se pauso la actualizacion automatica. La sincronizacion manual sigue disponible.');
+		showToast('Se pauso la actualizacion automatica. Puedes actualizar con el boton de sincronizacion.','error');
+	}
+}
+function startAutomaticSharedRefresh(){
+	if(isStaticDeployment() || sharedRefreshTimer)return;
+	automaticSharedRefreshEnabled=true;
+	sharedRefreshTimer=setInterval(runAutomaticSharedRefresh,30000);
+	document.addEventListener('visibilitychange',()=>{
+		if(!document.hidden)runAutomaticSharedRefresh();
+	});
+	window.addEventListener('online',runAutomaticSharedRefresh);
+}
+function openUserModal(){
+	const stores=store.collection.stores.map(item=>`<option value="${item.id}">${item.name}</option>`).join('');
+	$('#modal-root').innerHTML=`<div class="modal-backdrop"><form class="modal" id="user-form"><button type="button" class="modal-close">x</button><p class="eyebrow">ADMINISTRACION</p><h2>Nuevo usuario</h2><label class="input-label">Usuario<input class="field" name="username" minlength="3" required></label><label class="input-label">Correo<input class="field" name="email" type="email"></label><label class="input-label">Telefono<input class="field" name="phone" type="tel"></label><label class="input-label">Clave<input class="field" name="password" type="password" minlength="8" required></label><label class="input-label">Rol<select class="field" name="role"><option>VENDEDOR</option><option>CAJERO</option><option>BODEGA</option><option>SUPERVISOR</option><option>CONTADOR</option><option>GERENTE</option><option>ADMINISTRADOR</option></select></label><label class="input-label">Local<select class="field" name="storeId"><option value="">Todos</option>${stores}</select></label><p class="danger-text" data-user-error></p><button class="primary wide">Crear usuario</button></form></div>`;
+	$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';
+	$('#user-form').onsubmit=async event=>{
+		event.preventDefault();
+		const form=event.target;
+		try{
+			await persistCatalogRecord('/api/users',Object.fromEntries(new FormData(form)));
+			await hydrateUsers(store.state);
+			store.save();
+			$('#modal-root').innerHTML='';
+			render();
+			showToast('Usuario creado correctamente.');
+		}catch(error){
+			form.querySelector('[data-user-error]').textContent=error.message;
+		}
+	};
+}
+function openEditUserModal(userId){
+	const user=store.collection.users.find(item=>String(item.id)===String(userId)&&hasManagedUserAccount(item));
+	if(!user)return;
+	const stores=store.collection.stores.map(item=>`<option value="${item.id}" ${String(item.id)===String(user.storeId)?'selected':''}>${item.name}</option>`).join('');
+	$('#modal-root').innerHTML=`<div class="modal-backdrop"><form class="modal" id="edit-user-form"><button type="button" class="modal-close">x</button><p class="eyebrow">ADMINISTRACION</p><h2>Editar usuario</h2><label class="input-label">Usuario<input class="field" name="username" minlength="3" value="${user.username||user.name||''}" required></label><label class="input-label">Correo<input class="field" name="email" type="email" value="${user.email||''}"></label><label class="input-label">Telefono<input class="field" name="phone" type="tel" value="${user.phone||''}"></label><label class="input-label">Nueva clave<input class="field" name="password" type="password" minlength="8" placeholder="Dejar vacia para conservarla"></label><label class="input-label">Rol<select class="field" name="role">${['VENDEDOR','CAJERO','BODEGA','SUPERVISOR','CONTADOR','GERENTE','ADMINISTRADOR'].map(role=>`<option ${role===String(user.role).toUpperCase()?'selected':''}>${role}</option>`).join('')}</select></label><label class="input-label">Local<select class="field" name="storeId"><option value="">Todos</option>${stores}</select></label><label class="input-label">Estado<select class="field" name="active"><option value="true" ${isUserActive(user)?'selected':''}>Activo</option><option value="false" ${!isUserActive(user)?'selected':''}>Inactivo</option></select></label><p class="danger-text" data-user-error></p><button class="primary wide">Guardar cambios</button></form></div>`;
+	$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';
+	$('#edit-user-form').onsubmit=async event=>{
+		event.preventDefault();
+		const form=event.target;
+		const values=Object.fromEntries(new FormData(form));
+		values.id=user.id;
+		values.active=values.active==='true';
+		values.displayName=user.displayName||user.name||user.username||values.username;
+		if(!values.password)delete values.password;
+		try{
+			await persistCatalogRecord('/api/users',values,'PUT');
+			await hydrateUsers(store.state);
+			store.save();
+			$('#modal-root').innerHTML='';
+			render();
+			showToast('Usuario actualizado correctamente.');
+		}catch(error){
+			form.querySelector('[data-user-error]').textContent=error.message;
+		}
+	};
+}
 function authScreen(configured, telegramBotUsername=''){ const telegramMarkup=telegramBotUsername?'<div class="telegram-login-wrap"><p class="muted">Acceso seguro con Telegram</p><div id="telegram-login"></div><p class="muted">Tu Telegram debe estar vinculado a un usuario ERP activo.</p></div>':''; document.body.innerHTML=`<main class="auth-screen"><section class="auth-card"><p class="eyebrow">FAMIMUEBLES ERP</p><h1>${configured?'Iniciar sesion':'Configurar administrador'}</h1><p class="muted">${configured?'Accede a tu empresa para continuar.':'Crea el primer usuario administrador de esta instalacion.'}</p>${telegramMarkup}<form id="auth-form"><label class="input-label">Usuario<input class="field" name="username" minlength="3" required autocomplete="username"></label><label class="input-label">Clave<input class="field" name="password" type="password" minlength="8" required autocomplete="current-password"></label><button class="primary wide">${configured?'Entrar':'Crear administrador'}</button><p id="auth-error" class="danger-text" role="alert"></p></form></section></main>`; if(telegramBotUsername){window.onTelegramAuth=async user=>{try{const payload=await api.post('/api/auth/telegram',user);localStorage.setItem('famimuebles-auth-token',payload.token);localStorage.setItem('famimuebles-user',JSON.stringify(payload.user));location.reload();}catch(error){const message=document.querySelector('#auth-error');if(message)message.textContent=error.message;}};const script=document.createElement('script');script.src='https://telegram.org/js/telegram-widget.js?22';script.async=true;script.dataset.telegramLogin=telegramBotUsername;script.dataset.size='large';script.dataset.userpic='false';script.dataset.requestAccess='write';script.dataset.onauth='onTelegramAuth(user)';document.querySelector('#telegram-login').appendChild(script);}$('#auth-form').onsubmit=async event=>{event.preventDefault();const values=Object.fromEntries(new FormData(event.target));const endpoint=configured?'/api/auth/login':'/api/auth/setup';try{const payload=await api.post(endpoint,values);if(payload.token)localStorage.setItem('famimuebles-auth-token',payload.token);localStorage.setItem('famimuebles-user',JSON.stringify(payload.user||{username:values.username,role:'ADMINISTRADOR'}));location.reload();}catch(error){document.querySelector('#auth-error').textContent=error.message;}}; }
 function openNotifications(){ const pending=store.collection.notifications.filter(item=>!item.read); $('#modal-root').innerHTML='<div class="modal-backdrop"><section class="modal notification-modal"><button type="button" class="modal-close">×</button><p class="eyebrow">CENTRO DE AVISOS</p><h2>Notificaciones</h2><div class="notification-list">'+renderNotifications(pending)+'</div><button class="outline wide" data-action="mark-notifications-read" '+(!pending.length?'disabled':'')+'>Marcar como leidas</button></section></div>'; $('.modal-close').onclick=()=>$('#modal-root').innerHTML=''; }
 function creditPaymentModal(creditId){ const credit=store.collection.credits.find(item=>item.id===creditId); if(!credit)return; const balance=Math.max(0,Number(credit.total||credit.originalAmount||0)-Number(credit.initial||credit.downPayment||0)-Number(credit.paid||0)); $('#modal-root').innerHTML=`<div class="modal-backdrop"><form class="modal" id="credit-payment-form"><button type="button" class="modal-close">×</button><p class="eyebrow">CARTERA</p><h2>Registrar abono</h2><p>Cliente: <strong>${credit.customer||credit.cliente||'Sin nombre'}</strong></p><p>Saldo pendiente: <strong>${money(balance)}</strong></p><label class="input-label">Monto<input class="field" name="amount" type="number" min="1" max="${balance}" required></label><label class="input-label">Numero de recibo<input class="field" name="receiptNumber" required placeholder="Recibo del abono"></label><label class="input-label">Metodo<select class="field" name="method"><option>Efectivo</option><option>Transferencia</option><option>Consignacion</option><option>Tarjeta</option></select></label><button class="primary wide">Guardar abono</button></form></div>`; $('.modal-close').onclick=()=>$('#modal-root').innerHTML=''; $('#credit-payment-form').onsubmit=event=>{event.preventDefault();try{const values=Object.fromEntries(new FormData(event.target));registerPayment(store.collection,{kind:'credit',id:creditId,receiptNumber:values.receiptNumber},values.amount,values.method);store.save();$('#modal-root').innerHTML='';render();showToast('Abono registrado correctamente.');}catch(error){showToast(error.message,'error');}}; }
@@ -490,7 +650,7 @@ function openSaleEditModal(saleId){
 	const saleDate=String(sale.date||sale.fecha||sale.fecha_venta||sale.created_at||sale.createdAt||'').slice(0,10)||localDateValue();
 	$('#modal-root').innerHTML=`<div class="modal-backdrop"><form class="modal" id="sale-edit-modal"><button type="button" class="modal-close">×</button><p class="eyebrow">ADMINISTRACION</p><h2>Editar venta ${sale.id}</h2><label class="input-label">Fecha de venta<input class="field" type="date" name="date" value="${saleDate}" required></label><label class="input-label">Cliente<select class="field" name="customerId">${customers}</select></label><label class="input-label">Metodo de pago<select class="field" name="paymentMethod">${paymentOptions}</select></label><button class="primary wide">Guardar cambios</button></form></div>`;
 	$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';
-	$('#sale-edit-modal').onsubmit=async event=>{event.preventDefault();try{const values=Object.fromEntries(new FormData(event.target));await persistCatalogRecord('/api/catalog/sale',{...sale,...values,paymentMethod:values.paymentMethod||currentPayment},'PUT');const normalized=await hydrateState();if(normalized){store.state=normalized;await hydrateCatalog(store.state);}$('#modal-root').innerHTML='';render();showToast('Venta actualizada correctamente.');}catch(error){showToast(error.message,'error');}};
+	$('#sale-edit-modal').onsubmit=async event=>{event.preventDefault();try{const values=Object.fromEntries(new FormData(event.target));await persistCatalogRecord('/api/catalog/sale',{...sale,...values,paymentMethod:values.paymentMethod||currentPayment},'PUT');Object.assign(sale,values,{paymentMethod:values.paymentMethod||currentPayment});await hydrateCatalog(store.state);$('#modal-root').innerHTML='';render();showToast('Venta actualizada correctamente.');}catch(error){showToast(error.message,'error');}};
 }
 async function deleteSale(saleId){if(!window.confirm('¿Anular esta venta? El inventario sera revertido y quedara registro de auditoria.'))return;try{await persistCatalogRecord(`/api/catalog/sale/${encodeURIComponent(saleId)}`,{},'DELETE');const normalized=await hydrateState();if(normalized){store.state=normalized;await hydrateCatalog(store.state);}$('#modal-root').innerHTML='';render();showToast('Venta anulada e inventario revertido.');}catch(error){showToast(error.message,'error');}}
 function deleteLocalTransfer(transferId){if(!window.confirm('¿Eliminar este traslado?'))return;const transfer=store.collection.transfers.find(item=>String(item.id)===String(transferId));if(!transfer)return;try{runTransaction(store.collection,()=>{if(transfer.status==='EN_TRANSITO')transfer.items.forEach(item=>increaseStock(store.collection,item.productId,transfer.originStoreId,item.quantity,transfer.id,'ANULACION_TRASLADO'));if(transfer.status==='RECIBIDO'){transfer.items.forEach(item=>{decreaseStock(store.collection,item.productId,transfer.destinationStoreId,item.quantity,transfer.id,'ANULACION_TRASLADO');increaseStock(store.collection,item.productId,transfer.originStoreId,item.quantity,transfer.id,'ANULACION_TRASLADO');});}store.collection.transfers=store.collection.transfers.filter(item=>item.id!==transfer.id);store.collection.auditLog.push({id:generateId('AUD',store.collection.auditLog),date:new Date().toISOString(),userId:'USR-00001',action:'Eliminar traslado',transferId:transfer.id});});store.save();render();showToast('Traslado eliminado e inventario revertido.');}catch(error){showToast(error.message,'error');}}
@@ -515,7 +675,43 @@ async function deleteLocalPurchase(purchaseId){
 document.addEventListener('click',event=>{const button=event.target.closest('[data-action]');if(!button)return;const storeId=button.dataset.storeId;if(button.dataset.action==='toggle-store')toggleStore(storeId);if(button.dataset.action==='delete-store')deleteStore(storeId);});
 async function toggleStore(storeId){const storeItem=store.collection.stores.find(item=>String(item.id)===String(storeId));if(!storeItem)return;try{await persistCatalogRecord('/api/catalog/store',{...storeItem,status:storeItem.status==='Inactivo'?'Activo':'Inactivo',active:storeItem.status==='Inactivo'},'PUT');storeItem.status=storeItem.status==='Inactivo'?'Activo':'Inactivo';storeItem.active=storeItem.status==='Activo';store.save();render();showToast(`Local ${storeItem.status==='Activo'?'activado':'desactivado'}.`);}catch(error){showToast(error.message,'error');}}
 async function deleteStore(storeId){if(!window.confirm('¿Eliminar este local? Solo se permite si no tiene información relacionada.'))return;try{await persistCatalogRecord(`/api/catalog/store/${encodeURIComponent(storeId)}`,{},'DELETE');store.collection.stores=store.collection.stores.filter(item=>String(item.id)!==String(storeId));store.save();render();showToast('Local eliminado correctamente.');}catch(error){showToast(error.message,'error');}}
-function openApartadoEditModal(id){const item=store.collection.apartados.find(entry=>String(entry.id)===String(id));if(!item)return;$('#modal-root').innerHTML=`<div class="modal-backdrop"><form class="modal" id="apartado-edit-form"><button type="button" class="modal-close">×</button><p class="eyebrow">APARTADOS</p><h2>Editar apartado ${item.id}</h2><label class="input-label">Cliente<input class="field" name="customer" value="${item.customer||item.clienteNombre||item.cliente_nombre||item.cliente||''}" required></label><label class="input-label">Telefono<input class="field" name="phone" value="${item.phone||item.clienteTelefono||item.cliente_telefono||item.telefono||''}"></label><label class="input-label">Direccion<input class="field" name="address" value="${item.address||item.direccion||''}"></label><label class="input-label">Estado<select class="field" name="status"><option ${String(item.status).toUpperCase()==='PENDIENTE'?'selected':''}>PENDIENTE</option><option ${String(item.status).toUpperCase()==='ENTREGADO'?'selected':''}>ENTREGADO</option><option ${String(item.status).toUpperCase()==='CANCELADO'?'selected':''}>CANCELADO</option></select></label><button class="primary wide">Guardar cambios</button></form></div>`;$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';$('#apartado-edit-form').onsubmit=async event=>{event.preventDefault();try{const values=Object.fromEntries(new FormData(event.target));await persistCatalogRecord('/api/shared-apartado',{id:item.id,...values});const normalized=await hydrateState();if(normalized){store.state=normalized;await hydrateCatalog(store.state);}$('#modal-root').innerHTML='';render();showToast('Apartado actualizado correctamente.');}catch(error){showToast(error.message,'error');}};}
+function openApartadoEditModal(id){
+	const item=store.collection.apartados.find(entry=>String(entry.id)===String(id));
+	if(!item)return;
+	const escapeHtml=value=>String(value??'').replace(/[&<>"']/g,character=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[character]));
+	const items=Array.isArray(item.items)?item.items:[];
+	const currentStatus=String(item.status||item.estado||'PENDIENTE').toUpperCase();
+	const statuses=[...new Set(['PENDIENTE','PAGADO','ENTREGADO','CANCELADO',currentStatus])];
+	const detailFields=items.map((product,index)=>`<fieldset class="apartado-edit-item"><legend>Producto ${index+1}</legend><label class="input-label">Codigo<input class="field" name="item-${index}-code" value="${escapeHtml(product.code||product.productId||product.codigo||'')}" required></label><label class="input-label">Producto<input class="field" name="item-${index}-product" value="${escapeHtml(product.product||product.name||product.productName||'')}" required></label><label class="input-label">Cantidad<input class="field" name="item-${index}-quantity" type="number" min="1" step="1" value="${Number(product.quantity??product.cantidad??1)}" required></label><label class="input-label">Valor unitario<input class="field" name="item-${index}-unit-price" type="number" min="0" step="1" value="${Number(product.unitPrice??product.valor_unitario??product.price??0)}" required></label><label class="input-label"><input type="checkbox" name="item-${index}-remove"> Quitar este producto</label><input type="hidden" name="item-${index}-id" value="${escapeHtml(product.id)}"></fieldset>`).join('');
+	$('#modal-root').innerHTML=`<div class="modal-backdrop"><form class="modal" id="apartado-edit-form"><button type="button" class="modal-close">×</button><p class="eyebrow">APARTADOS</p><h2>Editar apartado ${escapeHtml(item.id)}</h2><label class="input-label">Cliente<input class="field" name="customer" value="${escapeHtml(item.customer||item.clienteNombre||item.cliente_nombre||item.cliente||'')}" required></label><label class="input-label">Telefono<input class="field" name="phone" value="${escapeHtml(item.phone||item.clienteTelefono||item.cliente_telefono||item.telefono||'')}"></label><label class="input-label">Direccion<input class="field" name="address" value="${escapeHtml(item.address||item.direccion||'')}"></label><label class="input-label">Estado<select class="field" name="status">${statuses.map(status=>`<option value="${status}" ${status===currentStatus?'selected':''}>${status}</option>`).join('')}</select></label><h3>Productos y valores</h3>${detailFields||'<p class="danger-text">Este apartado no tiene productos en el detalle y no puede editarse desde aquí.</p>'}<button class="primary wide" ${items.length?'':'disabled'}>Guardar cambios</button></form></div>`;
+	$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';
+	$('#apartado-edit-form').onsubmit=async event=>{
+		event.preventDefault();
+		const form=event.currentTarget;
+		const values=Object.fromEntries(new FormData(form));
+		const editedItems=items.map((product,index)=>({
+			id:values[`item-${index}-id`],
+			code:values[`item-${index}-code`],
+			product:values[`item-${index}-product`],
+			quantity:values[`item-${index}-quantity`],
+			unitPrice:values[`item-${index}-unit-price`],
+			remove:form.elements[`item-${index}-remove`].checked,
+		}));
+		const button=form.querySelector('button.primary');
+		button.disabled=true;
+		try{
+			await persistCatalogRecord('/api/shared-apartado',{id:item.id,customer:values.customer,phone:values.phone,address:values.address,status:values.status,items:editedItems});
+			const normalized=await hydrateState();
+			if(normalized){store.state=normalized;await hydrateCatalog(store.state);}
+			$('#modal-root').innerHTML='';
+			render();
+			showToast('Apartado y productos actualizados correctamente.');
+		}catch(error){
+			showToast(error.message,'error');
+			button.disabled=false;
+		}
+	};
+}
 function openPurchaseEditModal(purchase,targetCollection='purchases'){
 	const suppliers=store.collection.suppliers||[];
 	const stores=store.collection.stores||[];
@@ -690,7 +886,7 @@ async function finishSale(){
     showToast(error.message, 'error');
   }
 }
-function transferField(name){return document.querySelector(`.transfer-modal [data-transfer-${name}]`);} function updateTransferAvailability(){const row=inventoryEntry(store.collection,transferField('product')?.value,transferField('origin')?.value);document.querySelector('[data-transfer-origin-stock]')?.replaceChildren(String(row?.quantity||0));} function openTransfer(){transferDraft.length=0;$('#modal-root').innerHTML=transferModal(store.collection);$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';const origin=transferField('origin');if(origin)origin.value=state.storeId;updateTransferAvailability();} function addTransferItem(){const origin=transferField('origin').value,destination=transferField('destination').value,productId=transferField('product').value,quantity=Number(transferField('quantity').value),row=inventoryEntry(store.collection,productId,origin);if(origin===destination)return showToast('El origen y destino deben ser diferentes.','error');if(!row||quantity<=0||quantity>row.quantity)return showToast('La cantidad supera el stock disponible.','error');transferDraft.push({productId,quantity});$('#transfer-items').innerHTML=transferDraft.map(item=>`<p>${store.collection.products.find(product=>product.id===item.productId)?.name} · ${item.quantity} unidades</p>`).join('');}
+function transferField(name){return document.querySelector(`.transfer-modal [data-transfer-${name}]`);} function updateTransferAvailability(){const row=inventoryEntry(store.collection,transferField('product')?.value,transferField('origin')?.value);document.querySelector('[data-transfer-origin-stock]')?.replaceChildren(String(row?.quantity||0));} function openTransfer(){transferDraft.length=0;transferRequestId=globalThis.crypto?.randomUUID?crypto.randomUUID():`transfer-${Date.now()}-${Math.random()}`;$('#modal-root').innerHTML=transferModal(store.collection);$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';const origin=transferField('origin');if(origin)origin.value=state.storeId;updateTransferAvailability();} function addTransferItem(){const origin=transferField('origin').value,destination=transferField('destination').value,productId=transferField('product').value,quantity=Number(transferField('quantity').value),row=inventoryEntry(store.collection,productId,origin);if(origin===destination)return showToast('El origen y destino deben ser diferentes.','error');if(!row||quantity<=0||quantity>row.quantity)return showToast('La cantidad supera el stock disponible.','error');transferDraft.push({productId,quantity});$('#transfer-items').innerHTML=transferDraft.map(item=>`<p>${store.collection.products.find(product=>product.id===item.productId)?.name} · ${item.quantity} unidades</p>`).join('');}
 document.addEventListener('click',event=>{const action=event.target.closest('[data-action]')?.dataset.action;if(action==='new-sale')location.hash='#facturacion';else if(action==='new-store')openStoreModal();else if(action==='edit-store')openStoreModal(event.target.closest('[data-store-id]')?.dataset.storeId);else if(action==='local-detail')showStoreDetail(event.target.closest('[data-store-id]')?.dataset.storeId);else if(action==='local-inventory'){const storeId=event.target.closest('[data-store-id]')?.dataset.storeId;if(storeId){state.storeId=storeId;location.hash='#inventario';render();}}else if(action==='local-transfer'){const storeId=event.target.closest('[data-store-id]')?.dataset.storeId;if(storeId){state.storeId=storeId;openTransfer();}}else if(action==='adjust-inventory')openAdjustment(event.target.closest('[data-product-id]')?.dataset.productId,event.target.closest('[data-store-id]')?.dataset.storeId);else if(action==='new-product')openProductEditor();else if(action==='edit-product'){const product=store.collection.products.find(item=>item.id===event.target.closest('[data-product-id]')?.dataset.productId);openProductEditor(product?.id);}else if(action==='toggle-product'){const product=store.collection.products.find(item=>item.id===event.target.closest('[data-product-id]')?.dataset.productId);if(product){setProductActive(store.collection,product.id,product.active===false);store.save();render();}}else if(action==='new-supplier')openSupplierModal();else if(action==='edit-supplier')openSupplierModal(event.target.closest('[data-supplier-id]')?.dataset.supplierId);else if(action==='new-customer')openCustomerModal();else if(action==='edit-customer')openCustomerModal(event.target.closest('[data-customer-id]')?.dataset.customerId);else if(action==='toggle-supplier'){const supplier=store.collection.suppliers.find(item=>item.id===event.target.closest('[data-supplier-id]')?.dataset.supplierId);if(supplier){supplier.active=supplier.active===false;store.save();render();}}else if(action==='product-detail'){const id=event.target.closest('[data-product-id]')?.dataset.productId;$('#modal-root').innerHTML=productDetail(store.collection,id);$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';}else if(action==='import-products')openImportModal();else if(action==='preview-import')previewImport();else if(action==='confirm-import')confirmImport();else if(['new-credit','new-expense','new-fuel','new-user'].includes(action))openModal(action.replace('new-',''));else if(action==='finish-sale')finishSaleLegacy();else if(action==='cancel-invoice'){state.cart=[];render();}else if(action==='add-product')addProduct(event.target.closest('[data-product-id]')?.dataset.productId);else if(action==='new-transfer')openTransfer();else if(action==='payment')showToast('Registra abonos desde el modulo de cartera.','info');if(event.target.dataset.productId&&!action)addProduct(event.target.dataset.productId);if(event.target.dataset.customerId){state.customerId=event.target.dataset.customerId;render();}if(event.target.dataset.payment){state.payment=event.target.dataset.payment;render();}if(event.target.closest('[data-transfer-add]'))addTransferItem();});
 document.addEventListener('click',event=>{if(event.target.dataset.remove){state.cart=state.cart.filter(item=>String(item.id)!==event.target.dataset.remove);render();}if(event.target.dataset.increase){const item=state.cart.find(entry=>entry.id===event.target.dataset.increase);const row=item&&inventoryEntry(store.collection,item.id,state.storeId);if(item&&row)item.quantity=Math.min(row.quantity,item.quantity+1);render();}if(event.target.dataset.decrease){const item=state.cart.find(entry=>entry.id===event.target.dataset.decrease);if(item)item.quantity=Math.max(1,item.quantity-1);render();}});
 document.addEventListener('input',event=>{if(event.target.id==='billing-product'){const available=document.querySelector('[data-billing-available]')?.checked!==false;$('#product-results').innerHTML=productResults(store.collection.products,state.storeId,store.collection,event.target.value,available);}if(event.target.id==='customer-search')$('#customer-results').innerHTML=customerResults(store.collection.customers.filter(item=>`${item.name} ${item.document} ${item.phone} ${item.id}`.toLowerCase().includes(event.target.value.toLowerCase())),state.customerId);if(event.target.matches('[data-filter="products"]'))updateProductViewState();if(event.target.dataset.quantity){const item=state.cart.find(entry=>String(entry.id)===event.target.dataset.quantity);const row=item&&inventoryEntry(store.collection,item.id,state.storeId);const requested=Number(event.target.value)||0;if(item&&row){item.quantity=Math.max(1,requested);item.quantityInvalid=requested>row.quantity;if(item.quantityInvalid)showToast('Stock insuficiente en este local.','error');render();}}if(event.target.dataset.price){const item=state.cart.find(entry=>String(entry.id)===event.target.dataset.price);if(item)item.priceVenta=Math.max(item.minimumPrice,Number(event.target.value)||0);}});
@@ -699,11 +895,11 @@ document.addEventListener('change',event=>{if(event.target.matches('#active-stor
 document.addEventListener('change',event=>{if(event.target.matches('[data-talonario-filter]')){setTalonarioFilters({[event.target.dataset.talonarioFilter]:event.target.value});render();}});
 document.addEventListener('input',event=>{if(event.target.matches('[data-talonario-filter="query"]')){setTalonarioFilters({query:event.target.value});render();}});
 function updateSalesViewState(){
-	salesViewState={query:$('[data-filter="sales"]')?.value.trim()||'',store:$('[data-sales-store]')?.value||'all',month:$('[data-sales-month]')?.value||'',payment:$('[data-sales-payment]')?.value||'all',status:$('[data-sales-status]')?.value||'all',version:salesViewState.version+1};
+	salesViewState={query:$('[data-filter="sales"]')?.value.trim()||'',store:$('[data-sales-store]')?.value||'all',month:$('[data-sales-month]')?.value||'',payment:$('[data-sales-payment]')?.value||'all',version:salesViewState.version+1};
 	applySalesFilters();
 }
 document.addEventListener('input',event=>{if(event.target.matches('[data-filter="sales"]'))updateSalesViewState();});
-document.addEventListener('change',event=>{if(event.target.matches('[data-sales-store],[data-sales-month],[data-sales-payment],[data-sales-status]'))updateSalesViewState();});
+document.addEventListener('change',event=>{if(event.target.matches('[data-sales-store],[data-sales-month],[data-sales-payment]'))updateSalesViewState();});
 function updateProductViewState(){productViewState={query:$('[data-filter="products"]')?.value||'',store:$('[data-product-store]')?.value||'all',active:$('[data-product-active]')?.value||'all',version:productViewState.version+1};productPage=1;refreshProducts();}
 document.addEventListener('input',event=>{if(event.target.matches('[data-filter="purchases"]'))filterPurchases();});
 document.addEventListener('change',event=>{if(event.target.matches('[data-purchase-supplier],[data-purchase-store],[data-purchase-status]'))filterPurchases();});
@@ -724,7 +920,7 @@ document.addEventListener('input',event=>{if(event.target.matches('[data-filter=
 document.addEventListener('change',event=>{if(event.target.matches('[data-purchase-supplier],[data-purchase-store],[data-purchase-status]'))filterSharedPurchases();});
 document.addEventListener('input',event=>{if(event.target.matches('[data-filter="payables"]'))filterPayables();});
 document.addEventListener('change',event=>{if(event.target.matches('[data-payable-status],[data-payable-supplier]'))filterPayables();});
-function filterPayables(){const query=$('[data-filter="payables"]')?.value.toLowerCase()||'',status=$('[data-payable-status]')?.value||'all',supplierId=$('[data-payable-supplier]')?.value||'all';const matches=(store.collection.accountsPayable||[]).filter(account=>{const supplier=store.collection.suppliers.find(item=>String(item.id)===String(account.supplierId));updateAccountPayableStatus(store.collection,account);return `${account.id} ${account.invoiceNumber} ${supplier?.name||account.supplierName||''} ${supplier?.document||''}`.toLowerCase().includes(query)&&(status==='all'||account.status===status)&&(supplierId==='all'||String(account.supplierId)===String(supplierId));});if($('#payables-table'))$('#payables-table').innerHTML=payableTable(store.collection,matches);}
+function filterPayables(){const query=$('[data-filter="payables"]')?.value||'',status=$('[data-payable-status]')?.value||'all',supplierId=$('[data-payable-supplier]')?.value||'all';const matches=filterAccountsPayable(store.collection,{query,status,supplierId});if($('#payables-table'))$('#payables-table').innerHTML=payableTable(store.collection,matches);}
 function applySalesFilters(){
 	const allSales=normalizeSales(store.collection.sales||store.collection.ventas||[]);
 	const sales=filterSales(allSales,{...salesViewState,stores:store.collection.stores}).sort((left,right)=>{
@@ -732,14 +928,10 @@ function applySalesFilters(){
 		const rightTime=saleTimestamp(right.date);
 		return rightTime-leftTime;
 	});
-	const paymentValues=[...new Set(normalizeSales(store.collection.sales||[]).map(sale=>sale.paymentMethod).filter(Boolean))].sort();
-	const statusValues=[...new Set(normalizeSales(store.collection.sales||[]).map(sale=>sale.status).filter(Boolean))].sort();
+	const paymentValues=salesPaymentMethods(allSales);
 	const paymentSelect=$('[data-sales-payment]');
-	const statusSelect=$('[data-sales-status]');
 	if(paymentSelect)paymentSelect.innerHTML='<option value="all">Todos los medios</option>'+paymentValues.map(value=>`<option value="${value}">${value}</option>`).join('');
-	if(statusSelect)statusSelect.innerHTML='<option value="all">Todos los estados</option>'+statusValues.map(value=>`<option value="${value}">${value}</option>`).join('');
-	if(paymentSelect)paymentSelect.value=salesViewState.payment;
-	if(statusSelect)statusSelect.value=salesViewState.status;
+	if(paymentSelect){paymentSelect.value=salesViewState.payment;if(paymentSelect.value!==salesViewState.payment)salesViewState.payment='all';}
 	if($('[data-sales-store]'))$('[data-sales-store]').value=salesViewState.store;
 	if($('[data-sales-month]'))$('[data-sales-month]').value=salesViewState.month;
 	if($('[data-filter="sales"]'))$('[data-filter="sales"]').value=salesViewState.query;
@@ -748,8 +940,6 @@ function applySalesFilters(){
 }
 async function readAttachment(file){if(!file)return null;if(file.size>5*1024*1024)throw new Error('El soporte no puede superar 5 MB.');return new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve({name:file.name,type:file.type,data:reader.result});reader.onerror=()=>reject(new Error('No se pudo leer el soporte.'));reader.readAsDataURL(file);});}
 function externalPayableModal(){const stores=store.collection.stores.map(item=>`<option value="${item.id}">${item.name}</option>`).join('');$('#modal-root').innerHTML=`<div class="modal-backdrop"><form class="modal" id="external-payable-form"><button type="button" class="modal-close">×</button><p class="eyebrow">FINANZAS</p><h2>Registrar factura pendiente</h2><p class="muted">Esta carga no recibe mercancía ni modifica el inventario.</p><label class="input-label">Tipo<select class="field" name="type" required><option value="SERVICIO">Servicio (luz, internet, etc.)</option><option value="GASTO">Gasto (pendones, publicidad, etc.)</option><option value="MERCANCIA_EXISTENTE">Mercancía ya registrada en inventario</option></select></label><label class="input-label">Proveedor / acreedor<input class="field" name="supplierName" required></label><label class="input-label">Número de factura o referencia<input class="field" name="invoiceNumber" required></label><label class="input-label">Valor total<input class="field" name="totalAmount" type="number" min="1" step="0.01" required></label><label class="input-label">Fecha de emisión<input class="field" name="issueDate" type="date" value="${new Date().toISOString().slice(0,10)}" required></label><label class="input-label">Fecha límite de pago<input class="field" name="dueDate" type="date" required></label><label class="input-label">Local<select class="field" name="storeId"><option value="">Sin local / empresa</option>${stores}</select></label><label class="input-label">Descripción<textarea class="field" name="description" rows="3" required></textarea></label><label class="input-label">Soporte de la factura<input class="field" name="attachment" type="file" accept="image/*,.pdf"></label><button class="primary wide">Guardar cuenta por pagar</button></form></div>`;$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';$('#external-payable-form').onsubmit=async event=>{event.preventDefault();const form=event.target;const button=form.querySelector('button.primary');button.disabled=true;try{const values=Object.fromEntries(new FormData(form));const attachment=await readAttachment(form.elements.attachment.files[0]);const account={id:generateId('CXP',store.collection.accountsPayable||[]),supplierId:`EXT-${Date.now()}`,supplierName:String(values.supplierName).trim(),invoiceNumber:String(values.invoiceNumber).trim(),type:values.type,description:String(values.description).trim(),storeId:values.storeId||'',issueDate:values.issueDate,dueDate:values.dueDate,totalAmount:Number(values.totalAmount),paidAmount:0,balance:Number(values.totalAmount),status:'PENDIENTE',paymentTerms:'Credito',noInventory:true,source:'external-invoice',attachment,createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()};if(!Number.isFinite(account.totalAmount)||account.totalAmount<=0)throw new Error('El valor total debe ser mayor que cero.');await persistDomainRecord('accountsPayable',account);store.collection.accountsPayable.push(account);$('#modal-root').innerHTML='';render();showToast('Factura pendiente registrada sin afectar inventario.');}catch(error){showToast(error.message,'error');}finally{button.disabled=false;}};}
-function supplierKey(value){return String(value||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]/gi,'').toUpperCase();}
-function normalizePayableSuppliers(state){const suppliers=state.suppliers||[];const changed=[];const findSupplier=account=>{if(suppliers.some(item=>String(item.id)===String(account.supplierId)))return suppliers.find(item=>String(item.id)===String(account.supplierId));const source=supplierKey(account.supplierName||account.supplier||account.proveedor);if(!source)return null;return suppliers.find(item=>{const target=supplierKey(item.name);return target===source||target.includes(source)||source.includes(target)||source.replace(/SA|SAS|LTDA|LIMITADA/g,'')===target.replace(/SA|SAS|LTDA|LIMITADA/g,'');});};(state.accountsPayable||[]).forEach(account=>{const supplier=findSupplier(account);if(supplier&&(String(account.supplierId)!==String(supplier.id)||account.supplierName!==supplier.name)){account.supplierId=supplier.id;account.supplierName=supplier.name;changed.push(account);}});return changed;}
 async function createExpenseFromPaidAccount(account,payment){if(!['SERVICIO','GASTO'].includes(String(account.type||'').toUpperCase())||account.expenseCreatedAt)return;if(!Array.isArray(store.collection.expenses))store.collection.expenses=[];const expense={id:generateId('GAS',store.collection.expenses),date:payment.date||new Date().toISOString().slice(0,10),storeId:account.storeId||'',category:String(account.type).toUpperCase()==='SERVICIO'?'Servicios':'Publicidad',description:account.description||account.invoiceNumber,amount:Number(account.totalAmount||0),paymentMethod:payment.method||'EFECTIVO',createdBy:'USR-00001',provider:account.supplierName||'',sourceAccountId:account.id};await persistDomainRecord('expenses',expense);store.collection.expenses.push(expense);account.expenseCreatedAt=new Date().toISOString();await persistDomainRecord('accountsPayable',account);}
 function payablePaymentModal(accountId){const account=store.collection.accountsPayable.find(item=>item.id===accountId);if(!account)return;$('#modal-root').innerHTML=`<div class="modal-backdrop"><form class="modal" id="payable-payment-form"><button type="button" class="modal-close">×</button><p class="eyebrow">FINANZAS</p><h2>Registrar pago</h2><p>Saldo: <strong>${money(calculateBalance(account))}</strong></p><label class="input-label">Fecha<input class="field" name="date" type="date" value="${new Date().toISOString().slice(0,10)}" required></label><label class="input-label">Monto<input class="field" name="amount" type="number" min="1" max="${calculateBalance(account)}" required></label><label class="input-label">Metodo<select class="field" name="method"><option>EFECTIVO</option><option>TRANSFERENCIA</option><option>CONSIGNACION</option><option>CHEQUE</option><option>OTRO</option></select></label><label class="input-label">Referencia<input class="field" name="reference" required></label><label class="input-label">Observacion<input class="field" name="note"></label><button class="primary wide">Guardar pago</button></form></div>`;$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';$('#payable-payment-form').onsubmit=async event=>{event.preventDefault();const form=event.target;try{const values=Object.fromEntries(new FormData(form));const payment=registerSupplierPayment(store.collection,accountId,values);await persistDomainRecord('supplierPayments',payment);await persistDomainRecord('accountsPayable',account);if(account.status==='PAGADA')await createExpenseFromPaidAccount(account,payment);store.save();$('#modal-root').innerHTML='';render();showToast(account.status==='PAGADA'&&['SERVICIO','GASTO'].includes(String(account.type||'').toUpperCase())?'Pago registrado y gasto creado.':'Pago registrado correctamente.');}catch(error){showToast(error.message,'error');}};}
 async function saveSupplierPayment(account, values, amount, reference){const payment=registerSupplierPayment(store.collection,account.id,{...values,amount,reference});await persistDomainRecord('supplierPayments',payment);await persistDomainRecord('accountsPayable',account);if(account.status==='PAGADA')await createExpenseFromPaidAccount(account,payment);return payment;}
@@ -834,7 +1024,7 @@ document.addEventListener('click',event=>{const button=event.target.closest('[da
 	}
 };if(actions[button.dataset.action])actions[button.dataset.action]();});
 document.addEventListener('click',event=>{const button=event.target.closest('[data-action="edit-sale"]');if(!button)return;setTimeout(()=>{const sale=store.collection.sales.find(item=>String(item.id)===String(button.dataset.saleId));const form=$('#sale-edit-modal');if(!sale||!form||form.querySelector('[name="items"]'))return;const input=document.createElement('input');input.type='hidden';input.name='items';input.value=JSON.stringify((sale.items||[]).map(item=>({productId:item.productId,quantity:Number(item.quantity||0),unitPrice:Number(item.unitPrice??item.price??0),price:Number(item.unitPrice??item.price??0),taxRate:Number(item.taxRate||0)})));form.append(input);const lines=document.createElement('div');lines.innerHTML='<h3>Productos</h3>'+((sale.items||[]).map((item,index)=>`<label class="input-label">Producto ${index+1}<select class="field" data-sale-product="${index}">${store.collection.products.map(product=>`<option value="${product.id}" ${product.id===item.productId?'selected':''}>${product.name}</option>`).join('')}</select><input class="field" type="number" min="1" value="${item.quantity}" data-sale-quantity="${index}" placeholder="Cantidad"><input class="field" type="number" min="0" value="${item.unitPrice??item.price??0}" data-sale-price="${index}" placeholder="Precio"></label>`).join(''));form.querySelector('button.primary')?.before(lines);const sync=()=>{const items=(sale.items||[]).map((item,index)=>({productId:$(`[data-sale-product="${index}"]`).value,quantity:Number($(`[data-sale-quantity="${index}"]`).value||0),unitPrice:Number($(`[data-sale-price="${index}"]`).value||0),price:Number($(`[data-sale-price="${index}"]`).value||0),taxRate:Number(item.taxRate||0)}));input.value=JSON.stringify(items);};form.addEventListener('input',sync);form.addEventListener('change',sync);},0);});
-document.addEventListener('submit',async event=>{if(!event.target.matches('.transfer-modal'))return;event.preventDefault();if(!transferDraft.length)return showToast('Agrega al menos un producto.','error');try{const transfer=createTransfer(store.collection,{originStoreId:transferField('origin').value,destinationStoreId:transferField('destination').value,items:transferDraft,createdBy:JSON.parse(localStorage.getItem('famimuebles-user')||'{}').username||'ERP'});await persistDomainRecord('transfers',transfer);store.save();$('#modal-root').innerHTML='';render();showToast('Traslado guardado en PostgreSQL.');}catch(error){showToast(error.message,'error');}});
+document.addEventListener('submit',async event=>{if(!event.target.matches('.transfer-modal'))return;event.preventDefault();if(!transferDraft.length)return showToast('Agrega al menos un producto.','error');const button=event.target.querySelector('button.primary');button.disabled=true;try{const result=await persistCatalogRecord('/api/shared-transfer',{originStoreId:transferField('origin').value,destinationStoreId:transferField('destination').value,items:transferDraft},'POST',transferRequestId);if(!result?.transfer||!Array.isArray(result.inventory))throw new Error('El servidor no confirmo el traslado.');for(const update of result.inventory){let row=inventoryEntry(store.collection,update.productId,update.storeId);if(!row){row={id:`TRANSFER-${result.transfer.sourceId}-${store.collection.inventoryByStore.length+1}`,productId:update.productId,storeId:update.storeId};store.collection.inventoryByStore.push(row);}row.quantity=Number(update.quantity);row.updatedAt=result.transfer.createdAt;}store.collection.transfers=(store.collection.transfers||[]).filter(item=>String(item.id)!==String(result.transfer.id));store.collection.transfers.push(result.transfer);store.save();$('#modal-root').innerHTML='';render();showToast(`Traslado ${result.transfer.id} realizado: inventario actualizado en ambos locales.`);}catch(error){button.disabled=false;showToast(error.message,'error');}});
 function addSaleItemToEditForm(form,sale){
 	if(!canPerform('Ventas','edit'))return;
 	const storeId=sale.storeId||sale.local_id||sale.local;
@@ -1072,6 +1262,35 @@ if(localStorage.getItem('famimuebles-theme')==='dark')document.body.classList.ad
 document.addEventListener('click',event=>{if(event.target.closest('[data-action="finish-sale"]')){event.stopImmediatePropagation();finishSale();}},true);
 document.addEventListener('click',event=>{if(event.target.closest('[data-action="new-user"]')){event.stopImmediatePropagation();openUserModal();}},true);
 document.addEventListener('click',event=>{const button=event.target.closest('[data-action="edit-user"]');if(button){event.stopImmediatePropagation();openEditUserModal(button.dataset.userId);}},true);
+document.addEventListener('click',async event=>{
+	const button=event.target.closest('[data-action="toggle-user-active"]');
+	if(!button)return;
+	event.stopImmediatePropagation();
+	const user=store.collection.users.find(item=>String(item.id)===String(button.dataset.userId)&&hasManagedUserAccount(item));
+	if(!user)return showToast('No se encontro la cuenta de usuario.','error');
+	const active=!isUserActive(user);
+	const action=active?'activar':'desactivar';
+	if(!window.confirm(`¿Deseas ${action} al usuario ${user.username||user.name}?`))return;
+	try{
+		await persistCatalogRecord('/api/users',{
+			id:user.id,
+			username:user.username||user.name,
+			displayName:user.displayName||user.name||user.username,
+			email:user.email||'',
+			phone:user.phone||'',
+			role:user.role,
+			storeId:user.storeId||'',
+			telegramId:user.telegramId||'',
+			active
+		},'PUT');
+		await hydrateUsers(store.state);
+		store.save();
+		render();
+		showToast(`Usuario ${active?'activado':'desactivado'} correctamente.`);
+	}catch(error){
+		showToast(error.message,'error');
+	}
+},true);
 document.addEventListener('submit',async event=>{if(!event.target.matches('#purchase-modal'))return;event.preventDefault();event.stopImmediatePropagation();if(!purchaseDraft.length)return showToast('Agrega al menos un producto.','error');try{const values=Object.fromEntries(new FormData(event.target));const purchase={id:generateId('COM',store.collection.purchases),...values,items:purchaseDraft,createdAt:new Date().toISOString(),status:'BORRADOR'};await persistDomainRecord('purchases',purchase);store.collection.purchases.push(purchase);$('#modal-root').innerHTML='';location.hash='#compras';render();showToast('Compra guardada en PostgreSQL.');}catch(error){showToast(error.message,'error');}},true);
 async function boot() {
 	const appContent = $('#app-content');
@@ -1099,6 +1318,7 @@ async function boot() {
 		authScreen(true);
 		return;
 	}
+	const permissionsPromise=hydrateCurrentUserPermissions();
 	const normalized = await hydrateStateWithRetry(3);
 	if (!normalized) {
 		appHydrating = false;
@@ -1107,13 +1327,11 @@ async function boot() {
 	}
 	store.state = normalized;
 	store.collection.demoMode = false;
-	await hydrateCatalog(store.state);
-	await hydrateDomainCollections(store.state);
-	store.collection.talonarios = normalizeActiveTalonarios(store.collection.talonarios || []);
-	await hydrateUsers(store.state);
-	const normalizedPayables=normalizePayableSuppliers(store.state);
-	Promise.allSettled(normalizedPayables.map(account => persistDomainRecord('accountsPayable',account))).then(results => results.filter(result => result.status === 'rejected').forEach(result => console.warn('No se pudo normalizar el proveedor de una cuenta por pagar:', result.reason?.message || result.reason)));
-	await hydrateCurrentUserPermissions();
+	await hydrateCatalog(store.state,true);
+	hydrateUsers(store.state).then(() => {
+		if (currentRoute() === 'usuarios') render();
+	}).catch(error => console.warn('No se pudieron actualizar los usuarios:', error.message));
+	await permissionsPromise;
 	store.save();
 	state.storeId = resolveActiveStore();
 	appHydrating = false;
@@ -1122,6 +1340,8 @@ async function boot() {
 	syncActiveStoreSelector();
 	syncCustomerBalances();
 	render();
+	hydrateDomainCollections(store.state).catch(error => console.warn('No se pudieron cargar los datos adicionales:', error.message));
+	startAutomaticSharedRefresh();
 }
 document.addEventListener('click', async event => {
 	if (!event.target.closest('#sync-data')) return;
@@ -1130,7 +1350,11 @@ document.addEventListener('click', async event => {
 	button.disabled = true;
 	button.classList.add('is-loading');
 	try {
-		await refreshSharedState();
+		const refreshed=await refreshSharedState();
+		if(!refreshed){
+			showToast('No se pudieron actualizar los datos. La informacion actual se conserva.','error');
+			return;
+		}
 		showToast('Datos actualizados desde PostgreSQL.');
 	} finally {
 		button.disabled = false;
@@ -1213,8 +1437,6 @@ document.addEventListener('click', event => {
 		}, 0);
 	}
 });
-const userContactObserver=new MutationObserver(()=>{const form=document.querySelector('#edit-user-form');if(!form||form.querySelector('[data-user-contact-fields]'))return;const username=form.querySelector('[name="username"]')?.value;const user=store.collection.users.find(item=>(item.username||item.name)===username);const fields=document.createElement('div');fields.dataset.userContactFields='true';fields.innerHTML=`<label class="input-label">Correo<input class="field" name="email" type="email" value="${user?.email||''}"></label><label class="input-label">Telefono<input class="field" name="phone" type="tel" value="${user?.phone||''}"></label>`;form.querySelector('[name="password"]')?.parentElement.before(fields);});userContactObserver.observe(document.querySelector('#modal-root'),{childList:true,subtree:true});
-const userRemoteContactObserver=new MutationObserver(async()=>{const form=document.querySelector('#edit-user-form');if(!form||form.dataset.remoteContactLoaded)return;form.dataset.remoteContactLoaded='true';try{const payload=await api.get('/api/users',{headers:{'X-Tenant-ID':activeTenantId()},cache:'no-store'});const username=form.querySelector('[name="username"]')?.value;const user=(payload.items||[]).find(item=>item.username===username);if(user){form.querySelector('[name="email"]').value=user.email||'';form.querySelector('[name="phone"]').value=user.phone||'';}}catch(error){}});userRemoteContactObserver.observe(document.querySelector('#modal-root'),{childList:true,subtree:true});
 async function deleteProduct(productId){const product=store.collection.products.find(item=>String(item.id)===String(productId));if(!product||!window.confirm(`¿Eliminar el producto ${product.name}?`))return;try{await persistCatalogRecord(`/api/catalog/product/${encodeURIComponent(product.id)}`,{},'DELETE');store.collection.products=store.collection.products.filter(item=>item.id!==product.id);store.collection.inventoryByStore=store.collection.inventoryByStore.filter(item=>item.productId!==product.id);store.save();$('#modal-root').innerHTML='';render();showToast('Producto eliminado correctamente.');}catch(error){showToast(error.message,'error');}}
 function renderPurchaseDraft(){const container=$('.purchase-draft');if(!container)return;container.innerHTML=purchaseDraft.map((item,index)=>`<p>${store.collection.products.find(product=>product.id===item.productId)?.name} · ${item.quantity} · ${money(item.unitCost)} <button type="button" class="table-action" data-action="remove-purchase-line" data-purchase-line="${index}" aria-label="Quitar producto">×</button></p>`).join('');}
 document.addEventListener('click',event=>{if(event.target.closest('[data-action="add-purchase-line"]'))setTimeout(renderPurchaseDraft,0);const removeButton=event.target.closest('[data-action="remove-purchase-line"]');if(removeButton){purchaseDraft.splice(Number(removeButton.dataset.purchaseLine),1);renderPurchaseDraft();}});
@@ -1438,29 +1660,6 @@ async function repairTalonario15301(){
 	item.currentNumber=Math.max(Number(item.currentNumber||0),15347);
 	try{await persistDomainRecord('talonarios',item);}catch(error){console.warn('No se pudo actualizar el talonario 15301-15350:',error.message);}
 }
-async function deduplicateTalonarios(){
-	const groups=new Map();
-	for(const item of (store.collection.talonarios||[])){
-		const type=String(item.type||'').toUpperCase();
-		const start=Number(item.startNumber), end=Number(item.endNumber);
-		if(!type||!Number.isInteger(start)||!Number.isInteger(end))continue;
-		const key=`${type}:${start}:${end}`;
-		if(!groups.has(key))groups.set(key,[]);
-		groups.get(key).push(item);
-	}
-	const statusPriority={EN_USO:3,ENVIADO:2,ALMACENADO:1};
-	const duplicates=[];
-	const keepIds=new Set();
-	for(const matches of groups.values()){
-		matches.sort((left,right)=>(statusPriority[String(right.status||'').toUpperCase()]||0)-(statusPriority[String(left.status||'').toUpperCase()]||0)||Number(right.currentNumber||0)-Number(left.currentNumber||0)||String(right.sentAt||right.createdAt||'').localeCompare(String(left.sentAt||left.createdAt||''))||String(left.id).localeCompare(String(right.id)));
-		keepIds.add(matches[0].id);
-		duplicates.push(...matches.slice(1));
-	}
-	for(const duplicate of duplicates){
-		try{await persistCatalogRecord(`/api/domain/talonarios/${encodeURIComponent(duplicate.id)}`,{},'DELETE');}catch(error){console.warn('No se pudo eliminar duplicado de talonario:',error.message);}
-	}
-	if(duplicates.length)store.collection.talonarios=(store.collection.talonarios||[]).filter(item=>keepIds.has(item.id));
-}
 const configuredTalonariosActivos=[
 	{local:'INV CARTAGENITA',type:'REMISION',startNumber:15451,endNumber:15500,currentNumber:15473},
 	{local:'INV CARTAGENITA II',type:'REMISION',startNumber:15851,endNumber:15900,currentNumber:15851},
@@ -1515,29 +1714,6 @@ async function seedConfiguredTalonariosActivos(){
 	if(canonical15701){
 		canonical15701.storeId='INV CRR 5 5 56';canonical15701.destinationName='INV CRR 5 5 56';canonical15701.status='EN_USO';
 		try{await persistDomainRecord('talonarios',canonical15701);}catch(error){console.warn('No se pudo marcar talonario enviado:',error.message);}
-		for(const duplicate of sent15701.slice(1)){
-			try{await persistCatalogRecord(`/api/domain/talonarios/${encodeURIComponent(duplicate.id)}`,{},'DELETE');}catch(error){console.warn('No se pudo eliminar duplicado de talonario:',error.message);}
-		}
-		store.collection.talonarios=store.collection.talonarios.filter(item=>item===canonical15701||!sent15701.includes(item));
-	}
-}
-async function removeActiveTalonarioDuplicates(){
-	const activeRanges=[
-		[15651,15700,'INV CRR 7 6A 15'],
-		[15601,15650,'INV CRR 5 5 56'],
-		[15751,15800,'INV MANABLANCA'],
-		[15451,15500,'INV CARTAGENITA'],
-		[15401,15450,'INV CARTAGENITA II'],
-		[15851,15900,'INV CARTAGENITA II']
-	];
-	for(const [startNumber,endNumber,localName] of activeRanges){
-		const matches=(store.collection.talonarios||[]).filter(item=>String(item.type).toUpperCase()==='REMISION'&&Number(item.startNumber)===startNumber&&Number(item.endNumber)===endNumber);
-		const active=matches.filter(item=>String(item.status||'').toUpperCase()==='EN_USO').sort((left,right)=>Number(right.currentNumber||0)-Number(left.currentNumber||0))[0];
-		if(!active||matches.length<2)continue;
-		for(const duplicate of matches.filter(item=>item!==active)){
-			try{await persistCatalogRecord(`/api/domain/talonarios/${encodeURIComponent(duplicate.id)}`,{},'DELETE');}catch(error){console.warn('No se pudo eliminar duplicado activo:',error.message);}
-		}
-		store.collection.talonarios=store.collection.talonarios.filter(item=>item===active||!matches.includes(item));
 	}
 }
 function openTalonarioJustificationModal(talonarioId, number){

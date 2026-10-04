@@ -2,7 +2,6 @@ import { money, page } from '../components/tables.js';
 import { icons } from '../components/sidebar.js';
 import { calendarDate, formatDate, shiftCalendarDate } from '../utils/dates.js';
 import { canonicalSellerName, normalizeSales } from './ventas.js';
-import { renderTalonariosSummary } from './talonarios.js?v=6';
 
 const CHART_COLORS = [
   '#2563EB', '#10B981', '#F59E0B', '#EF4444',
@@ -32,11 +31,12 @@ const dashboardCenterTextPlugin = {
     const { ctx, chartArea } = chart;
     if (!chartArea) return;
 
+    const options = chart.config.options?.plugins?.centerText;
+    if (!options) return;
     const centerX = (chartArea.left + chartArea.right) / 2;
     const centerY = (chartArea.top + chartArea.bottom) / 2;
-    const options = chart.config.options?.plugins?.centerText || {};
     const title = options.title || 'Total';
-    const value = options.value || '$ 0';
+    const value = options.value ?? '$ 0';
     const trend = options.trend || '';
     const trendColor = options.trendColor || '#16A36A';
 
@@ -80,8 +80,6 @@ function getPaymentColor(label) {
 
 const safeNumber = value => Number.isFinite(Number(value)) ? Number(value) : 0;
 const saleDate = sale => sale.date || sale.fecha || sale.createdAt || '';
-const storeName = (data, id) => data.stores?.find(item => String(item.id) === String(id))?.name || 'Sin local';
-const productName = (data, id) => data.products?.find(item => String(item.id) === String(id))?.name || 'Producto';
 const sellerValue = sale => sale.seller || sale.vendedor || sale.empleado || sale.usuario || sale.userName || sale.user || sale.createdBy || sale.created_by || sale.userId || sale.usuario_id || '';
 const sellerName = (data, sale) => { const value = sellerValue(sale); const user = (data.users || []).find(item => String(item.id) === String(value) || String(item.username) === String(value)); return canonicalSellerName(user?.name || user?.username || value); };
 const sellerRanking = (data, currentDay = calendarDate()) => {
@@ -174,6 +172,10 @@ function periodSales(sales, period, today = calendarDate()) {
 }
 
 function generateCharts(data = {}) {
+  const month = calendarDate().slice(0, 7);
+  const monthTotal = (data.sales || [])
+    .filter(sale => calendarDate(saleDate(sale)).startsWith(month))
+    .reduce((sum, sale) => sum + safeNumber(sale.total), 0);
   const todayRanking = sellerRanking(data, calendarDate()).slice(0, 5);
   const rankingItems = todayRanking.map((item, index) => {
     const medal = ['🥇', '🥈', '🥉'][index] || '✨';
@@ -191,7 +193,7 @@ function generateCharts(data = {}) {
   }).join('');
 
   return `<div class="charts-grid dashboard-charts">
-    <div class="chart-card chart-card-main"><div class="chart-card-heading"><div><span class="chart-kicker">TENDENCIA</span><h3>Ventas del mes</h3></div><span class="chart-unit">COP</span></div><canvas id="salesChart"></canvas></div>
+    <div class="chart-card chart-card-main"><div class="chart-card-heading"><div><span class="chart-kicker">TENDENCIA</span><h3>Ventas del mes</h3></div><div class="chart-main-total"><span>Total del mes</span><strong>${money(monthTotal)}</strong><small>COP</small></div></div><canvas id="salesChart"></canvas></div>
     <div class="chart-card chart-card-small dashboard-chart-card">
       <div class="dashboard-card-header">
         <div class="dashboard-card-title-wrap">
@@ -425,17 +427,7 @@ export function renderDashboard(data) {
   const low = inventory.filter(row => safeNumber(row.quantity) > 0 && safeNumber(row.quantity) <= safeNumber(row.minimumStock ?? row.minimum)).length;
   const empty = inventory.filter(row => safeNumber(row.quantity) === 0).length;
   const alerts = low + empty;
-  const topProducts = {};
-  sales.forEach(sale => (sale.items || []).forEach(item => { const id = item.productId || item.producto_id; topProducts[id] = (topProducts[id] || 0) + safeNumber(item.quantity); }));
-  const best = Object.entries(topProducts).sort((a, b) => b[1] - a[1]).slice(0, 5);
-  const recent = [...sales].sort((a, b) => saleDate(b).localeCompare(saleDate(a))).slice(0, 5);
-  const due = (data.installments || []).filter(item => {
-    if (item.status === 'PAGADA') return false;
-    const customer = String(item.customerName || item.customer || item.cliente || '').trim();
-    const amount = safeNumber(item.amount || item.installmentAmount || item.valor_programado);
-    return customer && customer !== 'Cliente' && amount > 0;
-  }).slice(0, 4);
-  const chartsHtml = generateCharts(data);
+  const chartsHtml = generateCharts({ ...data, sales });
   initCharts({...data, sales});
   return page('RESUMEN GENERAL','Dashboard','<button class="primary" data-action="new-sale">＋ Nueva venta</button>',`<p class="date-line">${formatDate()} · Resumen operativo de FAMIMUEBLES</p>
     <div class="metric-grid dashboard-metrics">
@@ -447,13 +439,5 @@ export function renderDashboard(data) {
       <div class="metric metric-alert"><span class="metric-icon metric-icon-danger">${icons.settings}</span><span>Alertas</span><strong>${alerts}</strong><em>${empty} agotados · ${low} stock bajo</em></div>
     </div>
     ${chartsHtml}
-    <div class="dashboard-lower-grid">
-      <section class="panel dashboard-panel"><div class="panel-head"><div><h3>Productos más vendidos</h3><p class="muted">Unidades vendidas acumuladas</p></div><a href="#productos">Ver productos →</a></div><div class="dashboard-list">${best.length ? best.map(([id, quantity], index) => `<div class="dashboard-list-row"><b>${index + 1}</b><span>${productName(data, id)}</span><strong>${quantity}</strong></div>`).join('') : '<p class="muted">Aún no hay ventas registradas.</p>'}</div></section>
-      <section class="panel dashboard-panel"><div class="panel-head"><div><h3>Próximos vencimientos</h3><p class="muted">Cuotas pendientes</p></div><a href="#cartera">Ver cartera →</a></div><div class="dashboard-list">${due.length ? due.map(item => `<div class="dashboard-list-row"><span>${item.customerName || item.customer || 'Cliente'}</span><strong>${money(item.amount || item.installmentAmount || 0)}</strong></div>`).join('') : '<p class="muted">No hay vencimientos pendientes.</p>'}</div></section>
-      ${renderTalonariosSummary(data)}
-    </div>
-    <div class="dashboard-lower-grid dashboard-bottom-grid">
-      <section class="panel dashboard-panel"><div class="panel-head"><div><h3>Ventas recientes</h3><p class="muted">Últimas transacciones reales</p></div><a href="#ventas">Ver todas →</a></div>${recent.length ? `<div class="table-wrap"><table><thead><tr><th>Factura</th><th>Local</th><th>Total</th><th>Pago</th><th>Fecha</th></tr></thead><tbody>${recent.map(sale => `<tr><td>${sale.id || sale.invoiceId || '-'}</td><td>${storeName(data, sale.storeId)}</td><td>${money(safeNumber(sale.total))}</td><td>${sale.paymentMethod || sale.metodo_pago || '-'}</td><td>${saleDate(sale).slice(0, 10) || '-'}</td></tr>`).join('')}</tbody></table></div>` : '<p class="muted">No hay ventas registradas.</p>'}</section>
-      <section class="panel dashboard-panel"><div class="panel-head"><div><h3>Alertas importantes</h3><p class="muted">Requieren atención</p></div><a href="#inventario">Ver inventario →</a></div><div class="dashboard-alerts"><p class="alert-line ${empty ? 'danger-text' : ''}"><b>●</b> ${empty} productos agotados</p><p class="alert-line ${low ? 'warning-text' : ''}"><b>●</b> ${low} productos con stock bajo</p><p class="alert-line"><b>●</b> ${(data.transfers || []).filter(item => item.status === 'EN_TRANSITO').length} traslados en tránsito</p></div></section>
-    </div>`);
+  `);
 }

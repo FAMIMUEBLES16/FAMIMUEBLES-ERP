@@ -4,6 +4,66 @@ import { notifyCreation } from './notification-service.js';
 export const payableStatuses = ['PENDIENTE', 'PARCIAL', 'PAGADA', 'VENCIDA', 'ANULADA'];
 
 export function calculateBalance(account) { return Math.max(0, Number(account.totalAmount || 0) - Number(account.paidAmount || 0)); }
+function normalizeSupplierReference(value) {
+  return String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+export function resolveAccountPayableSupplier(state, account) {
+  const suppliers = Array.isArray(state.suppliers) ? state.suppliers : [];
+  const supplierId = String(account.supplierId || '').trim();
+  const byId = suppliers.find(supplier => String(supplier.id || '').trim() === supplierId);
+  if (byId) return byId;
+
+  const references = [account.supplierDocument, account.supplierNit, account.supplierNIT, account.nit]
+    .map(normalizeSupplierReference).filter(Boolean);
+  if (supplierId) references.push(normalizeSupplierReference(supplierId));
+  const documentMatches = suppliers.filter(supplier => {
+    const documents = [supplier.document, supplier.nit, supplier.NIT, supplier.rut]
+      .map(normalizeSupplierReference).filter(Boolean);
+    return documents.some(document => references.includes(document));
+  });
+  if (documentMatches.length === 1) return documentMatches[0];
+  if (documentMatches.length > 1) return null;
+
+  const nameReferences = [account.supplierName, account.supplierId]
+    .map(normalizeSupplierReference).filter(Boolean);
+  const nameMatches = suppliers.filter(supplier => {
+    const name = normalizeSupplierReference(supplier.name);
+    return name && nameReferences.includes(name);
+  });
+  return nameMatches.length === 1 ? nameMatches[0] : null;
+}
+export function normalizePayableSuppliers(state) {
+  const changed = [];
+  (state.accountsPayable || []).forEach(account => {
+    const supplier = resolveAccountPayableSupplier(state, account);
+    if (supplier && (String(account.supplierId || '').trim() !== String(supplier.id) || account.supplierName !== supplier.name)) {
+      account.supplierId = supplier.id;
+      account.supplierName = supplier.name;
+      changed.push(account);
+    }
+  });
+  return changed;
+}
+export function filterAccountsPayable(state, { query = '', status = 'all', supplierId = 'all' } = {}) {
+  const term = normalizeSupplierReference(query);
+  return (state.accountsPayable || []).filter(account => {
+    updateAccountPayableStatus(state, account);
+    const supplier = resolveAccountPayableSupplier(state, account);
+    const supplierKey = String(supplier?.id ?? account.supplierId ?? '');
+    const searchable = normalizeSupplierReference([
+      account.id,
+      account.invoiceNumber,
+      account.supplierName,
+      account.supplierId,
+      supplier?.name,
+      supplier?.document,
+      supplier?.nit,
+    ].join(' '));
+    return searchable.includes(term)
+      && (status === 'all' || account.status === status)
+      && (supplierId === 'all' || supplierKey === String(supplierId));
+  });
+}
 export function buildFuelAccountPayable(state, fuelRecord, options = {}) {
   const fuelId = String(fuelRecord?.id || '').trim();
   const totalAmount = Number(options.totalAmount ?? fuelRecord?.amount ?? fuelRecord?.valor ?? 0);

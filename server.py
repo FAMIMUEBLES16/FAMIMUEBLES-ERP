@@ -836,6 +836,8 @@ def normalize_collection_alias(name: str) -> str:
 
 def permission_target(path: str, method: str) -> tuple[str, str] | None:
     action = {"GET": "view", "POST": "create", "PUT": "edit", "DELETE": "delete"}.get(method, "view")
+    if path.startswith("/api/shared-transfer"):
+        return "Inventario", action
     if path.startswith("/api/parity/gasolina"):
         return "Gasolina", action
     if path.startswith("/api/parity/nomina"):
@@ -917,6 +919,8 @@ def can_access(handler: "AppHandler", path: str, method: str = "GET") -> bool:
     target = permission_target(path, method)
     if target and not has_user_permission(handler, *target):
         return False
+    if path in {"/api/backup", "/api/restore"}:
+        return role == "ADMINISTRADOR"
     if role == "ADMINISTRADOR":
         return True
     if path == "/api/tenants":
@@ -1210,9 +1214,215 @@ def _with_frontend_aliases(row: dict) -> dict:
     return result
 
 
+def _app_user_is_active(value: object) -> bool:
+    if value is None or value == "":
+        return True
+    if isinstance(value, str):
+        return value.strip().upper() not in {"0", "FALSE", "NO", "INACTIVO", "INACTIVE"}
+    return bool(value)
+
+
+def _shared_app_user_items(database: _PostgresConnection) -> list[dict]:
+    columns = database.execute(
+        "SELECT table_name, column_name, data_type FROM information_schema.columns "
+        "WHERE table_schema = 'public' AND table_name IN ('empleados', 'administradores')"
+    ).fetchall()
+    schema: dict[str, dict[str, str]] = {}
+    for row in columns:
+        schema.setdefault(row["table_name"], {})[row["column_name"]] = row["data_type"]
+
+    users = []
+    for table_name in ("empleados", "administradores"):
+        table_columns = schema.get(table_name, {})
+        if not table_columns:
+            continue
+        rows = database.execute(f"SELECT * FROM {table_name} ORDER BY 1").fetchall()
+        id_column = next((name for name in ("id_telegram", "telegram_id") if name in table_columns), None)
+        if not id_column:
+            continue
+        for row in rows:
+            item = dict(row)
+            telegram_id = str(item.get(id_column) or "").strip()
+            if not telegram_id:
+                continue
+            raw_active = item.get("active")
+            if raw_active is None:
+                raw_active = item.get("activo")
+            active = _app_user_is_active(raw_active)
+            name = str(item.get("display_name") or item.get("nombre") or item.get("name") or telegram_id).strip()
+            role = str(item.get("role") or item.get("rol") or ("ADMINISTRADOR" if table_name == "administradores" else "VENDEDOR")).strip().upper()
+            users.append({
+                **_with_frontend_aliases(item),
+                "id": telegram_id,
+                "id_telegram": telegram_id,
+                "telegramId": telegram_id,
+                "name": name,
+                "displayName": name,
+                "role": role,
+                "storeId": item.get("store_id") or item.get("local_asignado") or "",
+                "active": active,
+                "status": "Activo" if active else "Inactivo",
+                "appSource": table_name,
+            })
+    return users
+
+
+def _sync_shared_app_user(database: _PostgresConnection, telegram_id: str | None, active: bool, display_name: str, role: str, store_id: str | None) -> None:
+    if not telegram_id:
+        return
+    columns = database.execute(
+        "SELECT table_name, column_name, data_type FROM information_schema.columns "
+        "WHERE table_schema = 'public' AND table_name IN ('empleados', 'administradores')"
+    ).fetchall()
+    schema: dict[str, dict[str, str]] = {}
+    for row in columns:
+        schema.setdefault(row["table_name"], {})[row["column_name"]] = row["data_type"]
+
+    for table_name in ("empleados", "administradores"):
+        table_columns = schema.get(table_name, {})
+        id_column = next((name for name in ("id_telegram", "telegram_id") if name in table_columns), None)
+        if not id_column:
+            continue
+        values = {}
+        active_column = "active" if "active" in table_columns else "activo" if "activo" in table_columns else None
+        if active_column:
+            active_type = table_columns[active_column]
+            if active_type == "boolean":
+                values[active_column] = active
+            elif active_type in {"smallint", "integer", "bigint"}:
+                values[active_column] = 1 if active else 0
+            else:
+                values[active_column] = "SI" if active else "NO"
+        name_column = next((name for name in ("display_name", "nombre", "name") if name in table_columns), None)
+        role_column = next((name for name in ("role", "rol") if name in table_columns), None)
+        store_column = next((name for name in ("store_id", "local_asignado") if name in table_columns), None)
+        if name_column:
+            values[name_column] = display_name
+        if role_column:
+            values[role_column] = role
+        if store_column:
+            values[store_column] = store_id or ""
+        if values:
+            assignments = ", ".join(f"{column} = %s" for column in values)
+            database.execute(
+                f"UPDATE {table_name} SET {assignments} WHERE {id_column} = %s",
+                (*values.values(), telegram_id),
+            )
+
+
+def normalize_apartado_detail_edits(items: list[dict]) -> tuple[list[dict], Decimal]:
+    if not isinstance(items, list) or not items:
+        raise ValueError("El apartado debe conservar al menos un producto.")
+    normalized = []
+    seen_ids = set()
+    total = Decimal("0")
+    for item in items:
+        try:
+            detail_id = int(item.get("id"))
+        except (TypeError, ValueError):
+            raise ValueError("Uno de los productos del apartado no tiene un identificador valido.") from None
+        if detail_id <= 0 or detail_id in seen_ids:
+            raise ValueError("Los productos del apartado contienen identificadores invalidos o repetidos.")
+        seen_ids.add(detail_id)
+        if item.get("remove") is True:
+            normalized.append({"id": detail_id, "remove": True})
+            continue
+        code = str(item.get("code") or "").strip()
+        product = str(item.get("product") or "").strip()
+        try:
+            raw_quantity = Decimal(str(item.get("quantity")))
+            unit_price = Decimal(str(item.get("unitPrice")))
+        except (TypeError, ValueError, ArithmeticError):
+            raise ValueError("Cantidad y valor unitario deben ser numeros validos.") from None
+        if not raw_quantity.is_finite() or raw_quantity != raw_quantity.to_integral_value():
+            raise ValueError("La cantidad debe ser un numero entero positivo.")
+        quantity = int(raw_quantity)
+        if not code or not product or quantity <= 0 or not unit_price.is_finite() or unit_price < 0:
+            raise ValueError("Cada producto requiere codigo, nombre, cantidad positiva y valor unitario valido.")
+        subtotal = unit_price * quantity
+        total += subtotal
+        normalized.append({
+            "id": detail_id,
+            "remove": False,
+            "code": code,
+            "product": product,
+            "quantity": quantity,
+            "unitPrice": unit_price,
+            "subtotal": subtotal,
+        })
+    if not any(not item["remove"] for item in normalized):
+        raise ValueError("El apartado debe conservar al menos un producto.")
+    return normalized, total
+
+
+def update_shared_apartado(database, payload: dict) -> dict:
+    record_id = str(payload.get("id", "")).strip()
+    if not record_id:
+        raise ValueError("El apartado requiere un identificador")
+    apartado = database.execute(
+        "SELECT id, valor_pagado, estado FROM apartados WHERE id = %s FOR UPDATE",
+        (record_id,),
+    ).fetchone()
+    if not apartado:
+        raise ValueError("No se encontro el apartado en PostgreSQL")
+    details = database.execute(
+        "SELECT id FROM apartado_detalles WHERE apartado_id = %s ORDER BY id FOR UPDATE",
+        (apartado["id"],),
+    ).fetchall()
+    edits, new_total = normalize_apartado_detail_edits(payload.get("items"))
+    existing_ids = {int(row["id"]) for row in details}
+    edited_ids = {item["id"] for item in edits}
+    if edited_ids != existing_ids:
+        raise ValueError("Los productos del apartado cambiaron. Recarga la pagina e intenta de nuevo.")
+    paid = Decimal(str(apartado["valor_pagado"] or 0))
+    if new_total < paid:
+        raise ValueError("El nuevo total no puede ser menor que el valor ya pagado.")
+    for item in edits:
+        if item["remove"]:
+            database.execute(
+                "DELETE FROM apartado_detalles WHERE id = %s AND apartado_id = %s",
+                (item["id"], apartado["id"]),
+            )
+        else:
+            database.execute(
+                """UPDATE apartado_detalles
+                   SET codigo = %s, producto = %s, cantidad = %s,
+                       valor_unitario = %s, subtotal = %s
+                   WHERE id = %s AND apartado_id = %s""",
+                (item["code"], item["product"], item["quantity"], item["unitPrice"], item["subtotal"], item["id"], apartado["id"]),
+            )
+    balance = new_total - paid
+    requested_status = str(payload.get("status") or apartado["estado"] or "PENDIENTE").strip().upper()
+    if requested_status == "PAGADO" and balance > 0:
+        requested_status = "PENDIENTE"
+    elif balance == 0 and requested_status not in {"ENTREGADO", "CANCELADO", "ANULADO"}:
+        requested_status = "PAGADO"
+    database.execute(
+        """UPDATE apartados
+           SET cliente_nombre = %s, cliente = %s, cliente_telefono = %s,
+               telefono = %s, direccion = %s, valor_total = %s,
+               saldo_pendiente = %s, estado = %s, actualizado_en = CURRENT_TIMESTAMP
+           WHERE id = %s""",
+        (
+            str(payload.get("customer") or "").strip(),
+            str(payload.get("customer") or "").strip(),
+            str(payload.get("phone") or "").strip(),
+            str(payload.get("phone") or "").strip(),
+            str(payload.get("address") or "").strip(),
+            new_total,
+            balance,
+            requested_status,
+            apartado["id"],
+        ),
+    )
+    return {"ok": True, "id": record_id, "total": new_total, "paid": paid, "balance": balance, "status": requested_status}
+
+
 def _shared_domain_items(database: _PostgresConnection, collection: str) -> list[dict] | None:
     """Convierte tablas operativas del bot al contrato de colecciones del ERP."""
     canonical_customers = []
+    if collection == "users":
+        return _shared_app_user_items(database)
     table_map = {
         "users": "empleados",
         "roles": "roles",
@@ -1496,6 +1706,25 @@ def _shared_domain_items(database: _PostgresConnection, collection: str) -> list
                         }
                         for line in lines
                     ]
+        if collection == "apartados":
+            details = database.execute(
+                """SELECT id, apartado_id, codigo, producto, cantidad, valor_unitario, subtotal
+                   FROM apartado_detalles ORDER BY apartado_id, id"""
+            ).fetchall()
+            details_by_apartado = {}
+            for line in details:
+                details_by_apartado.setdefault(str(line["apartado_id"]), []).append({
+                    "id": line["id"],
+                    "productId": str(line["codigo"] or ""),
+                    "code": str(line["codigo"] or ""),
+                    "name": str(line["producto"] or line["codigo"] or "Producto"),
+                    "product": str(line["producto"] or line["codigo"] or "Producto"),
+                    "quantity": line["cantidad"] or 0,
+                    "unitPrice": line["valor_unitario"] or 0,
+                    "subtotal": line["subtotal"] or 0,
+                })
+            for item in items:
+                item["items"] = details_by_apartado.get(str(item["id"]), [])
         if collection == "entries":
             for item in items:
                 lines = database.execute(
@@ -1725,6 +1954,122 @@ def _create_shared_purchase_entry(database: _PostgresConnection, payload: dict, 
         total += quantity * unit_cost
     result = {"ok": True, "id": movement[0], "purchaseId": str(purchase.get("id") or ""), "total": total}
     complete_idempotency(database, handler, payload, "/api/shared-purchase", 201, result)
+    return result
+
+
+def _create_shared_transfer(database: _PostgresConnection, payload: dict, user: dict, handler: "AppHandler") -> dict:
+    """Moves stock between stores and records one completed movement atomically."""
+    path = "/api/shared-transfer"
+    _, cached = claim_idempotency(database, handler, payload, path)
+    if cached is not None:
+        return cached
+
+    origin = str(payload.get("originStoreId") or "").strip()
+    destination = str(payload.get("destinationStoreId") or "").strip()
+    items = payload.get("items")
+    if not origin or not destination or origin == destination:
+        raise ValueError("El origen y destino deben ser diferentes")
+    if not isinstance(items, list) or not items:
+        raise ValueError("El traslado requiere al menos un producto")
+    enforce_user_store_proxy(user, origin)
+    for store_id in {origin, destination}:
+        if not database.execute(
+            "SELECT 1 FROM locales WHERE nombre = %s AND activo = TRUE",
+            (store_id,),
+        ).fetchone():
+            raise ValueError("El local de origen o destino no existe o esta inactivo")
+
+    requested = {}
+    for item in items:
+        if not isinstance(item, dict):
+            raise ValueError("El traslado contiene un producto invalido")
+        product_id = str(item.get("productId") or item.get("code") or "").strip()
+        try:
+            raw_quantity = float(item.get("quantity", 0))
+        except (TypeError, ValueError, OverflowError) as error:
+            raise ValueError("La cantidad debe ser un numero entero positivo") from error
+        if not product_id or not __import__("math").isfinite(raw_quantity) or raw_quantity <= 0 or raw_quantity != int(raw_quantity):
+            raise ValueError("La cantidad debe ser un numero entero positivo")
+        requested[product_id] = requested.get(product_id, 0) + int(raw_quantity)
+
+    normalized = []
+    inventory_updates = []
+    store_order = sorted((origin, destination))
+    for product_id, quantity in requested.items():
+        product = database.execute(
+            "SELECT nombre_producto FROM productos WHERE codigo = %s AND UPPER(COALESCE(activo, 'SI')) <> 'NO'",
+            (product_id,),
+        ).fetchone()
+        if not product:
+            raise ValueError("El traslado contiene un producto inexistente o inactivo")
+        stocks = {}
+        for store_id in store_order:
+            row = database.execute(
+                "SELECT cantidad FROM inventarios WHERE local = %s AND codigo = %s FOR UPDATE",
+                (store_id, product_id),
+            ).fetchone()
+            stocks[store_id] = int(row["cantidad"] or 0) if row else 0
+        if stocks[origin] < quantity:
+            raise ValueError(f"Stock insuficiente para el producto {product_id} en el local de origen")
+        normalized.append((product_id, product["nombre_producto"], quantity))
+
+    username = str(user.get("username") or user.get("id") or "ERP")
+    note = str(payload.get("notes") or payload.get("note") or "").strip()
+    movement = database.execute(
+        """INSERT INTO movimientos
+           (tipo, estado, local_origen, local_destino, empleado, vendedor, observacion)
+           VALUES ('TRASLADO', 'COMPLETADO', %s, %s, %s, %s, %s)
+           RETURNING id, fecha""",
+        (origin, destination, username, username, note),
+    ).fetchone()
+    if not movement:
+        raise RuntimeError("No se pudo registrar el traslado")
+
+    for product_id, description, quantity in normalized:
+        for store_id, delta in ((origin, -quantity), (destination, quantity)):
+            stock = database.execute(
+                "SELECT cantidad FROM inventarios WHERE local = %s AND codigo = %s FOR UPDATE",
+                (store_id, product_id),
+            ).fetchone()
+            if stock:
+                database.execute(
+                    "UPDATE inventarios SET cantidad = cantidad + %s, actualizado = CURRENT_TIMESTAMP WHERE local = %s AND codigo = %s",
+                    (delta, store_id, product_id),
+                )
+                next_quantity = int(stock["cantidad"] or 0) + delta
+            else:
+                database.execute(
+                    "INSERT INTO inventarios (local, codigo, descripcion, cantidad) VALUES (%s, %s, %s, %s)",
+                    (store_id, product_id, description, delta),
+                )
+                next_quantity = delta
+            inventory_updates.append({"productId": product_id, "storeId": store_id, "quantity": next_quantity})
+        database.execute(
+            """INSERT INTO movimiento_productos
+               (movimiento_id, codigo, descripcion, cantidad, entrada, salida)
+               VALUES (%s, %s, %s, %s, %s, %s)""",
+            (movement["id"], product_id, description, quantity, quantity, quantity),
+        )
+
+    created_at = movement["fecha"]
+    transfer = {
+        "id": f"PG-TRA-{movement['id']}",
+        "sourceId": movement["id"],
+        "originStoreId": origin,
+        "destinationStoreId": destination,
+        "createdAt": created_at,
+        "createdBy": username,
+        "status": "RECIBIDO",
+        "sentAt": created_at,
+        "receivedAt": created_at,
+        "notes": note,
+        "items": [
+            {"productId": product_id, "name": description, "quantity": quantity}
+            for product_id, description, quantity in normalized
+        ],
+    }
+    result = {"ok": True, "id": movement["id"], "transfer": transfer, "inventory": inventory_updates}
+    complete_idempotency(database, handler, payload, path, 201, result)
     return result
 
 
@@ -2665,6 +3010,14 @@ class AppHandler(SimpleHTTPRequestHandler):
                     result = _create_shared_purchase_entry(database, payload, authenticated_user(self), self)
                 self.send_json(201, result)
                 return
+            if path == "/api/shared-transfer":
+                if not _postgres_enabled():
+                    self.send_json(503, {"error": "Los traslados compartidos requieren PostgreSQL"})
+                    return
+                with connection() as database:
+                    result = _create_shared_transfer(database, payload, authenticated_user(self), self)
+                self.send_json(201, result)
+                return
             if path == "/api/catalog/inventory-movement":
                 if _postgres_enabled():
                     product_id = str(payload.get("productId", "")).strip()
@@ -2904,15 +3257,9 @@ class AppHandler(SimpleHTTPRequestHandler):
                 self.send_json(201, response)
                 return
             if path == "/api/shared-apartado":
-                record_id_value = str(payload.get("id", "")).strip()
-                if not record_id_value:
-                    raise ValueError("El apartado requiere un identificador")
                 with connection() as database:
-                    apartado = database.execute("SELECT id FROM apartados WHERE id = %s FOR UPDATE", (record_id_value,)).fetchone()
-                    if not apartado:
-                        raise ValueError("No se encontro el apartado en PostgreSQL")
-                    database.execute("UPDATE apartados SET cliente_nombre = %s, cliente = %s, cliente_telefono = %s, telefono = %s, direccion = %s, estado = %s, actualizado_en = CURRENT_TIMESTAMP WHERE id = %s", (str(payload.get("customer") or "").strip(), str(payload.get("customer") or "").strip(), str(payload.get("phone") or "").strip(), str(payload.get("phone") or "").strip(), str(payload.get("address") or "").strip(), str(payload.get("status") or "PENDIENTE").strip(), record_id_value))
-                self.send_json(200, {"ok": True, "id": record_id_value})
+                    response = update_shared_apartado(database, payload)
+                self.send_json(200, response)
                 return
             if path.startswith("/api/domain/"):
                 warranty_action_match = re.fullmatch(r"/api/domain/warranties/([^/]+)/action", path)
@@ -3475,6 +3822,8 @@ class AppHandler(SimpleHTTPRequestHandler):
                         database.execute("UPDATE auth_users SET username = ?, email = ?, phone = ?, role = ?, store_id = ?, active = ?, password_hash = ?, telegram_id = ?, display_name = ? WHERE id = ? AND tenant_id = ?", (username, str(payload.get("email", "")).strip(), str(payload.get("phone", "")).strip(), role, payload.get("storeId"), active, password_hash(password), telegram_id or None, display_name, identifier, tenant_id(self, payload)))
                     else:
                         database.execute("UPDATE auth_users SET username = ?, email = ?, phone = ?, role = ?, store_id = ?, active = ?, telegram_id = ?, display_name = ? WHERE id = ? AND tenant_id = ?", (username, str(payload.get("email", "")).strip(), str(payload.get("phone", "")).strip(), role, payload.get("storeId"), active, telegram_id or None, display_name, identifier, tenant_id(self, payload)))
+                    if tenant_id(self, payload) == DEFAULT_TENANT:
+                        _sync_shared_app_user(database, telegram_id, bool(active), display_name, role, payload.get("storeId"))
                     if not active:
                         database.execute("DELETE FROM auth_tokens WHERE user_id = ?", (identifier,))
                 self.send_json(200, {"ok": True, "id": identifier})

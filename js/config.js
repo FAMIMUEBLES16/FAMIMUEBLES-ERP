@@ -1,5 +1,5 @@
 const LOCAL_API_URL = 'http://127.0.0.1:8024/api';
-const PUBLIC_API_URL = 'https://presidential-graphic-matrix-comply.trycloudflare.com/api';
+const PUBLIC_API_URL = 'https://accepts-annually-providing-film.trycloudflare.com/api';
 
 const configuredApiBase = String(
   globalThis.FAMIMUEBLES_API_BASE_URL ||

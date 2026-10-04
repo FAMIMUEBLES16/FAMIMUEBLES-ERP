@@ -63,7 +63,21 @@ function localKey(value) {
   return String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 }
 
-export function filterSales(sales, { query = '', store = 'all', month = '', payment = 'all', status = 'all', stores = [] } = {}) {
+function paymentKey(value) {
+  return String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase().trim();
+}
+
+export function salesPaymentMethods(sales) {
+  const methods = new Map();
+  normalizeSales(sales).forEach(sale => {
+    const method = String(sale.paymentMethod || '').trim();
+    const key = paymentKey(method);
+    if (key && !methods.has(key)) methods.set(key, method);
+  });
+  return [...methods.values()].sort((left, right) => left.localeCompare(right, 'es'));
+}
+
+export function filterSales(sales, { query = '', store = 'all', month = '', payment = 'all', stores = [] } = {}) {
   const normalizedQuery = String(query).toLocaleLowerCase();
   const selectedStore = stores.find(item => String(item.id) === String(store));
   const selectedStoreKey = localKey(selectedStore?.name || store);
@@ -73,8 +87,7 @@ export function filterSales(sales, { query = '', store = 'all', month = '', paym
     return (!normalizedQuery || haystack.includes(normalizedQuery))
       && storeMatches
       && (!month || salesMonthKey(sale.date) === month)
-      && (payment === 'all' || sale.paymentMethod === payment)
-      && (status === 'all' || sale.status === status);
+      && (payment === 'all' || paymentKey(sale.paymentMethod) === paymentKey(payment));
   });
 }
 
@@ -128,12 +141,13 @@ export function salesSummary(sales) {
 export function renderVentas(data) {
   const sales = normalizeSales(data.sales || data.ventas || []);
   const storeOptions = (data.stores || []).map(store => `<option value="${store.id}">${store.name}</option>`).join('');
+  const paymentOptions = salesPaymentMethods(sales).map(method => `<option value="${method}">${method}</option>`).join('');
   const now = new Date();
   const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
   return page(
      'OPERACION',
      'Ventas',
      '<button class="primary" data-action="new-sale">＋ Nueva venta</button>',
-    `<div class="toolbar"><label class="input-label">Buscar ventas<input class="field" data-filter="sales" placeholder="Buscar factura o cliente..."></label><label class="input-label">Local<select class="field" data-sales-store><option value="all">Todos los locales</option>${storeOptions}</select></label><label class="input-label">Mes de ventas<input class="field" type="month" data-sales-month value="${currentMonth}"></label><label class="input-label">Estado<select class="field" data-sales-status><option value="all">Todos los estados</option></select></label></div><div data-sales-summary>${salesSummary(sales)}</div><div data-sales-table>${salesTable(data, sales)}</div>`
+    `<div class="toolbar"><label class="input-label">Buscar ventas<input class="field" data-filter="sales" placeholder="Buscar factura o cliente..."></label><label class="input-label">Local<select class="field" data-sales-store><option value="all">Todos los locales</option>${storeOptions}</select></label><label class="input-label">Mes de ventas<input class="field" type="month" data-sales-month value="${currentMonth}"></label><label class="input-label">Método de pago<select class="field" data-sales-payment><option value="all">Todos los métodos</option>${paymentOptions}</select></label></div><div data-sales-summary>${salesSummary(sales)}</div><div data-sales-table>${salesTable(data, sales)}</div>`
   );
 }

@@ -1,10 +1,10 @@
 import { createAccountPayable } from '../services/accounts-payable-service.js?v=14';
 import { demoState } from './demo-data.js';
 import { api } from '../services/api-client.js';
-import { API_BASE_URL } from '../config.js?v=20261001093604';
+import { API_BASE_URL } from '../config.js?v=20261004105826';
 
 export const TENANT_STORAGE_KEY = 'famimuebles-tenant-id';
-const REMOTE_DOMAIN_COLLECTIONS = ['customers','suppliers','purchases','credits','expenses','accountsPayable','supplierPayments','customerAccounts','returns','supplierReturns','stockCounts','reservations','warranties','damagedStock','cashSessions','cashMovements','bankAccounts','quotes','orders','deliveries','creditNotes','talonarios','talonarioJustifications','workSchedules','staffAbsences'];
+const REMOTE_DOMAIN_COLLECTIONS = ['customers','suppliers','purchases','credits','expenses','accountsPayable','supplierPayments','customerAccounts','returns','supplierReturns','stockCounts','reservations','warranties','damagedStock','cashSessions','cashMovements','bankAccounts','quotes','orders','deliveries','creditNotes','transfers','talonarios','talonarioJustifications','workSchedules','staffAbsences'];
 export function activeTenantId() { return localStorage.getItem(TENANT_STORAGE_KEY) || 'tenant-default'; }
 export function authHeaders() { const token = localStorage.getItem('famimuebles-auth-token'); return token ? { Authorization: `Bearer ${token}` } : {}; }
 export function isStaticDeployment() { return !API_BASE_URL && window.location.hostname.endsWith('.github.io'); }
@@ -147,11 +147,27 @@ export async function hydrateStateWithRetry(attempts = 3) {
   }
   return lastResult;
 }
-export async function hydrateCatalog(state) {
+export async function hydrateCatalog(state, useStateCatalog = false, throwOnError = false) {
   if (!API_BASE_URL) return state;
+  if (useStateCatalog) {
+    const catalog = { products: state.products, stores: state.stores, sales: state.sales, inventory: state.inventoryByStore || state.inventory };
+    if (!Array.isArray(catalog.products) || !Array.isArray(catalog.stores)) {
+      if (throwOnError) throw new Error('El servidor devolvio un catalogo incompleto.');
+      return state;
+    }
+    state.products = catalog.products.map(product => ({ ...product, price:0, salePrice:0, specialPrice:0, minimumPrice:0 }));
+    state.stores = catalog.stores;
+    if (Array.isArray(catalog.sales)) state.sales = catalog.sales;
+    state.inventoryByStore = catalog.inventory || [];
+    state.inventory = state.inventoryByStore;
+    return state;
+  }
   try {
     const catalog = await api.get('/api/catalog', { headers: { 'X-Tenant-ID': activeTenantId() }, cache: 'no-store', timeout: 5000 });
-    if (!Array.isArray(catalog.products) || !Array.isArray(catalog.stores)) return state;
+    if (!Array.isArray(catalog.products) || !Array.isArray(catalog.stores)) {
+      if (throwOnError) throw new Error('El servidor devolvio un catalogo incompleto.');
+      return state;
+    }
     state.products = catalog.products.map(product => ({ ...product, price:0, salePrice:0, specialPrice:0, minimumPrice:0 }));
     state.stores = catalog.stores;
     if (Array.isArray(catalog.sales)) state.sales = catalog.sales;
@@ -159,6 +175,7 @@ export async function hydrateCatalog(state) {
     state.inventory = state.inventoryByStore;
     return state;
   } catch (error) {
+    if (throwOnError) throw error;
     return state;
   }
 }

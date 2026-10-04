@@ -1,7 +1,19 @@
-const CACHE = 'famimuebles-erp-v20261001093604-network-first-v1';
-const CORE = ['./', './index.html?v=public-summary-20260926', './css/main.css?v=54', './css/attendance.css?v=1', './css/parity-report-fixes.css?v=5', './js/app-v3.js?v=89', './js/modules/descansos.js?v=6', './js/modules/ventas.js?v=25', './js/modules/compras.js?v=22', './js/modules/paridad.js?v=4', './js/modules/talonarios.js?v=14', './js/modules/gasolina.js?v=22', './js/modules/operaciones.js?v=3', './js/components/tables.js?v=1', './js/modules/dashboard-v3.js?v=27', './js/modules/facturacion.js?v=23', './js/services/product-service.js?v=18', './js/data/storage.js?v=18', './js/data/store.js?v=18', './js/router.js?v=18', './js/modules/proveedores.js?v=18', './js/services/purchase-service.js?v=18', './js/services/accounts-payable-service.js?v=16', './js/modules/cuentas-por-pagar.js?v=16', './js/modules/accounts-payable-detail.js?v=15', './js/data/demo-data.js?v=18', './js/modules/cartera.js?v=23', './js/modules/creditos.js?v=23', './js/utils/ids.js', './js/services/api-client.js?v=20261001093604', './js/config.js?v=20261001093604', './manifest.json', './offline.html', './Logo Famimuebles.png', './assets/icons/icon-192.png', './assets/icons/icon-512.png', './assets/icons/apple-touch-icon.png'];
+const CACHE = 'famimuebles-erp-v20261004105826-auto-transfer-v1-users-v1';
+const CORE = ['./', './index.html?v=public-summary-20260926', './css/main.css?v=20261004105826', './css/attendance.css?v=1', './css/parity-report-fixes.css?v=5', './js/app-v3.js?v=89', './js/modules/descansos.js?v=6', './js/modules/ventas.js?v=25', './js/modules/compras.js?v=22', './js/modules/paridad.js?v=4', './js/modules/talonarios.js?v=14', './js/modules/gasolina.js?v=22', './js/modules/operaciones.js?v=3', './js/components/tables.js?v=1', './js/modules/dashboard-v3.js?v=27', './js/modules/facturacion.js?v=23', './js/services/product-service.js?v=18', './js/data/storage.js?v=18', './js/data/store.js?v=18', './js/router.js?v=18', './js/modules/proveedores.js?v=18', './js/services/purchase-service.js?v=18', './js/services/accounts-payable-service.js?v=16', './js/modules/cuentas-por-pagar.js?v=16', './js/modules/accounts-payable-detail.js?v=15', './js/data/demo-data.js?v=18', './js/modules/cartera.js?v=23', './js/modules/creditos.js?v=23', './js/utils/ids.js', './js/services/api-client.js?v=20261004105826', './js/config.js?v=20261004105826', './manifest.json', './offline.html', './Logo Famimuebles.png', './assets/icons/icon-192.png', './assets/icons/icon-512.png', './assets/icons/apple-touch-icon.png'];
 CORE.push('./js/app-v3.js?v=95', './js/components/sidebar.js?v=24', './js/services/accounts-payable-service.js?v=17', './js/modules/talonarios.js?v=15', './js/router.js?v=20', './js/modules/ventas.js?v=26');
 CORE.push('./js/app-v3.js?v=96', './js/modules/talonarios.js?v=16', './js/modules/talonarios.js?v=17');
+CORE.push('./js/app-v3.js?v=20261002131059');
+CORE.push('./js/app-v3.js?v=20261002132442');
+CORE.push('./js/app-v3.js?v=20261002132442','./js/modules/dashboard-v3.js?v=20261002132442');
+CORE.push('./js/app-v3.js?v=20261002132618');
+CORE.push('./js/app-v3.js?v=20261002132618','./js/modules/dashboard-v3.js?v=20261002132618');
+CORE.push('./js/app-v3.js?v=20261002134202','./js/modules/dashboard-v3.js?v=20261002134202');
+CORE.push('./js/app-v3.js?v=20261002135342','./js/modules/dashboard-v3.js?v=20261002135342');
+CORE.push('./js/app-v3.js?v=20261002-apartado-edit-v1');
+CORE.push('./js/app-v3.js?v=20261003091041','./js/modules/dashboard-v3.js?v=20261003091041');
+CORE.push('./js/app-v3.js?v=20261003091041-auto-transfer-v1','./js/data/storage.js?v=27');
+CORE.push('./js/app-v3.js?v=20261003091041-auto-transfer-v1-users-v1','./js/modules/usuarios.js?v=20');
+CORE.push('./js/app-v3.js?v=20261004105826','./js/modules/dashboard-v3.js?v=20261004105826');
 self.addEventListener('install', event => {
   event.waitUntil(
     caches.open(CACHE)
