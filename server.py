@@ -105,7 +105,8 @@ DOMAIN_COLLECTIONS = {
     "returns", "supplier-returns", "supplierReturns", "stock-counts", "stockCounts", "reservations", "warranties",
     "damaged-stock", "damagedStock", "cash-sessions", "cashSessions", "cash-movements", "cashMovements", "bank-accounts", "bankAccounts",
     "quotes", "orders", "deliveries", "transfers", "credit-notes", "creditNotes", "company-settings", "companySettings", "talonarios", "talonarioJustifications",
-    "workSchedules", "staffAbsences",
+    "workSchedules", "staffAbsences", "entries", "exits", "sistecredito", "auditLog", "inventoryMovements", "installments",
+    "payments", "movementEdits", "paymentMethods",
 }
 DEFAULT_TENANT = "tenant-default"
 PUBLISHABLE_FILES = ("index.html", "css/", "js/", "service-worker.js", "server.py", "report_pdf.py", "tunnel-url.json")
@@ -1497,16 +1498,30 @@ def _shared_domain_items(database: _PostgresConnection, collection: str) -> list
         """
     elif collection == "payments":
         query = """
-            SELECT id_abono AS id, credito_id, fecha, usuario, vendedor, local,
+            SELECT id_abono AS id, credito_id, NULL::integer AS apartado_id,
+                   'CREDITO'::text AS tipo_abono, fecha, usuario, vendedor, local,
                    valor_abono, saldo_anterior, saldo_nuevo, metodo_pago,
                    observacion, numero_recibo
             FROM abonos_creditos
             UNION ALL
-            SELECT id_abono AS id, apartado_id AS credito_id, fecha, usuario,
+            SELECT id_abono AS id, NULL::integer AS credito_id, apartado_id,
+                   'APARTADO'::text AS tipo_abono, fecha, usuario,
                    vendedor, local, valor_abono, saldo_anterior, saldo_nuevo,
                    metodo_pago, observacion, numero_recibo
             FROM abonos_apartados
             ORDER BY fecha DESC
+        """
+    elif collection == "movementEdits":
+        query = """
+            SELECT id, movimiento_id, detalle_id, campo, valor_anterior,
+                   valor_nuevo, tipo_movimiento, estado_movimiento,
+                   local_origen, local_destino, codigo_antiguo, codigo_nuevo,
+                   producto_anterior, producto_nuevo, cantidad_anterior,
+                   cantidad_nueva, precio_anterior, precio_nuevo, diferencia,
+                   inventario_antes, inventario_despues, motivo, administrador,
+                   fecha
+            FROM movimiento_ediciones
+            ORDER BY fecha DESC, id DESC
         """
     elif collection == "installments":
         query = "SELECT id_abono AS id, credito_id, fecha, usuario, vendedor, local, valor_abono, saldo_anterior, saldo_nuevo, metodo_pago, observacion, numero_recibo FROM abonos_creditos ORDER BY fecha DESC"
@@ -1559,20 +1574,26 @@ def _shared_domain_items(database: _PostgresConnection, collection: str) -> list
             for column in ("cliente", "cliente_nombre", "nombre_cliente", "customer", "customer_name")
             if column in credit_columns
         ]
-        customer_candidates.extend([
-            "NULLIF(BTRIM(COALESCE(v.cliente_nombre::text, '')), '')",
-            "NULLIF(BTRIM(COALESCE(m.cliente::text, '')), '')",
-        ])
-        customer_expression = "COALESCE(" + ", ".join(customer_candidates) + ", '')"
-        query = """
-            SELECT c.*, COALESCE(c.cuota_inicial, 0) + COALESCE(c.saldo_pendiente, 0) AS total,
-                     CUSTOMER_EXPRESSION AS customer, COALESCE(v.id, m.id) AS sale_id,
-                     COALESCE(v.numero_factura, m.factura) AS invoice_number
+        customer_expression = "COALESCE(" + ", ".join(customer_candidates + ["''"]) + ")"
+        initial_columns = [f"c.{column}" for column in ("abono_inicial", "cuota_inicial") if column in credit_columns]
+        initial_expression = "COALESCE(" + ", ".join(initial_columns + ["0"]) + ")"
+        balance_expression = "COALESCE(c.saldo_pendiente, 0)" if "saldo_pendiente" in credit_columns else "0"
+        total_columns = [f"c.{column}" for column in ("total", "valor_total") if column in credit_columns]
+        total_expression = (
+            "COALESCE(" + ", ".join(total_columns + [f"({initial_expression} + {balance_expression})"]) + ")"
+        )
+        sale_id_column = next((column for column in ("movimiento_id", "venta_id", "sale_id") if column in credit_columns), None)
+        sale_id_expression = f"c.{sale_id_column}" if sale_id_column else "NULL::text"
+        invoice_column = next((column for column in ("factura", "numero_factura", "invoice_number") if column in credit_columns), None)
+        invoice_expression = f"c.{invoice_column}" if invoice_column else "NULL::text"
+        date_column = next((column for column in ("creado_en", "fecha", "created_at") if column in credit_columns), "id")
+        query = f"""
+            SELECT c.*, {total_expression} AS total, {initial_expression} AS initial,
+                   {customer_expression} AS customer, {sale_id_expression} AS sale_id,
+                   {invoice_expression} AS invoice_number
             FROM creditos c
-                 LEFT JOIN ventas v ON v.id = c.venta_id
-            LEFT JOIN movimientos m ON m.id = c.venta_id
-            ORDER BY c.creado_en DESC NULLS LAST, c.id DESC
-        """.replace("CUSTOMER_EXPRESSION", customer_expression)
+            ORDER BY c.{date_column} DESC NULLS LAST, c.id DESC
+        """
     elif collection == "transfers":
         query = """
             SELECT m.id, m.fecha, m.local_origen, m.local_destino, m.vendedor,
@@ -1664,25 +1685,18 @@ def _shared_domain_items(database: _PostgresConnection, collection: str) -> list
                 sale_id = item.get("sale_id") or item.get("saleId") or item.get("venta_id") or item.get("ventaId")
                 if not sale_id:
                     continue
-                movement = database.execute(
-                    """
-                    SELECT COALESCE(v.id, m.id) AS id,
-                           COALESCE(v.numero_factura, m.factura) AS factura,
-                           COALESCE(v.cliente_nombre, m.cliente) AS cliente,
-                           COALESCE(v.fecha_venta, m.fecha) AS fecha,
-                           m.local_origen AS local_origen
-                    FROM creditos c
-                    LEFT JOIN ventas v ON v.id = c.venta_id
-                    LEFT JOIN movimientos m ON m.id = c.venta_id
-                    WHERE c.id = %s
-                    """,
-                    (item.get("id"),),
-                ).fetchone()
-                if movement:
-                    item["saleId"] = str(movement["id"])
-                    item["invoiceNumber"] = movement["factura"] or ""
-                    item["customer"] = item.get("customer") or movement["cliente"] or ""
-                    item["saleDate"] = movement["fecha"]
+                item["saleId"] = str(sale_id)
+                item["invoiceNumber"] = item.get("invoice_number") or item.get("factura") or ""
+                item["saleDate"] = item.get("fecha") or item.get("creado_en") or ""
+                if sale_id_column == "movimiento_id":
+                    lines = database.execute(
+                        """
+                        SELECT codigo, descripcion, cantidad, precio_unitario, precio_total
+                        FROM movimiento_productos WHERE movimiento_id = %s ORDER BY codigo
+                        """,
+                        (sale_id,),
+                    ).fetchall()
+                elif sale_id_column == "venta_id":
                     lines = database.execute(
                         """
                         SELECT producto_nombre AS descripcion, cantidad, valor_unitario AS precio_unitario,
@@ -1691,21 +1705,18 @@ def _shared_domain_items(database: _PostgresConnection, collection: str) -> list
                         """,
                         (sale_id,),
                     ).fetchall()
-                    if not lines:
-                        lines = database.execute(
-                            "SELECT codigo, descripcion, cantidad, precio_unitario, precio_total FROM movimiento_productos WHERE movimiento_id = %s ORDER BY codigo",
-                            (sale_id,),
-                        ).fetchall()
-                    item["items"] = [
-                        {
-                            "productId": str(line["codigo"] or ""),
-                            "name": line["descripcion"] or line["codigo"] or "Producto",
-                            "quantity": line["cantidad"] or 0,
-                            "unitPrice": line["precio_unitario"] or 0,
-                            "subtotal": line["precio_total"] or 0,
-                        }
-                        for line in lines
-                    ]
+                else:
+                    lines = []
+                item["items"] = [
+                    {
+                        "productId": str(line["codigo"] or ""),
+                        "name": line["descripcion"] or line["codigo"] or "Producto",
+                        "quantity": line["cantidad"] or 0,
+                        "unitPrice": line["precio_unitario"] or 0,
+                        "subtotal": line["precio_total"] or 0,
+                    }
+                    for line in lines
+                ]
         if collection == "apartados":
             details = database.execute(
                 """SELECT id, apartado_id, codigo, producto, cantidad, valor_unitario, subtotal
@@ -1758,7 +1769,7 @@ def _shared_state(database: _PostgresConnection) -> dict:
         "inventoryByStore": catalog["inventory"],
         "demoMode": False,
     }
-    for collection in DOMAIN_COLLECTIONS | {"users", "roles", "expenses", "fuelRecords", "entries", "exits", "sistecredito", "auditLog", "inventoryMovements", "transfers", "installments", "payments", "customers", "paymentMethods"}:
+    for collection in DOMAIN_COLLECTIONS | {"users", "roles", "expenses", "fuelRecords", "entries", "exits", "sistecredito", "auditLog", "inventoryMovements", "transfers", "installments", "payments", "movementEdits", "customers", "paymentMethods"}:
         items = _shared_domain_items(database, collection)
         if items is not None:
             state[collection] = items
@@ -2510,7 +2521,7 @@ class AppHandler(SimpleHTTPRequestHandler):
             return
         if path.startswith("/api/report-pdf/") and path.endswith(".pdf"):
             collection = unquote(path.removeprefix("/api/report-pdf/").removesuffix(".pdf"))
-            standard = {"sales", "customers", "stores", "inventory", "inventoryByStore", "products", "credits", "fuelRecords"}
+            standard = {"sales", "customers", "stores", "inventory", "inventoryByStore", "products", "credits", "fuelRecords", "sistecredito", "payments", "installments", "movementEdits", "auditLog", "inventoryMovements", "entries", "exits", "paymentMethods"}
             if collection not in DOMAIN_COLLECTIONS and collection not in standard:
                 self.send_json(404, {"error": "Reporte no disponible"})
                 return

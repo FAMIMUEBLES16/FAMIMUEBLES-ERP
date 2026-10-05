@@ -9,11 +9,32 @@ export const icons = {
 	settings: icon('<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-1.7 1.7-.06-.06a1.7 1.7 0 0 0-1.88-.34A1.7 1.7 0 0 0 15.12 20v.2h-2.4V20a1.7 1.7 0 0 0-1.04-1.56 1.7 1.7 0 0 0-1.88.34l-.06.06-1.7-1.7.06-.06A1.7 1.7 0 0 0 8.4 15a1.7 1.7 0 0 0-1.56-1.04H6v-2.4h.84A1.7 1.7 0 0 0 8.4 10a1.7 1.7 0 0 0-.34-1.88L8 8.06l1.7-1.7.06.06a1.7 1.7 0 0 0 1.88.34A1.7 1.7 0 0 0 12.68 5.2V5h2.4v.2a1.7 1.7 0 0 0 1.04 1.56 1.7 1.7 0 0 0 1.88-.34l.06-.06 1.7 1.7-.06.06A1.7 1.7 0 0 0 19.4 10c.18.63.72 1.04 1.36 1.04H21v2.4h-.24A1.7 1.7 0 0 0 19.4 15Z"/>'),
 	calendar: icon('<rect x="3" y="4" width="18" height="17" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>')
 };
-export const navItems = [{id:'dashboard',label:'Dashboard',icon:icons.dashboard},{id:'ventas',label:'Ventas',icon:icons.sales},{id:'facturacion',label:'Facturacion',icon:icons.receipt},{id:'productos',label:'Productos',icon:icons.box},{id:'inventario',label:'Inventario',icon:icons.box},{id:'traslados',label:'Traslados',icon:icons.box},{id:'proveedores',label:'Proveedores',icon:icons.users},{id:'compras',label:'Compras',icon:icons.receipt},{id:'cuentas-por-pagar',label:'Cuentas por pagar',icon:icons.wallet},{id:'clientes',label:'Clientes',icon:icons.users},{id:'cartera',label:'Cartera',icon:icons.wallet},{id:'apartados',label:'Apartados',icon:icons.box},{id:'locales',label:'Locales',icon:icons.box},{id:'operaciones',label:'Garantias',icon:icons.settings},{id:'paridad',label:'Sistecredito',icon:icons.settings},{id:'gastos',label:'Gastos',icon:icons.wallet},{id:'gasolina',label:'Gasolina',icon:icons.box},{id:'auditoria',label:'Auditoria',icon:icons.receipt},{id:'usuarios',label:'Usuarios',icon:icons.users},{id:'descansos',label:'Descansos y ausencias',icon:icons.calendar},{id:'talonarios',label:'Talonarios',icon:icons.receipt},{id:'reportes',label:'Reportes',icon:icons.dashboard},{id:'configuracion',label:'Configuracion',icon:icons.settings}];
+export const navItems = [
+	{id:'dashboard',label:'Dashboard',icon:icons.dashboard},
+	{id:'ventas',label:'Ventas',icon:icons.sales},
+	{id:'facturacion',label:'Facturacion',icon:icons.receipt},
+	{id:'clientes',label:'Clientes',icon:icons.users},
+	{id:'cartera',label:'Cartera',icon:icons.wallet},
+	{id:'apartados',label:'Apartados',icon:icons.box},
+	{id:'reportes',label:'Reportes',icon:icons.dashboard},
+	{id:'productos',label:'Productos',icon:icons.box},
+	{id:'inventario',label:'Inventario',icon:icons.box},
+	{id:'traslados',label:'Traslados',icon:icons.box},
+	{id:'proveedores',label:'Proveedores',icon:icons.users},
+	{id:'compras',label:'Compras',icon:icons.receipt},
+	{id:'cuentas-por-pagar',label:'Cuentas por pagar',icon:icons.wallet},
+	{id:'operaciones',label:'Garantias',icon:icons.settings},
+	{id:'gastos',label:'Gastos',icon:icons.wallet},
+	{id:'gasolina',label:'Gasolina',icon:icons.box},
+	{id:'paridad',label:'Sistecredito',icon:icons.settings},
+	{id:'auditoria',label:'Auditoria',icon:icons.receipt},
+	{id:'usuarios',label:'Usuarios',icon:icons.users},
+	{id:'descansos',label:'Descansos y ausencias',icon:icons.calendar},
+	{id:'talonarios',label:'Talonarios',icon:icons.receipt},
+	{id:'configuracion',label:'Configuracion',icon:icons.settings},
+];
 export const navGroups = [
-	{id:'sales',label:'Ventas',icon:icons.sales,items:['ventas','clientes','cartera','apartados']},
-	{id:'inventory',label:'Inventario',icon:icons.box,items:['productos','traslados','locales','reportes']},
-	{id:'purchases',label:'Compras',icon:icons.receipt,items:['proveedores','compras','cuentas-por-pagar']},
-	{id:'operations',label:'Operaciones',icon:icons.settings,items:['operaciones','paridad','gastos','gasolina']},
-	{id:'administration',label:'Administracion',icon:icons.settings,items:['auditoria','usuarios','descansos','talonarios','configuracion']},
+	{id:'consultar',label:'Consultar',icon:icons.dashboard,items:['ventas','clientes','cartera','apartados','auditoria','reportes']},
+	{id:'registrar',label:'Registrar',icon:icons.box,items:['productos','traslados','proveedores','compras','cuentas-por-pagar','operaciones','gastos','gasolina']},
+	{id:'operaciones',label:'Administracion',icon:icons.settings,items:['paridad','usuarios','descansos','talonarios','configuracion']},
 ];

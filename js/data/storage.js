@@ -18,6 +18,8 @@ function createEmptyState() {
     installments: [],
     payments: [],
     apartados: [],
+    sistecredito: [],
+    movementEdits: [],
     stores: [],
     inventory: [],
     inventoryByStore: [],
@@ -80,6 +82,8 @@ function normalizeState(state) {
   base.expenses = Array.isArray(base.expenses) ? base.expenses : [];
   base.fuelRecords = Array.isArray(base.fuelRecords) ? base.fuelRecords : [];
   base.auditLog = Array.isArray(base.auditLog) ? base.auditLog : [];
+  base.sistecredito = Array.isArray(base.sistecredito) ? base.sistecredito : [];
+  base.movementEdits = Array.isArray(base.movementEdits) ? base.movementEdits : [];
   base.inventoryMovements = Array.isArray(base.inventoryMovements) ? base.inventoryMovements : [];
   base.suppliers = Array.isArray(base.suppliers) ? base.suppliers : [];
   base.purchases = Array.isArray(base.purchases) ? base.purchases : [];
