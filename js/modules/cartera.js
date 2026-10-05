@@ -1,4 +1,4 @@
-import { renderCreditos } from './creditos.js?v=23';
+import { renderCreditos } from './creditos.js?v=31';
 
 export function renderCartera(data) {
   return renderCreditos(data);

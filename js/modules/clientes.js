@@ -3,13 +3,23 @@ const text = (value) => value == null || value === 'undefined' || value === 'nul
 const safe = (value, fallback = '-') => {
   const raw = text(value).trim(); return raw ? raw : fallback;
 };
+const customerName = (item) => {
+  const raw = text(item?.name).replace(/\s+/g, ' ').trim();
+  if (!raw || ['undefined', 'null', 'none', 'nulo', 'sin nombre', 'sin cliente', 'sin identificar'].includes(raw.toLowerCase())) {
+    return item?.id == null ? 'Cliente no identificado' : `Cliente no identificado (ID ${item.id})`;
+  }
+  if (/^(mov|cli|customer|cliente)[-_ ]?\d+$/i.test(raw)) {
+    return `Cliente no identificado (referencia ${raw})`;
+  }
+  return raw;
+};
 export function renderClientes(data) { return page('RELACIONES','Clientes','<button class="primary" data-action="new-customer">＋ Nuevo cliente</button>',`<div class="toolbar"><label class="input-label">Buscar clientes<input class="field" data-filter="customers" placeholder="Buscar por nombre, documento o telefono..."></label></div><div id="customers-table">${customerTable(data.customers)}</div>`); }
 export function customerTable(items) {
   const rows = Array.isArray(items) ? items : [];
   const isAdmin = String(JSON.parse(localStorage.getItem('famimuebles-user') || '{}').role || '').toUpperCase() === 'ADMINISTRADOR';
   return table(['Cliente','Documento','Contacto','Compras','Credito','Saldo','Estado','Acciones'], rows.map(item => `
     <tr>
-      <td><strong>${safe(item.name, 'Sin nombre')}</strong></td>
+      <td><strong>${customerName(item)}</strong></td>
       <td>${safe(item.document, '')}</td>
       <td>${safe(item.phone, '-')}<small>${safe(item.email, '')}</small></td>
       <td>${safe(item.purchases, 0)}</td>

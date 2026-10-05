@@ -17,6 +17,12 @@ function parseRemoteRow(item = {}) {
 function sellerKey(value) {
   return String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
 }
+function normalizeDisplayText(value, fallback = 'Sin dato') {
+  const raw = String(value ?? '').replace(/\s+/g, ' ').trim();
+  if (!raw || ['undefined', 'null', 'sin nombre', 'sin cliente', 'cliente', 'cliente sin nombre', 'contado'].includes(raw.toLowerCase())) return fallback;
+  if (/^(mov|cli|customer|cliente)[-_ ]?\d+$/i.test(raw) || /^\d{3,}$/i.test(raw)) return `Cliente ${raw}`;
+  return raw;
+}
 function normalizePhysicalInvoice(row) {
   const raw = Number(String(row.invoiceNumber ?? row.numero_factura ?? row.invoice ?? '').trim());
   const store = String(row.storeId ?? row.local_id ?? row.localId ?? row.local ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().replace(/[^A-Z0-9]/g, '');
@@ -95,7 +101,10 @@ export function canonicalSellerName(value) {
   const key = sellerKey(value);
   if (key === 'maria isabel' || key === 'maria isabell cubillos') return 'Maria Isabel Cubillos';
   if (key === 'michael diaz') return 'Michael Díaz';
-  return String(value || '').trim() || 'Sin vendedor';
+  const raw = String(value ?? '').trim();
+  if (!raw || ['undefined', 'null', 'sin vendedor', 'cliente', 'cliente sin nombre'].includes(raw.toLowerCase())) return 'Sin vendedor';
+  if (/^(mov|cli|customer|cliente)[-_ ]?\d+$/i.test(raw) || /^(?:[a-z]+-)?\d{3,}$/i.test(raw)) return 'Sin vendedor';
+  return raw;
 }
 
 export function normalizeSales(items = []) {
@@ -117,8 +126,8 @@ export function normalizeSales(items = []) {
       id: String(row.id ?? row.factura ?? row.numero_factura ?? row.invoiceId ?? 'S/F'),
       invoiceNumber,
       storeId: String(row.storeId ?? row.local_id ?? row.localId ?? row.local ?? ''),
-      customer: String(customer || 'Cliente'),
-      seller: String(seller || ''),
+      customer: normalizeDisplayText(customer, 'Cliente sin nombre'),
+      seller: String(seller || '').trim() || 'Sin vendedor',
       date: String(date),
       paymentMethod: String(paymentMethod),
       total: Number.isFinite(total) ? total : 0,

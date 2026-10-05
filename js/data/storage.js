@@ -1,7 +1,7 @@
 import { createAccountPayable } from '../services/accounts-payable-service.js?v=14';
 import { demoState } from './demo-data.js';
 import { api } from '../services/api-client.js';
-import { API_BASE_URL } from '../config.js?v=20261004105826';
+import { API_BASE_URL } from '../config.js?v=20261005091948';
 
 export const TENANT_STORAGE_KEY = 'famimuebles-tenant-id';
 const REMOTE_DOMAIN_COLLECTIONS = ['customers','suppliers','purchases','credits','expenses','accountsPayable','supplierPayments','customerAccounts','returns','supplierReturns','stockCounts','reservations','warranties','damagedStock','cashSessions','cashMovements','bankAccounts','quotes','orders','deliveries','creditNotes','transfers','talonarios','talonarioJustifications','workSchedules','staffAbsences'];
@@ -18,6 +18,8 @@ function createEmptyState() {
     installments: [],
     payments: [],
     apartados: [],
+    sistecredito: [],
+    movementEdits: [],
     stores: [],
     inventory: [],
     inventoryByStore: [],
@@ -80,6 +82,8 @@ function normalizeState(state) {
   base.expenses = Array.isArray(base.expenses) ? base.expenses : [];
   base.fuelRecords = Array.isArray(base.fuelRecords) ? base.fuelRecords : [];
   base.auditLog = Array.isArray(base.auditLog) ? base.auditLog : [];
+  base.sistecredito = Array.isArray(base.sistecredito) ? base.sistecredito : [];
+  base.movementEdits = Array.isArray(base.movementEdits) ? base.movementEdits : [];
   base.inventoryMovements = Array.isArray(base.inventoryMovements) ? base.inventoryMovements : [];
   base.suppliers = Array.isArray(base.suppliers) ? base.suppliers : [];
   base.purchases = Array.isArray(base.purchases) ? base.purchases : [];

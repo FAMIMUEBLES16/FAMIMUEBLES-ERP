@@ -22,10 +22,22 @@ function telegramId(user) {
   return /^\d{5,}$/.test(id) ? id : '';
 }
 
+function isActive(user) {
+  const inactiveValues = new Set([
+    false, 0, '0', 'false', 'no', 'n', 'off',
+    'inactivo', 'inactiva', 'inactive', 'desactivado', 'desactivada', 'disabled',
+  ]);
+  const active = user.active ?? user.activo;
+  if (active !== undefined && active !== null && active !== '') {
+    return !inactiveValues.has(typeof active === 'string' ? active.trim().toLowerCase() : active);
+  }
+  return !inactiveValues.has(String(user.status || user.estado || '').trim().toLowerCase());
+}
+
 function employees(data) {
   return (Array.isArray(data.users) ? data.users : [])
     .filter(user => user && !String(user.role || user.rol || '').toUpperCase().includes('ADMIN'))
-    .filter(user => user.active !== false && user.active !== 0 && String(user.status || user.estado || '').toUpperCase() !== 'INACTIVO')
+    .filter(isActive)
     .map(user => ({
       ...user,
       telegramId: telegramId(user),

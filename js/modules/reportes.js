@@ -13,6 +13,13 @@ const escapeHtml = value => String(value ?? '').replaceAll('&', '&amp;').replace
 const firstValue = (item, keys) => keys.map(key => item?.[key]).find(value => value !== undefined && value !== null && value !== '');
 const dateValue = item => firstValue(item, ['date', 'fecha', 'createdAt', 'created_at', 'fecha_venta', 'fechaCompra']) || '';
 const storeValue = (item, stores) => { const id = firstValue(item, ['storeId', 'store_id', 'localId', 'local_id']); return firstValue(item, ['store', 'local', 'local_nombre']) || stores.find(store => String(store.id) === String(id))?.name || id || ''; };
+const sanitizeDisplayText = (value, fallback = 'Sin dato') => {
+	const raw = String(value ?? '').replace(/\s+/g, ' ').trim();
+	if (!raw || ['undefined', 'null', 'none', 'nulo', 'sin nombre', 'sin cliente', 'sin identificar', 'cliente', 'cliente sin nombre', 'contado', 'sin dato', 'desconocido', 'n/a'].includes(raw.toLowerCase())) return fallback;
+	if (/^(mov|cli|customer|cliente)[-_ ]?\d+$/i.test(raw) || /^\d{3,}$/i.test(raw)) return `Cliente no identificado (referencia ${raw})`;
+	if (/^(?:\d+|[a-z]+-[a-z0-9]+)$/i.test(raw) && raw.length <= 12) return `Cliente no identificado (${raw})`;
+	return raw;
+};
 const money = value => value === '' || value === undefined || value === null ? '' : `$ ${Number(value || 0).toLocaleString('es-CO')}`;
 
 function reportRows(data, type) {
@@ -23,7 +30,10 @@ function reportRows(data, type) {
 		const total = firstValue(item, ['total', 'amount', 'valor_total', 'valor', 'total_venta']);
 		const balance = firstValue(item, ['balance', 'saldo', 'saldo_pendiente', 'pendingAmount']);
 		if (type === 'inventory') return [product?.name || firstValue(item, ['productName', 'producto', 'codigo', 'productId']), storeValue(item, stores), firstValue(item, ['quantity', 'cantidad', 'stock']) ?? 0, firstValue(item, ['minimumQuantity', 'minimum', 'minimumStock']) ?? 0];
-		if (type === 'sales') return [dateValue(item), firstValue(item, ['invoiceId', 'invoiceNumber', 'numero_factura', 'id']), firstValue(item, ['customer', 'cliente', 'customerName']) || 'Contado', storeValue(item, stores), money(total)];
+		if (type === 'sales') {
+			const customerValue = firstValue(item, ['customer', 'cliente', 'customerName', 'nombre_cliente', 'cliente_nombre']);
+			return [dateValue(item), firstValue(item, ['invoiceId', 'invoiceNumber', 'numero_factura', 'id']), sanitizeDisplayText(customerValue, 'Cliente no identificado'), storeValue(item, stores), money(total)];
+		}
 		if (type === 'expenses') return [dateValue(item), firstValue(item, ['category', 'categoria', 'type']) || 'General', firstValue(item, ['detail', 'detalle', 'description', 'concept']) || '', storeValue(item, stores), money(total)];
 		if (type === 'fuel') return [dateValue(item), firstValue(item, ['vehicle', 'carro', 'plate', 'placa']) || '', firstValue(item, ['driver', 'conductor', 'employee']) || '', storeValue(item, stores), money(total)];
 		return [dateValue(item), firstValue(item, ['customer', 'cliente', 'supplier', 'proveedor', 'supplierName']) || '', firstValue(item, ['invoiceNumber', 'invoiceId', 'factura', 'numero_factura']) || '', storeValue(item, stores), money(total), money(balance)];
@@ -59,7 +69,9 @@ export function renderReportPreview(data = {}, type = 'inventory', filters = {})
 	const filtered = source.filter(item => {
 		const itemStore = firstValue(item, ['storeId', 'store_id', 'localId', 'local_id']);
 		const quantity = Number(firstValue(item, ['quantity', 'cantidad', 'stock']) ?? 0);
-		return (!selected || String(itemStore) === selected || String(storeValue(item, stores)) === selected) && inDateRange(item, filters.from, filters.to) && (type !== 'inventory' || quantity !== 0);
+		return (!selected || String(itemStore) === selected || String(storeValue(item, stores)) === selected)
+			&& inDateRange(item, filters.from, filters.to)
+			&& (type !== 'inventory' || quantity !== 0);
 	});
 	const previewItems = type === 'inventory' && !selected ? consolidateInventory(filtered, data.products || []).filter(item => Number(item.quantity || 0) !== 0) : filtered;
 	const rows = reportRows({ ...data, [report.source]: previewItems }, type).map(values => `<tr>${values.map(value => `<td>${escapeHtml(value)}</td>`).join('')}</tr>`).join('');

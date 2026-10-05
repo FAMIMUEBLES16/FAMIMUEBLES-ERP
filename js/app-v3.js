@@ -1,4 +1,4 @@
-function showCreditDetail(creditId){const credit=store.collection.credits.find(item=>String(item.id)===String(creditId));if(!credit)return;const saleId=credit.saleId||credit.sale_id||credit.venta_id||credit.sourceId;const sale=store.collection.sales.find(item=>String(item.id)===String(saleId));if(sale)return saleDetail(sale.id);const items=Array.isArray(credit.items)?credit.items:[];const total=Number(credit.total||0);$('#modal-root').innerHTML=`<div class="modal-backdrop"><section class="modal"><button type="button" class="modal-close">×</button><p class="eyebrow">CARTERA</p><h2>Credito ${credit.id}</h2><div class="detail-grid"><div><span>Cliente</span><strong>${credit.customer||credit.cliente||'Cliente sin nombre'}</strong></div><div><span>Factura</span><strong>${credit.invoiceNumber||'-'}</strong></div><div><span>Total</span><strong>${money(total)}</strong></div><div><span>Saldo</span><strong>${money(Math.max(0,total-Number(credit.initial||0)-Number(credit.paid||0)))}</strong></div></div><h3>Productos vendidos</h3>${items.length?table(['Producto','Cantidad','Valor unitario','Subtotal'],items.map(item=>`<tr><td>${item.name||item.productId||'Producto'}</td><td>${item.quantity||0}</td><td>${money(item.unitPrice||0)}</td><td>${money(item.subtotal||Number(item.quantity||0)*Number(item.unitPrice||0))}</td></tr>`)): '<p>No hay lineas de producto disponibles.</p>'}</section></div>`;$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';}
+function showCreditDetail(creditId){const credit=store.collection.credits.find(item=>String(item.id)===String(creditId));if(!credit)return;const saleId=credit.saleId||credit.sale_id||credit.venta_id||credit.sourceId;const sale=store.collection.sales.find(item=>String(item.id)===String(saleId));if(sale)return saleDetail(sale.id);const items=Array.isArray(credit.items)?credit.items:[];const total=Number(credit.total||0);$('#modal-root').innerHTML=`<div class="modal-backdrop"><section class="modal"><button type="button" class="modal-close">×</button><p class="eyebrow">CARTERA</p><h2>Credito ${credit.id}</h2><div class="detail-grid"><div><span>Cliente</span><strong>${credit.customer||credit.cliente||'Cliente sin nombre'}</strong></div><div><span>Factura</span><strong>${credit.invoiceNumber||'-'}</strong></div><div><span>Total</span><strong>${money(total)}</strong></div><div><span>Saldo</span><strong>${money(creditPendingBalance(credit))}</strong></div></div><h3>Productos vendidos</h3>${items.length?table(['Producto','Cantidad','Valor unitario','Subtotal'],items.map(item=>`<tr><td>${item.name||item.productId||'Producto'}</td><td>${item.quantity||0}</td><td>${money(item.unitPrice||0)}</td><td>${money(item.subtotal||Number(item.quantity||0)*Number(item.unitPrice||0))}</td></tr>`)): '<p>No hay lineas de producto disponibles.</p>'}</section></div>`;$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';}
 function transferRecord(transferId){const local=(store.collection.transfers||[]).find(item=>String(item.id)===String(transferId));if(local)return local;return (store.collection.inventoryMovements||[]).filter(item=>String(item.tipo||'').toUpperCase()==='TRASLADO').map(item=>({...item,id:String(item.id),originStoreId:String(item.local_origen||''),destinationStoreId:String(item.local_destino||''),createdAt:item.fecha||item.creado_en||'',createdBy:item.usuario_id||item.empleado||'',status:String(item.estado||'RECIBIDO').toUpperCase()==='COMPLETADO'?'RECIBIDO':String(item.estado||'RECIBIDO').toUpperCase(),items:Array.isArray(item.items)?item.items:[{productId:item.codigo||'',quantity:Number(item.cantidad||0),name:item.descripcion||item.codigo||'Producto'}]})).find(item=>String(item.id)===String(transferId));}
 function showTransferDetail(transferId){const transfer=transferRecord(transferId);if(!transfer)return showToast('No se encontro el traslado.','error');const items=transfer.items||[];$('#modal-root').innerHTML=`<div class="modal-backdrop"><section class="modal"><button type="button" class="modal-close">×</button><p class="eyebrow">INVENTARIO</p><h2>Traslado ${transfer.id}</h2><div class="detail-grid"><div><span>Origen</span><strong>${transfer.originStoreId||transfer.local_origen||'-'}</strong></div><div><span>Destino</span><strong>${transfer.destinationStoreId||transfer.local_destino||'-'}</strong></div><div><span>Fecha</span><strong>${transfer.createdAt||transfer.fecha||'-'}</strong></div><div><span>Estado</span><strong>${transfer.status||transfer.estado||'-'}</strong></div></div><h3>Productos</h3>${table(['Producto','Cantidad'],items.map(item=>`<tr><td>${item.name||item.descripcion||item.productId||item.codigo||'Producto'}</td><td>${item.quantity||item.cantidad||0}</td></tr>`))}</section></div>`;$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';}
 function editTransfer(transferId){const transfer=transferRecord(transferId);if(!transfer)return showToast('No se encontro el traslado.','error');$('#modal-root').innerHTML=`<div class="modal-backdrop"><form class="modal" id="transfer-edit-form"><button type="button" class="modal-close">×</button><p class="eyebrow">INVENTARIO</p><h2>Editar traslado</h2><textarea class="field" name="data" rows="12" required>${JSON.stringify(transfer,null,2)}</textarea><button class="primary wide">Guardar cambios</button></form></div>`;$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';$('#transfer-edit-form').onsubmit=async event=>{event.preventDefault();try{const updated=JSON.parse(new FormData(event.target).get('data'));if(String(updated.id)!==String(transfer.id))throw new Error('El ID no puede cambiarse.');await persistDomainRecord('transfers',updated);store.collection.transfers=[...(store.collection.transfers||[]).filter(item=>String(item.id)!==String(updated.id)),updated];$('#modal-root').innerHTML='';render();showToast('Traslado actualizado correctamente.');}catch(error){showToast(error.message,'error');}};}
@@ -7,11 +7,11 @@ import { store } from './data/store.js?v=20';
 import { hydrateState, hydrateStateWithRetry, hydrateCatalog, saveState, authHeaders, activeTenantId, isStaticDeployment } from './data/storage.js?v=28';
 import { generateId } from './utils/ids.js';
 import { currentRoute, startRouter } from './router.js?v=18';
-import { navItems, navGroups } from './components/sidebar.js?v=22';
+import { navItems, navGroups } from './components/sidebar.js?v=23';
 import { showToast } from './components/toast.js';
 import { table } from './components/tables.js';
 import { renderNotifications } from './components/notifications.js';
-import { renderDashboard } from './modules/dashboard-v3.js?v=20261004105826';
+import { renderDashboard } from './modules/dashboard-v3.js?v=20261005091948';
 import { canonicalSellerName, renderVentas, salesTable, salesSummary, normalizeSales, salesMonthKey, saleTimestamp, filterSales, salesPaymentMethods } from './modules/ventas.js?v=27';
 import { renderFacturacion, cartTotal, productResults, customerResults } from './modules/facturacion.js?v=23';
 import { renderProductos, productTable, productMatches } from './modules/productos.js?v=22';
@@ -19,20 +19,20 @@ import { renderInventario, inventoryContent } from './modules/inventario.js?v=20
 import { renderTraslados, transferModal, transferTable } from './modules/traslados.js?v=20';
 import { inventoryEntry, ensureInventoryEntry } from './utils/inventory.js?v=19';
 import { renderClientes, customerTable } from './modules/clientes.js?v=20';
-import { renderCreditos } from './modules/creditos.js?v=23';
-import { renderCartera } from './modules/cartera.js?v=22';
+import { renderCreditos, creditPendingBalance, filterDuplicateHistoricalCredits, normalizeCredit, paymentsForCredit } from './modules/creditos.js?v=31';
+import { renderCartera } from './modules/cartera.js?v=25';
 import { renderLocales } from './modules/locales.js?v=19';
 import { renderReportes, renderReportPreview, reportDefinition } from './modules/reportes.js?v=20';
 import { renderConfiguracion } from './modules/configuracion.js?v=18';
 import { renderGastos } from './modules/gastos.js?v=19';
 import { renderGasolina } from './modules/gasolina.js?v=18';
-import { renderUsuarios } from './modules/usuarios.js?v=20';
-import { renderDescansos } from './modules/descansos.js?v=6';
-import { renderAuditoria, setAuditFilters } from './modules/auditoria.js?v=23';
+import { mergeUserSources, renderUsuarios } from './modules/usuarios.js?v=22';
+import { renderDescansos } from './modules/descansos.js?v=7';
+import { renderAuditoria, resetAuditFilters, setAuditFilters } from './modules/auditoria.js?v=27';
 import { renderTalonarios, talonarioModal, setTalonarioFilters, currentTalonarioNumber, normalizeActiveTalonarios } from './modules/talonarios.js?v=17';
 import { historicalTalonarios, historicalRecibos, storedTalonarios } from './modules/talonarios-historial.js?v=1';
-import { renderApartados } from './modules/apartados.js?v=19';
-import { createApartado, decreaseSaleInventory, registerPayment, runTransaction, addMovement } from './modules/finanzas.js?v=18';
+import { renderApartados } from './modules/apartados.js?v=20';
+import { createApartado, decreaseSaleInventory, runTransaction, addMovement } from './modules/finanzas.js?v=18';
 import { formatCurrency as money } from './utils/currency.js?v=18';
 
 let appHydrating = true;
@@ -55,19 +55,19 @@ const state = { cart:[], payment:'Efectivo', customerId:'CLI-00001', storeId:sto
 let sharedRefreshInFlight = false;
 let sharedRefreshTimer = null;
 let automaticSharedRefreshEnabled = false;
+let automaticRefreshFailureNotified = false;
 let inventoryViewState = { store:'all', query:'', active:'active', status:'all', sort:'name', version:0 };
-let creditViewState = { filter:'all' };
+let creditViewState = { filter:'all', query:'', page:1, pageSize:20, overdueInstallments:[] };
+let apartadoViewState = { filter:'all', query:'', page:1, pageSize:20 };
 let salesViewState = { query:'', store:'all', month:`${new Date().getFullYear()}-${String(new Date().getMonth()+1).padStart(2,'0')}`, payment:'all', version:0 };
 let productViewState = { query:'', store:'all', active:'active', version:0 };
-let activeCreditPaymentId = '';
 function syncCustomerBalances(){
-	const credits=store.collection.credits||[], sales=store.collection.sales||[];
-	credits.forEach(credit=>{
-		credit.id=String(credit.id);
-		credit.initial=Number(credit.initial??credit.downPayment??credit.cuota_inicial??credit.cuotaInicial??0);
-		credit.paid=Number(credit.paid??credit.valor_pagado??credit.pagado??0);
-		credit.total=Number(credit.total??credit.originalAmount??credit.valor_total??credit.initial+(Number(credit.saldo_pendiente??credit.saldoPendiente??0)));
-	});
+	const allCredits=store.collection.credits||[], sales=store.collection.sales||[];
+	const credits=filterDuplicateHistoricalCredits(allCredits);
+	const normalizedCredits=new Map(credits.map(credit=>[
+		String(credit.id),
+		normalizeCredit(credit,sales,store.collection.payments||[],allCredits),
+	]));
 	const matchesCustomer=(item,customer)=>String(item.customerId||item.cliente_id||'')===String(customer.id)||String(item.customer||item.cliente||item.cliente_nombre||'').trim().toLowerCase()===String(customer.name||'').trim().toLowerCase();
 	(store.collection.customers||[]).forEach(customer=>{
 		const customerSales=sales.filter(item=>matchesCustomer(item,customer));
@@ -76,11 +76,8 @@ function syncCustomerBalances(){
 		customer.purchases=customerSales.length;
 		customer.credits=customerCredits.length;
 		customer.purchaseTotal=customerSales.reduce((sum,item)=>sum+Number(item.total??item.valor_total??item.amount??0),0);
-		if(customer.purchaseTotal===0) customer.purchaseTotal=customerCredits.reduce((sum,item)=>sum+Number(item.total??item.originalAmount??item.valor_total??0),0);
-		customer.balance=customerCredits.reduce((sum,item)=>{
-			const total=Number(item.total??item.originalAmount??item.valor_total??0),initial=Number(item.initial??item.downPayment??item.cuota_inicial??0),paid=Number(item.paid??item.valor_pagado??item.pagado??0),explicit=item.saldo_pendiente??item.saldoPendiente??item.balance;
-			return sum+Math.max(0,explicit===undefined||explicit===null||explicit===''?total-initial-paid:Number(explicit));
-		},0);
+		if(customer.purchaseTotal===0) customer.purchaseTotal=customerCredits.reduce((sum,item)=>sum+(normalizedCredits.get(String(item.id))?.total||0),0);
+		customer.balance=customerCredits.reduce((sum,item)=>sum+(normalizedCredits.get(String(item.id))?.pending||0),0);
 		customer.status=customer.balance>0?'Credito':'Al dia';
 	});
 }
@@ -107,7 +104,7 @@ const actionPermissionMap = {
 };
 const $ = selector => document.querySelector(selector);
 const isLocalApp = ['localhost','127.0.0.1','::1'].includes(window.location.hostname);
-const views = { dashboard:()=>renderDashboard(store.collection), ventas:()=>renderVentas(store.collection), facturacion:()=>renderFacturacion(store.collection,state.cart,state.payment,state.customerId,state.transport,state.transportDestination,state.transportNote,state.storeId), productos:()=>renderProductos(store.collection), inventario:()=>renderInventario(store.collection,state.storeId), traslados:()=>renderTraslados(store.collection), proveedores:()=>renderProveedores(store.collection), compras:()=>renderCompras(store.collection), 'cuentas-por-pagar':()=>renderCuentasPorPagar(store.collection), clientes:()=>renderClientes(store.collection), creditos:()=>renderCreditos({...store.collection,creditFilter:creditViewState.filter}), cartera:()=>renderCartera({...store.collection,creditFilter:creditViewState.filter}), apartados:()=>renderApartados(store.collection), locales:()=>renderLocales(store.collection), descansos:()=>renderDescansos(store.collection), operaciones:()=>renderOperaciones(store.collection), paridad:()=>renderParidad(store.collection), gastos:()=>renderGastos(store.collection), gasolina:()=>renderGasolina(store.collection), auditoria:()=>renderAuditoria(store.collection), usuarios:()=>renderUsuarios(store.collection), talonarios:()=>renderTalonarios(store.collection), reportes:()=>renderReportes(store.collection), configuracion:renderConfiguracion };
+const views = { dashboard:()=>renderDashboard(store.collection), ventas:()=>renderVentas(store.collection), facturacion:()=>renderFacturacion(store.collection,state.cart,state.payment,state.customerId,state.transport,state.transportDestination,state.transportNote,state.storeId), productos:()=>renderProductos(store.collection), inventario:()=>renderInventario(store.collection,state.storeId), traslados:()=>renderTraslados(store.collection), proveedores:()=>renderProveedores(store.collection), compras:()=>renderCompras(store.collection), 'cuentas-por-pagar':()=>renderCuentasPorPagar(store.collection), clientes:()=>renderClientes(store.collection), creditos:()=>renderCreditos({...store.collection,installments:[...(store.collection.installments||[]),...creditViewState.overdueInstallments],creditFilter:creditViewState.filter,creditQuery:creditViewState.query,creditPage:creditViewState.page,creditPageSize:creditViewState.pageSize}), cartera:()=>renderCartera({...store.collection,installments:[...(store.collection.installments||[]),...creditViewState.overdueInstallments],creditFilter:creditViewState.filter,creditQuery:creditViewState.query,creditPage:creditViewState.page,creditPageSize:creditViewState.pageSize}), apartados:()=>renderApartados({...store.collection,apartadoFilter:apartadoViewState.filter,apartadoQuery:apartadoViewState.query,apartadoPage:apartadoViewState.page,apartadoPageSize:apartadoViewState.pageSize}), locales:()=>renderLocales(store.collection), descansos:()=>renderDescansos(store.collection), operaciones:()=>renderOperaciones(store.collection), paridad:()=>renderParidad(store.collection), gastos:()=>renderGastos(store.collection), gasolina:()=>renderGasolina(store.collection), auditoria:()=>renderAuditoria(store.collection), usuarios:()=>renderUsuarios(store.collection), talonarios:()=>renderTalonarios(store.collection), reportes:()=>renderReportes(store.collection), configuracion:renderConfiguracion };
 function activeStoreKey(){ return `famimuebles-active-store-${activeTenantId() || 'default'}`; }
 function resolveActiveStore(){ const stores=store.collection.stores||[]; const saved=localStorage.getItem(activeStoreKey()); return stores.some(item=>String(item.id)===String(saved)) ? String(saved) : (stores[0]?.id || ''); }
 function syncActiveStoreSelector(){ const selector=$('#active-store-selector'); if(!selector)return; const stores=store.collection.stores||[]; selector.innerHTML=stores.length ? stores.map(item=>`<option value="${item.id}">${item.name}</option>`).join('') : '<option value="">Sin locales registrados</option>'; selector.disabled=!stores.length; selector.value=state.storeId; }
@@ -152,7 +149,22 @@ function restoreViewState(snapshot){
 	window.scrollTo(0,snapshot.scrollY);
 }
 function ensureViewActions(){document.querySelectorAll('.table-wrap tbody tr').forEach(row=>{const action=row.querySelector('[data-action^="edit-"],[data-action^="delete-"]');if(!action)return;const actions=action.parentElement;if(row.querySelector('[data-action="edit-credit"]')&&!row.querySelector('[data-action="credit-payment"]')){const payment=document.createElement('button');payment.className='table-action';payment.textContent='Registrar abono';payment.dataset.action='credit-payment';payment.dataset.creditId=action.dataset.creditId;actions.prepend(payment);}if(row.querySelector('[data-action^="view-"],[data-action="sale-detail"],[data-action="purchase-detail"],[data-action="product-detail"]'))return;const view=document.createElement('button');view.className='table-action';view.textContent='Ver';view.dataset.action=action.dataset.action.replace(/^edit-|^delete-/,'view-');Object.keys(action.dataset).filter(key=>key.endsWith('Id')).forEach(key=>{view.dataset[key]=action.dataset[key];});actions.prepend(view);});}
-function render(){ const route=currentRoute(); $('#section-title').textContent=navItems.find(item=>item.id===route)?.label||'Dashboard'; $('#app-content').innerHTML=views[route](); if(route==='facturacion'){syncBillingSummary();syncCreditFlow();syncInvoiceField();} if(route==='ventas')applySalesFilters(); if(route==='productos'){const filters=$('.product-filters');if(filters&&!filters.querySelector('[data-action="clear-product-filters"]')){const button=document.createElement('button');button.className='outline';button.type='button';button.dataset.action='clear-product-filters';button.textContent='Limpiar filtros';filters.append(button);}} applyUserPermissions(); applyShellMode(); renderNav(); syncActiveStoreSelector(); const notificationCount=$('#notification-count'); if(notificationCount){const pending=store.collection.notifications.filter(item=>!item.read).length;notificationCount.textContent=pending;notificationCount.hidden=pending===0;} setMobileSidebar(false); }
+let creditArrearsLoaded = false;
+let creditArrearsRequest = null;
+function loadCreditArrears() {
+	if(creditArrearsLoaded||creditArrearsRequest)return;
+	creditArrearsRequest=api.get('/api/parity/mora').then(payload=>{
+		if(!Array.isArray(payload.items))throw new Error('El servidor devolvio un listado de vencimientos invalido.');
+		creditViewState.overdueInstallments=payload.items;
+	}).catch(error=>{
+		showToast(`No se pudieron cargar las cuotas vencidas: ${error.message}`,'error');
+	}).finally(()=>{
+		creditArrearsLoaded=true;
+		creditArrearsRequest=null;
+		if(['creditos','cartera'].includes(currentRoute()))render();
+	});
+}
+function render(){ const route=currentRoute(); $('#section-title').textContent=navItems.find(item=>item.id===route)?.label||'Dashboard'; $('#app-content').innerHTML=views[route](); if(['creditos','cartera'].includes(route))loadCreditArrears(); if(route==='facturacion'){syncBillingSummary();syncCreditFlow();syncInvoiceField();} if(route==='ventas')applySalesFilters(); if(route==='productos'){const filters=$('.product-filters');if(filters&&!filters.querySelector('[data-action="clear-product-filters"]')){const button=document.createElement('button');button.className='outline';button.type='button';button.dataset.action='clear-product-filters';button.textContent='Limpiar filtros';filters.append(button);}} applyUserPermissions(); applyShellMode(); renderNav(); syncActiveStoreSelector(); const notificationCount=$('#notification-count'); if(notificationCount){const pending=store.collection.notifications.filter(item=>!item.read).length;notificationCount.textContent=pending;notificationCount.hidden=pending===0;} setMobileSidebar(false); }
 /* Código histórico de integración remota eliminado del flujo local.
 async function loadRemoteCatalogLegacy(){ try { const catalog=await fetchCatalog(); if(catalog?.modo_demo!==false||!Array.isArray(catalog.locales)||!Array.isArray(catalog.productos))return; store.collection.remoteMode=true; globalThis.famimueblesDemoMode=false; store.collection.stores=catalog.locales.map(item=>({ ...item, id:String(item.id), code:String(item.codigo || item.id), name:String(item.nombre || ''), status:item.activo === false || String(item.activo).toUpperCase() === 'NO' ? 'Inactivo' : 'Activo' })); store.collection.products=catalog.productos.map(item=>({ ...item, id:String(item.id), code:String(item.codigo || item.id), reference:String(item.referencia || item.codigo || item.id), name:String(item.nombre || ''), category:String(item.categoria || 'General'), categoryName:String(item.categoria || 'General'), brand:String(item.marca || ''), price:Number(item.precio_venta ?? item.precio ?? 0), salePrice:Number(item.precio_venta ?? item.precio ?? 0), cost:Number(item.precio_compra || 0), active:item.activo !== false, activo:item.activo !== false, estado:item.activo === false ? 'Inactivo' : 'Activo' })); const productByCode=new Map(store.collection.products.map(product=>[product.code,product.id])); const storeByName=new Map(store.collection.stores.map(store=>[store.name.toUpperCase(),store.id])); store.collection.inventoryByStore=(catalog.inventarios || []).map(item=>{const productId=item.producto_id || productByCode.get(String(item.codigo || '').trim());const storeId=item.local_id || storeByName.get(String(item.local || '').toUpperCase());return { id:String(item.id), productId:productId ? String(productId) : '', storeId:storeId ? String(storeId) : '', quantity:Number(item.stock ?? item.cantidad ?? 0), minimumStock:0, minimum:0, updatedAt:item.actualizado || new Date().toISOString() }; }).filter(item=>item.productId&&item.storeId); store.collection.customers=(catalog.clientes || []).map(item=>({ ...item, id:String(item.id), name:String(item.nombre || ''), document:String(item.documento || ''), phone:String(item.telefono || ''), email:String(item.email || ''), purchases:0, credits:0, balance:0, status:'Activo' })); store.collection.sales=(catalog.ventas || []).map(item=>({ ...item, id:String(item.id), invoiceId:String(item.numero_factura || item.id), customer:String(item.cliente_nombre || ''), customerId:item.cliente_id ? String(item.cliente_id) : '', storeId:item.local_id ? String(item.local_id) : '', date:item.fecha_venta, total:Number(item.total_venta || 0), paymentMethod:String(item.metodo_pago || ''), status:'Completada', items:[] })); store.collection.apartados=catalog.apartados || []; store.collection.credits=catalog.creditos || []; store.collection.payments=catalog.abonos || []; store.collection.transfers=catalog.traslados || []; store.collection.inventoryMovements=catalog.movimientos || []; render(); } catch (error) { console.warn(error.message); } }
 async function loadRemoteCatalog(){ try { const catalog=await fetchOperationalData(); if(catalog?.modo_demo!==false||!Array.isArray(catalog.locales)||!Array.isArray(catalog.productos))return; store.collection.remoteMode=true; globalThis.famimueblesDemoMode=false; store.collection.stores=catalog.locales.map(item=>({ ...item, id:String(item.id), code:String(item.codigo || item.id), name:String(item.nombre || ''), status:item.activo === false || String(item.activo).toUpperCase() === 'NO' ? 'Inactivo' : 'Activo' })); store.collection.products=catalog.productos.map(item=>({ ...item, id:String(item.id), code:String(item.codigo || item.id), reference:String(item.referencia || item.codigo || item.id), name:String(item.nombre || ''), category:String(item.categoria || 'General'), categoryName:String(item.categoria || 'General'), brand:String(item.marca || ''), price:Number(item.precio_venta ?? item.precio ?? 0), salePrice:Number(item.precio_venta ?? item.precio ?? 0), cost:Number(item.precio_compra || 0), active:item.activo !== false, activo:item.activo !== false, estado:item.activo === false ? 'Inactivo' : 'Activo' })); store.collection.customers = Array.isArray(catalog.clientes) ? catalog.clientes.map(item => ({ ...item, id:String(item.id ?? item.cliente_id ?? ''), name:String(item.nombre ?? item.name ?? 'Cliente'), document:String(item.documento ?? item.document ?? ''), phone:String(item.telefono ?? item.phone ?? ''), email:String(item.email ?? ''), status:String(item.estado ?? item.status ?? 'Activo') })).filter(item => item.id || item.name) : []; const userSources = [catalog.usuarios, catalog.users, catalog.empleados, catalog.administradores, catalog.admins]; const remoteUsers = userSources.flatMap(items => Array.isArray(items) ? items : []); const userMap = new Map(); remoteUsers.forEach((user) => { const record = { ...user }; const rawId = record.id ?? record.id_telegram ?? record.telegram_id ?? record.usuario_id ?? record.user_id ?? ''; const id = String(rawId ?? '').trim(); const name = String(record.name ?? record.nombre ?? record.usuario ?? record.username ?? 'Sin nombre').trim(); const username = String(record.usuario ?? record.username ?? '').trim(); const email = String(record.email ?? record.correo ?? '').trim(); const role = String(record.role ?? record.rol ?? 'Usuario').trim() || 'Usuario'; const status = String(record.status ?? record.estado ?? (record.activo === false ? 'Inactivo' : 'Activo')).trim(); const normalizedStatus = status === 'true' || status === 'TRUE' || status === 'SI' ? 'Activo' : status === 'false' || status === 'FALSE' || status === 'NO' ? 'Inactivo' : status || 'Activo'; const key = id || name || username || `${userMap.size + 1}`; if (!key || (!name && !username && !email)) return; const existing = userMap.get(key) || {}; userMap.set(key, { ...existing, ...record, id: id || existing.id || key, name: name || existing.name || 'Sin nombre', username: username || existing.username || '', email: email || existing.email || '', role: role || existing.role || 'Usuario', status: normalizedStatus || existing.status || 'Activo' }); }); store.collection.users = Array.from(userMap.values()).map(item => ({ ...item, id:String(item.id || item.user_id || item.id_telegram || item.telegram_id || ''), name:String(item.name || item.nombre || item.usuario || item.username || 'Sin nombre'), email:String(item.email || item.correo || ''), role:String(item.role || item.rol || 'Usuario'), status:String(item.status || item.estado || (item.activo === false ? 'Inactivo' : 'Activo')), username:String(item.usuario || item.username || '') })).filter(item => item.name || item.username || item.id); store.collection.sales = Array.isArray(catalog.ventas) ? catalog.ventas : []; store.collection.ventas = Array.isArray(catalog.ventas) ? catalog.ventas : []; store.collection.gastos = Array.isArray(catalog.gastos) ? catalog.gastos : []; store.collection.gasolina = Array.isArray(catalog.gasolina) ? catalog.gasolina : []; store.collection.expenses = Array.isArray(catalog.gastos) ? catalog.gastos : []; store.collection.fuelRecords = Array.isArray(catalog.gasolina) ? catalog.gasolina : []; store.collection.credits = Array.isArray(catalog.creditos) ? catalog.creditos : []; store.collection.apartados = Array.isArray(catalog.apartados) ? catalog.apartados : []; store.collection.payments = Array.isArray(catalog.abonos) ? catalog.abonos : []; store.collection.transfers = Array.isArray(catalog.traslados) ? catalog.traslados : []; store.collection.movements = Array.isArray(catalog.movimientos) ? catalog.movimientos : []; store.collection.movimiento_productos = Array.isArray(catalog.movimiento_productos) ? catalog.movimiento_productos : []; store.collection.movementProducts = Array.isArray(catalog.movimiento_productos) ? catalog.movimiento_productos : []; const productByCode=new Map(store.collection.products.map(product=>[product.code,product.id])); const storeByName=new Map(store.collection.stores.map(store=>[store.name.toUpperCase(),store.id])); store.collection.inventoryByStore=(catalog.inventarios || []).map(item=>{const productId=item.producto_id || productByCode.get(String(item.codigo || '').trim());const storeId=item.local_id || storeByName.get(String(item.local || '').toUpperCase());return { id:String(item.id), productId:productId ? String(productId) : '', storeId:storeId ? String(storeId) : '', quantity:Number(item.stock ?? item.cantidad ?? 0), minimumStock:0, minimum:0, updatedAt:item.actualizado || new Date().toISOString() }; }).filter(item=>item.productId&&item.storeId); const frequency=new Map(); (catalog.ventas_detalles || []).forEach(detail=>{const name=String(detail.producto_nombre || '').trim().toLocaleLowerCase();const product=store.collection.products.find(candidate=>candidate.name.toLocaleLowerCase()===name);if(product)frequency.set(product.id,(frequency.get(product.id)||0)+Number(detail.cantidad||0));}); store.collection.frequentProductIds=[...frequency.entries()].sort((a,b)=>b[1]-a[1]).slice(0,4).map(entry=>entry[0]); store.collection.customers=(catalog.clientes || []).map(item=>({ ...item, id:String(item.id), name:String(item.nombre || ''), document:String(item.documento || ''), phone:String(item.telefono || ''), email:String(item.email || ''), purchases:0, credits:0, balance:0, status:'Activo' })); store.collection.sales=(catalog.ventas || []).map(item=>({ ...item, id:String(item.id), invoiceId:String(item.numero_factura || item.id), customer:String(item.cliente_nombre || ''), customerId:item.cliente_id ? String(item.cliente_id) : '', storeId:item.local_id ? String(item.local_id) : '', date:item.fecha_venta, total:Number(item.total_venta || 0), paymentMethod:String(item.metodo_pago || ''), status:'Completada', items:[] })); store.collection.apartados=catalog.apartados || []; store.collection.credits=catalog.creditos || []; store.collection.payments=catalog.abonos || []; store.collection.transfers=catalog.traslados || []; store.collection.inventoryMovements=catalog.movimientos || []; render(); } catch (error) { console.warn(error.message); } }
@@ -161,7 +173,7 @@ function refreshProducts(){ const query=$('[data-filter="products"]')?.value||''
 function clearProductFilters(){ const defaults={'[data-filter="products"]':'','[data-product-store]':'all','[data-product-active]':'active'};Object.entries(defaults).forEach(([selector,value])=>{const element=$(selector);if(element)element.value=value;});productPage=1;refreshProducts();}
 function modal(title, fields, onSubmit){ $('#modal-root').innerHTML=`<div class="modal-backdrop"><form class="modal" id="data-modal"><button type="button" class="modal-close">×</button><p class="eyebrow">FAMIMUEBLES ERP</p><h2>${title}</h2>${fields.map(field=>`<label class="input-label">${field.label}<input class="field" name="${field.name}" type="${field.type||'text'}" value="${field.value||''}" ${field.required===false?'':'required'}></label>`).join('')}<button class="primary wide">Guardar</button></form></div>`; $('.modal-close').onclick=()=>$('#modal-root').innerHTML=''; $('#data-modal').onsubmit=async event=>{event.preventDefault();const button=event.target.querySelector('button.primary');button.disabled=true;try{await onSubmit(Object.fromEntries(new FormData(event.target)));}catch(error){showToast(error.message,'error');}finally{button.disabled=false;}}; }
 async function persistCatalogRecord(path, record, method='POST', stableRequestId=''){ const requestId=method==='POST'?(stableRequestId||(globalThis.crypto?.randomUUID?crypto.randomUUID():`${path}-${Date.now()}-${Math.random()}`)):''; const options={headers:{'X-Tenant-ID':activeTenantId(),...(requestId?{'Idempotency-Key':requestId}: {})}}; const body={...record,...(requestId?{requestId}:{}),tenantId:activeTenantId()}; try { return method==='PUT' ? await api.put(path,body,options) : method==='DELETE' ? await api.delete(path,body,options) : await api.post(path,body,options); } catch(error) { if(error.status===401){localStorage.removeItem('famimuebles-auth-token');localStorage.removeItem('famimuebles-user');throw new Error('La sesion expiro. Inicia sesion nuevamente para guardar cambios.');} throw error; } }
-const remoteDomainCollections=['customers','suppliers','purchases','credits','expenses','accountsPayable','supplierPayments','customerAccounts','returns','supplierReturns','stockCounts','reservations','warranties','damagedStock','cashSessions','cashMovements','bankAccounts','quotes','orders','deliveries','creditNotes','transfers','talonarios','talonarioJustifications'];
+const remoteDomainCollections=['customers','suppliers','purchases','credits','expenses','accountsPayable','supplierPayments','customerAccounts','returns','supplierReturns','stockCounts','reservations','warranties','damagedStock','cashSessions','cashMovements','bankAccounts','quotes','orders','deliveries','creditNotes','transfers','talonarios','talonarioJustifications','workSchedules','staffAbsences'];
 async function persistDomainRecord(collection, record){
 	const path=`/api/domain/${encodeURIComponent(collection)}`;
 	const payload={...record,tenantId:activeTenantId()};
@@ -301,8 +313,8 @@ async function refreshTalonarioSalesAlerts(){
 	store.save();
 }
 const criticalDomainCollections = new Set(['customers','suppliers','purchases','accountsPayable','supplierPayments','talonarios','talonarioJustifications','credits','expenses','transfers']);
-async function loadDomainCollection(state, collection, timeout=5000, retries=0){
-	if(collection!=='transfers'&&Array.isArray(state[collection])&&state[collection].length)return true;
+async function loadDomainCollection(state, collection, timeout=5000, retries=0, refreshExisting=false){
+	if(!refreshExisting&&collection!=='transfers'&&Array.isArray(state[collection])&&state[collection].length)return true;
 	for(let attempt=0;attempt<=retries;attempt++){
 		try {
 			const payload=await api.get(`/api/domain/${encodeURIComponent(collection)}`,{headers:{'X-Tenant-ID':activeTenantId()},cache:'no-store',timeout});
@@ -321,30 +333,30 @@ async function loadDomainCollection(state, collection, timeout=5000, retries=0){
 	}
 	return false;
 }
-async function loadDomainCollections(state,collections,timeout=5000,concurrency=3,retries=0){
+async function loadDomainCollections(state,collections,timeout=5000,concurrency=3,retries=0,refreshExisting=false){
 	const results=[];
 	for(let index=0;index<collections.length;index+=concurrency){
 		const batch=collections.slice(index,index+concurrency);
-		results.push(...await Promise.all(batch.map(collection=>loadDomainCollection(state,collection,timeout,retries))));
+		results.push(...await Promise.all(batch.map(collection=>loadDomainCollection(state,collection,timeout,retries,refreshExisting))));
 	}
 	return results;
 }
-function hydrateSecondaryDomainCollections(state, renderWhenLoaded=true, requireComplete=false){
+function hydrateSecondaryDomainCollections(state, renderWhenLoaded=true, requireComplete=false, refreshExisting=false){
 	const deferredTalonarios=['talonarios','talonarioJustifications'];
 	const deferredAttendance=['workSchedules','staffAbsences'];
 	const secondary=remoteDomainCollections.filter(collection=>!criticalDomainCollections.has(collection)&&!deferredTalonarios.includes(collection)&&!deferredAttendance.includes(collection));
-	return loadDomainCollections(state,secondary,3000,3).then(results=>{
+	return loadDomainCollections(state,secondary,3000,3,0,refreshExisting).then(results=>{
 		if(requireComplete&&results.some(result=>!result))throw new Error('No se pudieron cargar todas las colecciones compartidas.');
 		if(renderWhenLoaded&&currentRoute()!=='dashboard')render();
 		return results;
 	});
 }
-async function hydrateDomainCollections(state, loadSecondary=true, allowSideEffects=true, requireComplete=false){
+async function hydrateDomainCollections(state, loadSecondary=true, allowSideEffects=true, requireComplete=false, refreshExisting=false){
  const deferredTalonarios=['talonarios','talonarioJustifications'];
  const deferredAttendance=['workSchedules','staffAbsences'];
  const critical=remoteDomainCollections.filter(collection=>criticalDomainCollections.has(collection)&&!deferredTalonarios.includes(collection));
  const payableCollections=['suppliers','accountsPayable'].filter(collection=>critical.includes(collection));
- const payableResults=await loadDomainCollections(state,payableCollections,10000,2,1);
+ const payableResults=await loadDomainCollections(state,payableCollections,10000,2,1,refreshExisting);
  if(requireComplete&&payableResults.some(result=>!result))throw new Error('No se pudieron cargar todas las cuentas por pagar.');
  const normalizedPayables=normalizePayableSuppliers(state);
  if(allowSideEffects&&normalizedPayables.length){
@@ -354,8 +366,8 @@ async function hydrateDomainCollections(state, loadSecondary=true, allowSideEffe
  if(loadSecondary&&['dashboard','cuentas-por-pagar'].includes(currentRoute()))render();
  const remainingCritical=critical.filter(collection=>!payableCollections.includes(collection));
  const loadResults=await Promise.all([
-  loadDomainCollections(state,[...remainingCritical,...deferredAttendance],5000,3),
-  loadDomainCollections(state,deferredTalonarios,5000,2)
+  loadDomainCollections(state,[...remainingCritical,...deferredAttendance],5000,3,0,refreshExisting),
+  loadDomainCollections(state,deferredTalonarios,5000,2,0,refreshExisting)
  ]);
  if(requireComplete&&loadResults.flat().some(result=>!result))throw new Error('No se pudieron cargar todas las colecciones compartidas.');
  const talonarioResults=loadResults[1];
@@ -387,36 +399,6 @@ function hasManagedUserAccount(user){
 	return user?.managedAccount===true;
 }
 async function hydrateUsers(state){
-	const normalize=(item,source)=>{
-		const username=String(item?.username||item?.usuario||'').trim();
-		const displayName=String(item?.displayName||item?.display_name||item?.name||item?.nombre||item?.empleado||'').trim();
-		const name=displayName||(/^telegram_\d+$/i.test(username)?'Usuario sin nombre':username);
-		const id=String(item?.id||item?.id_telegram||item?.telegram_id||item?.usuario_id||'').trim();
-		const active=source==='auth'?isUserActive(item):isUserActive({...item,active:item?.active??item?.activo});
-		return {...item,id,name:name||username||id||'Usuario sin nombre',username,email:String(item?.email||item?.correo||'').trim(),phone:String(item?.phone||item?.telefono||'').trim(),role:String(item?.role||item?.rol||'VENDEDOR').trim().toUpperCase(),active,managedAccount:source==='auth'||item?.managedAccount===true,status:active?'Activo':'Inactivo'};
-	};
-	const merge=(items)=>{
-		const users=new Map();
-		items.forEach(({item,source})=>{
-			const user=normalize(item,source);
-			const appIdentity=String(user.telegramId||user.telegram_id||user.id_telegram||'').trim();
-			const identity=appIdentity?`telegram:${appIdentity}`:String(user.username||user.name||user.id).normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,' ').trim().toLowerCase();
-			if(!identity)return;
-			const existing=users.get(identity)||{};
-			const merged={...existing,...user,email:user.email||existing.email||'',phone:user.phone||existing.phone||''};
-			const appRecord=user.appSource?user:existing.appSource?existing:null;
-			if(appRecord&&source==='auth'){
-				merged.active=appRecord.active;
-				merged.status=appRecord.status;
-				merged.role=appRecord.role;
-				merged.name=appRecord.name;
-				merged.displayName=appRecord.displayName;
-				merged.appSource=appRecord.appSource;
-			}
-			users.set(identity,merged);
-		});
-		return [...users.values()];
-	};
 	const localUsers=Array.isArray(state.users)?state.users:[];
 	const results=await Promise.allSettled([
 		api.get('/api/users',{headers:{'X-Tenant-ID':activeTenantId()},cache:'no-store',timeout:5000}),
@@ -425,7 +407,7 @@ async function hydrateUsers(state){
 	const authPayload=results[0].status==='fulfilled'?results[0].value:null;
 	const employeePayload=results[1].status==='fulfilled'?results[1].value:null;
 	const employees=Array.isArray(employeePayload?.items)?employeePayload.items:localUsers;
-	state.users=merge([...employees.map(item=>({item,source:'employee'})),...(Array.isArray(authPayload?.items)?authPayload.items:[]).map(item=>({item,source:'auth'}))]);
+	state.users=mergeUserSources(employees,authPayload?.items);
 	return state;
 }
 async function hydrateCurrentUserPermissions(){const user=JSON.parse(localStorage.getItem('famimuebles-user')||'{}');if(!user.id){userPermissions=[];return;}try{const payload=await api.get(`/api/users/${encodeURIComponent(user.id)}/permissions`,{headers:{'X-Tenant-ID':activeTenantId()},cache:'no-store',timeout:4000});userPermissions=Array.isArray(payload.items)?payload.items:[];}catch(error){userPermissions=[];}}
@@ -446,9 +428,16 @@ async function refreshSharedState(automatic=false){
 		const normalized=await hydrateState();
 		if(!normalized)return false;
 		if(automatic){
-			await hydrateCatalog(normalized,false,true);
-			await hydrateDomainCollections(normalized,false,false,true);
-			await hydrateSecondaryDomainCollections(normalized,false,true);
+			for(const collection of [...remoteDomainCollections,'products','stores','sales','inventory','inventoryByStore']){
+				if(Array.isArray(previousState?.[collection]))normalized[collection]=previousState[collection];
+			}
+			try{
+				await hydrateCatalog(normalized,false,true);
+			}catch(error){
+				console.warn('No se pudo actualizar el catalogo compartido; se conservaron los datos anteriores:',error.message);
+			}
+			await hydrateDomainCollections(normalized,false,false,false,true);
+			await hydrateSecondaryDomainCollections(normalized,false,false,true);
 			await hydrateUsers(normalized);
 			if(document.querySelector('.modal-backdrop') || document.activeElement?.matches('input,select,textarea'))return true;
 			store.state=normalized;
@@ -515,22 +504,22 @@ async function refreshSharedState(automatic=false){
 		sharedRefreshInFlight=false;
 	}
 }
-function stopAutomaticSharedRefresh(){
-	automaticSharedRefreshEnabled=false;
-	if(sharedRefreshTimer){
-		clearInterval(sharedRefreshTimer);
-		sharedRefreshTimer=null;
-	}
-}
 async function runAutomaticSharedRefresh(){
 	if(!automaticSharedRefreshEnabled || document.hidden || navigator.onLine===false || document.querySelector('.modal-backdrop') || sharedRefreshInFlight)return;
 	const activeElement=document.activeElement;
 	if(activeElement?.matches('input,select,textarea'))return;
 	const refreshed=await refreshSharedState(true);
 	if(!refreshed){
-		stopAutomaticSharedRefresh();
-		console.warn('Se pauso la actualizacion automatica. La sincronizacion manual sigue disponible.');
-		showToast('Se pauso la actualizacion automatica. Puedes actualizar con el boton de sincronizacion.','error');
+		if(!automaticRefreshFailureNotified){
+			console.warn('No se pudo completar la actualizacion automatica; se reintentara en el siguiente ciclo.');
+			showToast('No se pudo completar la actualizacion. Se reintentara automaticamente.','error');
+			automaticRefreshFailureNotified=true;
+		}
+		return;
+	}
+	if(automaticRefreshFailureNotified){
+		showToast('La actualizacion automatica se reanudo correctamente.');
+		automaticRefreshFailureNotified=false;
 	}
 }
 function startAutomaticSharedRefresh(){
@@ -589,8 +578,67 @@ function openEditUserModal(userId){
 }
 function authScreen(configured, telegramBotUsername=''){ const telegramMarkup=telegramBotUsername?'<div class="telegram-login-wrap"><p class="muted">Acceso seguro con Telegram</p><div id="telegram-login"></div><p class="muted">Tu Telegram debe estar vinculado a un usuario ERP activo.</p></div>':''; document.body.innerHTML=`<main class="auth-screen"><section class="auth-card"><p class="eyebrow">FAMIMUEBLES ERP</p><h1>${configured?'Iniciar sesion':'Configurar administrador'}</h1><p class="muted">${configured?'Accede a tu empresa para continuar.':'Crea el primer usuario administrador de esta instalacion.'}</p>${telegramMarkup}<form id="auth-form"><label class="input-label">Usuario<input class="field" name="username" minlength="3" required autocomplete="username"></label><label class="input-label">Clave<input class="field" name="password" type="password" minlength="8" required autocomplete="current-password"></label><button class="primary wide">${configured?'Entrar':'Crear administrador'}</button><p id="auth-error" class="danger-text" role="alert"></p></form></section></main>`; if(telegramBotUsername){window.onTelegramAuth=async user=>{try{const payload=await api.post('/api/auth/telegram',user);localStorage.setItem('famimuebles-auth-token',payload.token);localStorage.setItem('famimuebles-user',JSON.stringify(payload.user));location.reload();}catch(error){const message=document.querySelector('#auth-error');if(message)message.textContent=error.message;}};const script=document.createElement('script');script.src='https://telegram.org/js/telegram-widget.js?22';script.async=true;script.dataset.telegramLogin=telegramBotUsername;script.dataset.size='large';script.dataset.userpic='false';script.dataset.requestAccess='write';script.dataset.onauth='onTelegramAuth(user)';document.querySelector('#telegram-login').appendChild(script);}$('#auth-form').onsubmit=async event=>{event.preventDefault();const values=Object.fromEntries(new FormData(event.target));const endpoint=configured?'/api/auth/login':'/api/auth/setup';try{const payload=await api.post(endpoint,values);if(payload.token)localStorage.setItem('famimuebles-auth-token',payload.token);localStorage.setItem('famimuebles-user',JSON.stringify(payload.user||{username:values.username,role:'ADMINISTRADOR'}));location.reload();}catch(error){document.querySelector('#auth-error').textContent=error.message;}}; }
 function openNotifications(){ const pending=store.collection.notifications.filter(item=>!item.read); $('#modal-root').innerHTML='<div class="modal-backdrop"><section class="modal notification-modal"><button type="button" class="modal-close">×</button><p class="eyebrow">CENTRO DE AVISOS</p><h2>Notificaciones</h2><div class="notification-list">'+renderNotifications(pending)+'</div><button class="outline wide" data-action="mark-notifications-read" '+(!pending.length?'disabled':'')+'>Marcar como leidas</button></section></div>'; $('.modal-close').onclick=()=>$('#modal-root').innerHTML=''; }
-function creditPaymentModal(creditId){ const credit=store.collection.credits.find(item=>item.id===creditId); if(!credit)return; const balance=Math.max(0,Number(credit.total||credit.originalAmount||0)-Number(credit.initial||credit.downPayment||0)-Number(credit.paid||0)); $('#modal-root').innerHTML=`<div class="modal-backdrop"><form class="modal" id="credit-payment-form"><button type="button" class="modal-close">×</button><p class="eyebrow">CARTERA</p><h2>Registrar abono</h2><p>Cliente: <strong>${credit.customer||credit.cliente||'Sin nombre'}</strong></p><p>Saldo pendiente: <strong>${money(balance)}</strong></p><label class="input-label">Monto<input class="field" name="amount" type="number" min="1" max="${balance}" required></label><label class="input-label">Numero de recibo<input class="field" name="receiptNumber" required placeholder="Recibo del abono"></label><label class="input-label">Metodo<select class="field" name="method"><option>Efectivo</option><option>Transferencia</option><option>Consignacion</option><option>Tarjeta</option></select></label><button class="primary wide">Guardar abono</button></form></div>`; $('.modal-close').onclick=()=>$('#modal-root').innerHTML=''; $('#credit-payment-form').onsubmit=event=>{event.preventDefault();try{const values=Object.fromEntries(new FormData(event.target));registerPayment(store.collection,{kind:'credit',id:creditId,receiptNumber:values.receiptNumber},values.amount,values.method);store.save();$('#modal-root').innerHTML='';render();showToast('Abono registrado correctamente.');}catch(error){showToast(error.message,'error');}}; }
-function apartadoPaymentModal(apartadoId){const apartado=store.collection.apartados.find(item=>String(item.id)===String(apartadoId));if(!apartado)return;const balance=Math.max(0,Number(apartado.saldoPendiente ?? apartado.saldo_pendiente ?? apartado.total ?? 0));$('#modal-root').innerHTML=`<div class="modal-backdrop"><form class="modal" id="apartado-payment-form"><button type="button" class="modal-close">×</button><p class="eyebrow">APARTADOS</p><h2>Registrar abono</h2><p>Cliente: <strong>${apartado.customer||apartado.cliente||apartado.clienteNombre||'Sin nombre'}</strong></p><p>Saldo pendiente: <strong>${money(balance)}</strong></p><label class="input-label">Monto<input class="field" name="amount" type="number" min="1" max="${balance}" required></label><label class="input-label">Numero de recibo<input class="field" name="receiptNumber" required placeholder="Recibo del abono"></label><label class="input-label">Metodo<select class="field" name="method"><option>Efectivo</option><option>Transferencia</option><option>Consignacion</option><option>Tarjeta</option></select></label><button class="primary wide">Guardar abono</button></form></div>`;$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';$('#apartado-payment-form').onsubmit=async event=>{event.preventDefault();try{const values=Object.fromEntries(new FormData(event.target));await persistCatalogRecord('/api/shared-payment',{kind:'apartado',id:apartadoId,amount:Number(values.amount),receiptNumber:values.receiptNumber,method:values.method});const normalized=await hydrateState();if(normalized){store.state=normalized;await hydrateCatalog(store.state);}$('#modal-root').innerHTML='';render();showToast('Abono registrado correctamente.');}catch(error){showToast(error.message,'error');}};}
+function creditPaymentModal(creditId) {
+	const credit = store.collection.credits.find(item => String(item.id) === String(creditId));
+	if (!credit) return;
+	if (!/^\d+$/.test(String(credit.id))) {
+		showToast('Este crédito histórico no tiene un identificador financiero válido en PostgreSQL y no puede recibir abonos.', 'error');
+		return;
+	}
+	const normalizedCredit = normalizeCredit(
+		credit,
+		store.collection.sales || [],
+		store.collection.payments || [],
+		store.collection.credits || [],
+	);
+	const balance = normalizedCredit.pending ?? creditPendingBalance(credit);
+	if (balance <= 0) {
+		showToast('Este crédito no tiene saldo pendiente para abonar.', 'error');
+		return;
+	}
+	$('#modal-root').innerHTML = `<div class="modal-backdrop"><form class="modal" id="credit-payment-form"><button type="button" class="modal-close">×</button><p class="eyebrow">CARTERA</p><h2>Registrar abono</h2><p>Cliente: <strong>${credit.customer || credit.cliente || 'Sin nombre'}</strong></p><p>Abonos registrados: <strong>${money(normalizedCredit.paid)}</strong></p><p>Saldo pendiente: <strong>${money(balance)}</strong></p><label class="input-label">Monto<input class="field" name="amount" type="number" min="1" max="${balance}" step="1" required></label><label class="input-label">Numero de recibo<input class="field" name="receiptNumber" required placeholder="Recibo del abono"></label><label class="input-label">Metodo<select class="field" name="method"><option>Efectivo</option><option>Transferencia</option><option>Consignacion</option><option>Tarjeta</option></select></label><button class="primary wide">Guardar abono</button></form></div>`;
+	$('.modal-close').onclick = () => $('#modal-root').innerHTML = '';
+	$('#credit-payment-form').onsubmit = async event => {
+		event.preventDefault();
+		const form = event.currentTarget;
+		const submitButton = form.querySelector('button[type="submit"], button:not([type])');
+		if (submitButton) submitButton.disabled = true;
+		try {
+			const values = Object.fromEntries(new FormData(form));
+			const amount = Number(values.amount);
+			if (!Number.isInteger(amount) || amount <= 0 || amount > balance) {
+				throw new Error('El abono debe ser un monto entero mayor que cero y no puede superar el saldo pendiente.');
+			}
+			if (!String(values.receiptNumber || '').trim()) throw new Error('Ingresa el número de recibo del abono.');
+			if (!window.confirm(`Se registrará un abono por ${money(amount)} y se modificará la cartera actual. ¿Deseas continuar?`)) {
+				if (submitButton) submitButton.disabled = false;
+				return;
+			}
+			await persistCatalogRecord('/api/shared-payment', {
+				kind: 'credit',
+				id: String(credit.id),
+				amount,
+				receiptNumber: String(values.receiptNumber).trim(),
+				method: values.method,
+			});
+			$('#modal-root').innerHTML = '';
+			showToast('Abono registrado correctamente en PostgreSQL.');
+			try {
+				const normalized = await hydrateState();
+				if (!normalized) throw new Error('No se recibieron datos actualizados.');
+				store.state = normalized;
+				await hydrateCatalog(store.state);
+				render();
+			} catch (error) {
+				showToast(`El abono se guardó, pero no se pudo actualizar la cartera: ${error.message}`, 'error');
+			}
+		} catch (error) {
+			if (submitButton) submitButton.disabled = false;
+			showToast(error.message, 'error');
+		}
+	};
+}
+function apartadoPaymentModal(apartadoId){const apartado=store.collection.apartados.find(item=>String(item.id)===String(apartadoId));if(!apartado)return;const balance=Math.max(0,Number(apartado.saldoPendiente ?? apartado.saldo_pendiente ?? apartado.total ?? 0));$('#modal-root').innerHTML=`<div class="modal-backdrop"><form class="modal" id="apartado-payment-form"><button type="button" class="modal-close">×</button><p class="eyebrow">APARTADOS</p><h2>Registrar abono</h2><p>Cliente: <strong>${apartado.customer||apartado.cliente||apartado.clienteNombre||'Sin nombre'}</strong></p><p>Saldo pendiente: <strong>${money(balance)}</strong></p><label class="input-label">Monto<input class="field" name="amount" type="number" min="1" max="${balance}" required></label><label class="input-label">Numero de recibo<input class="field" name="receiptNumber" required placeholder="Recibo del abono"></label><label class="input-label">Metodo<select class="field" name="method"><option>Efectivo</option><option>Transferencia</option><option>Consignacion</option><option>Tarjeta</option></select></label><button class="primary wide">Guardar abono</button></form></div>`;$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';$('#apartado-payment-form').onsubmit=async event=>{event.preventDefault();try{const values=Object.fromEntries(new FormData(event.target));const amount=Number(values.amount);if(!Number.isFinite(amount)||amount<=0){throw new Error('El abono debe ser mayor que cero.');}if(!window.confirm(`Se registrará un abono por ${money(amount)} y cambiará el saldo actual del apartado. ¿Deseas continuar?`))return;await persistCatalogRecord('/api/shared-payment',{kind:'apartado',id:apartadoId,amount,receiptNumber:values.receiptNumber,method:values.method});const normalized=await hydrateState();if(normalized){store.state=normalized;await hydrateCatalog(store.state);}$('#modal-root').innerHTML='';render();showToast('Abono registrado correctamente.');}catch(error){showToast(error.message,'error');}};}
 function renderApp(){ const route=currentRoute(); $('#section-title').textContent=navItems.find(item=>item.id===route)?.label||'Dashboard'; $('#app-content').innerHTML=appHydrating ? '<section class="panel app-loading"><strong>Cargando información…</strong><span>Preparando los datos actualizados.</span></section>' : views[route](); if(appHydrating)return; if(route==='facturacion'){syncBillingSummary();syncInvoiceField();} const pendingNotifications=store.collection.notifications.filter(item=>!item.read).length; const notificationCount=$('#notification-count'); if(notificationCount){notificationCount.textContent=pendingNotifications; notificationCount.hidden=pendingNotifications===0;} if(route==='productos'){const filters=$('.product-filters');if(filters&&!filters.querySelector('[data-action="clear-product-filters"]')){const button=document.createElement('button');button.className='outline';button.type='button';button.dataset.action='clear-product-filters';button.textContent='Limpiar filtros';filters.append(button);}} applyShellMode(); renderNav(); $('#sidebar').classList.remove('open'); }
 function openCustomerModal(customerId=''){ const customer=customerId && store.collection.customers.find(item=>item.id===customerId); modal(customer ? 'Editar cliente' : 'Nuevo cliente', [{name:'name',label:'Nombre completo',value:customer?.name||''},{name:'document',label:'Documento',value:customer?.document||''},{name:'phone',label:'Telefono',value:customer?.phone||''},{name:'email',label:'Correo',value:customer?.email||'',required:false},{name:'status',label:'Estado',value:customer?.status||'Activo'}],async values=>{ const payload={id:customer?.id||generateId('CLI',store.collection.customers),...values,purchases:Number(customer?.purchases ?? 0),credits:Number(customer?.credits ?? 0),balance:Number(customer?.balance ?? 0),status:String(values.status || customer?.status || 'Activo'),updatedAt:new Date().toISOString()}; await persistDomainRecord('customers',payload); const index=store.collection.customers.findIndex(item=>item.id===payload.id);if(index===-1)store.collection.customers.push(payload);else store.collection.customers[index]=payload; $('#modal-root').innerHTML=''; render(); showToast(customer ? 'Cliente actualizado correctamente.' : 'Cliente guardado correctamente.');}); }
 function openModal(type){ const configs={customer:['Nuevo cliente',[['name','Nombre completo'],['document','Documento'],['phone','Telefono'],['email','Correo']],values=>store.add('customers',{id:generateId('CLI',store.collection.customers),...values,purchases:0,credits:0,balance:0,status:'Activo'})],product:['Nuevo producto',[['name','Nombre'],['code','Codigo'],['reference','Referencia'],['category','Categoria'],['price','Precio','number'],['minimum','Stock minimo','number']],values=>{const product=store.add('products',{id:generateId('PROD',store.collection.products),...values,price:Number(values.price)||0,minimum:Number(values.minimum)||0,minimumPrice:Number(values.price)||0,stock:0,ideal:(Number(values.minimum)||0)*3,estado:'Activo',activo:true,storeId:state.storeId});ensureInventoryEntry(store.collection,product.id,state.storeId);}],credit:['Nuevo credito',[['total','Valor total','number'],['initial','Cuota inicial','number'],['installmentsCount','Numero de cuotas','number']],values=>store.add('credits',{id:generateId('CR',store.collection.credits),customerId:state.customerId,total:Number(values.total)||0,originalAmount:Number(values.total)||0,initial:Number(values.initial)||0,downPayment:Number(values.initial)||0,paid:0,financedAmount:Math.max(0,(Number(values.total)||0)-(Number(values.initial)||0)),installmentsCount:Number(values.installmentsCount)||1,installmentAmount:0,next:'Pendiente',date:'Ahora',status:'Al dia'})],expense:['Nuevo gasto',[['description','Descripcion'],['amount','Valor','number']],values=>store.add('expenses',{id:generateId('GAS',store.collection.expenses),date:new Date().toISOString().slice(0,10),storeId:state.storeId,category:'Otros',description:values.description,amount:Number(values.amount)||0,paymentMethod:'Efectivo',createdBy:'USR-00001'})],fuel:['Registrar gasolina',[['vehicle','Vehiculo'],['mileage','Kilometraje actual','number'],['quantity','Galones','number'],['amount','Valor','number']],values=>store.add('fuelRecords',{id:generateId('FUE',store.collection.fuelRecords),date:new Date().toISOString().slice(0,10),storeId:state.storeId,vehicle:values.vehicle,driver:'Pendiente',quantity:Number(values.quantity)||0,unit:'galones',amount:Number(values.amount)||0,mileage:Number(values.mileage)||0,station:'Pendiente',createdBy:'USR-00001'})],user:['Nuevo usuario',[['name','Nombre'],['email','Correo'],['role','Rol']],values=>store.add('users',{id:generateId('USR',store.collection.users),...values,status:'Activo'})]}; const config=configs[type]; if(!config)return; modal(config[0],config[1].map(field=>({name:field[0],label:field[1],type:field[2]})),values=>{config[2](values);store.save();$('#modal-root').innerHTML='';render();showToast('Registro guardado correctamente.');}); }
@@ -784,14 +832,14 @@ function showCreditDetailConsolidated(creditId){
 	const total=Number(credit.total??credit.originalAmount??credit.valor_total??sale.total??0);
 	const initial=Number(credit.initial??credit.downPayment??credit.cuota_inicial??credit.abono_inicial??0);
 	const paid=Number(credit.paid??credit.valor_pagado??credit.pagado??0);
-	const pending=Math.max(0,Number(credit.saldo_pendiente??credit.saldoPendiente??total-initial-paid));
+	const pending=creditPendingBalance(credit);
 	const customerName=credit.customer||credit.cliente||credit.cliente_nombre||sale.customer||sale.cliente||customer.name||'Cliente sin nombre';
 	const local=credit.local||credit.local_nombre||sale.local||sale.storeName||((store.collection.stores||[]).find(item=>String(item.id)===String(credit.storeId||sale.storeId||sale.local_id||''))?.name)||'-';
 	const invoice=credit.factura||credit.invoiceNumber||sale.invoiceNumber||sale.factura||sale.numero_factura||'-';
 	const seller=credit.vendedor||credit.seller||sale.vendedor||sale.seller||sale.empleado||credit.creado_por||credit.createdBy||'-';
 	const movementId=credit.movimiento_id||credit.movementId||sale.movimiento_id||sale.movementId||'-';
 	const items=Array.isArray(sale.items)&&sale.items.length?sale.items:(Array.isArray(credit.items)?credit.items:[]);
-	const payments=(store.collection.payments||[]).filter(item=>String(item.creditId??item.credito_id??item.credit_id??'')===String(credit.id));
+	const payments=paymentsForCredit(credit,store.collection.payments||[]);
 	const escapeHtml=value=>String(value??'-').replace(/[&<>"']/g,character=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[character]));
 	const field=(label,value)=>`<div><span>${label}</span><strong>${escapeHtml(value)}</strong></div>`;
 	const productBody=items.map(item=>{const quantity=Number(item.quantity??item.cantidad??0);const unitPrice=Number(item.unitPrice??item.unit_price??item.price??item.precio_unitario??0);const subtotal=Number(item.subtotal??item.precio_total??quantity*unitPrice);return `<tr><td>${escapeHtml(item.name||item.producto||item.productId||item.codigo||'Producto')}</td><td>${quantity}</td><td>${money(unitPrice)}</td><td>${money(subtotal)}</td></tr>`;}).join('');
@@ -1076,10 +1124,7 @@ document.addEventListener('click',event=>{if(event.target.closest('[data-action=
 document.addEventListener('click',async event=>{const action=event.target.closest('[data-action]')?.dataset.action;if(action==='open-notifications')openNotifications();if(action==='mark-notifications-read'){const button=event.target.closest('[data-action="mark-notifications-read"]');if(button)button.disabled=true;store.collection.notifications.forEach(item=>{item.read=true;});try{await saveState(store.state);$('#modal-root').innerHTML='';render();}catch(error){store.collection.notifications.forEach(item=>{item.read=false;});if(button)button.disabled=false;showToast(error.message,'error');}}});
 document.addEventListener('click',event=>{const action=event.target.closest('[data-action]')?.dataset.action;if(action==='notification-credit')creditPaymentModal(event.target.closest('[data-credit-id]')?.dataset.creditId);if(action==='apartado-payment')apartadoPaymentModal(event.target.closest('[data-apartado-id]')?.dataset.apartadoId);});
 document.addEventListener('click',event=>{if(event.target.closest('[data-action="credit-detail"]'))showCreditDetail(event.target.closest('[data-credit-id]')?.dataset.creditId);});
-document.addEventListener('click',event=>{const button=event.target.closest('[data-action="credit-payment"]');if(button){activeCreditPaymentId=button.dataset.creditId||'';setTimeout(()=>{const form=$('#credit-payment-form');if(form)form.dataset.creditId=activeCreditPaymentId;},0);}});
-document.addEventListener('submit',async event=>{if(!event.target.matches('#credit-payment-form'))return;event.preventDefault();event.stopImmediatePropagation();try{const creditId=event.target.dataset.creditId||document.querySelector('[data-action="credit-payment"]')?.dataset.creditId;const values=Object.fromEntries(new FormData(event.target));await persistCatalogRecord('/api/shared-payment',{kind:'credit',id:creditId,amount:Number(values.amount),receiptNumber:values.receiptNumber,method:values.method});const normalized=await hydrateState();if(normalized){store.state=normalized;await hydrateCatalog(store.state);}$('#modal-root').innerHTML='';render();showToast('Abono registrado correctamente en PostgreSQL.');}catch(error){showToast(error.message,'error');}},true);
 document.addEventListener('click',event=>{const action=event.target.closest('[data-action]')?.dataset.action;if(action==='credit-payment')creditPaymentModal(event.target.closest('[data-credit-id]')?.dataset.creditId);});
-document.addEventListener('click',event=>{const button=event.target.closest('[data-action="credit-payment"]');if(!button)return;const creditId=button.dataset.creditId;setTimeout(()=>{const form=$('#credit-payment-form');if(!form)return;form.dataset.creditId=creditId;form.onsubmit=async submitEvent=>{submitEvent.preventDefault();try{const values=Object.fromEntries(new FormData(form));await persistCatalogRecord('/api/shared-payment',{kind:'credit',id:creditId,amount:Number(values.amount),receiptNumber:values.receiptNumber,method:values.method});const normalized=await hydrateState();if(normalized){store.state=normalized;await hydrateCatalog(store.state);}$('#modal-root').innerHTML='';render();showToast('Abono registrado correctamente en PostgreSQL.');}catch(error){showToast(error.message,'error');}};},0);});
 $('#user-menu').addEventListener('click',async()=>{try{await api.post('/api/auth/logout',{});}finally{localStorage.removeItem('famimuebles-auth-token');localStorage.removeItem('famimuebles-user');location.reload();}});
 document.addEventListener('click',event=>{const action=event.target.closest('[data-action]')?.dataset.action;if(action==='report-generate'){downloadReport(reportDefinition($('#report-type')?.value||'inventory').collection);}if(action==='report'){downloadReport(event.target.closest('[data-report-collection]')?.dataset.reportCollection||'sales');}if(action==='advanced-new'){const collection=event.target.closest('[data-collection]')?.dataset.collection;$('#modal-root').innerHTML=advancedModal(collection,store.collection);$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';}if(action==='advanced-export'){const payload=Object.fromEntries(['returns','supplierReturns','stockCounts','reservations','warranties','damagedStock','cashSessions','cashMovements','bankAccounts','customerAccounts','quotes','orders','deliveries','creditNotes'].map(key=>[key,store.collection[key]||[]]));const link=document.createElement('a');link.href=URL.createObjectURL(new Blob([JSON.stringify(payload,null,2)],{type:'application/json'}));link.download='famimuebles-operaciones.json';link.click();URL.revokeObjectURL(link.href);}});
 async function changeWarrantyStatus(id, action, localRecibido=''){
@@ -1158,7 +1203,8 @@ document.addEventListener('change',event=>{
 	const source=(store.collection.talonarios||[]).filter(item=>String(item.type).toUpperCase()===type&&String(item.storeId||'').trim()==='INV CRR 5 3 26'&&String(item.status||'').toUpperCase()==='ALMACENADO').sort((left,right)=>Number(left.startNumber)-Number(right.startNumber))[0];
 	if(source){form.elements.startNumber.value=source.startNumber;form.elements.endNumber.value=source.endNumber;form.querySelector('[data-talonario-next]').textContent=`${source.startNumber} - ${source.endNumber}`;form.querySelector('button.primary').disabled=false;}else{form.elements.startNumber.value='';form.elements.endNumber.value='';form.querySelector('[data-talonario-next]').textContent='Sin talonarios disponibles';form.querySelector('button.primary').disabled=true;}
 });
-document.addEventListener('submit',async event=>{if(event.target.id!=='advanced-form')return;event.preventDefault();const values=Object.fromEntries(new FormData(event.target));const collection=values.collection;const item={...values,id:values.id.trim()||nextAdvancedId(store.collection,collection),amount:Number(values.amount||0),createdAt:new Date().toISOString(),createdBy:JSON.parse(localStorage.getItem('famimuebles-user')||'{}').username||'usuario'};delete item.collection;try{await persistDomainRecord(collection,item);if(!Array.isArray(store.collection[collection]))store.collection[collection]=[];const index=store.collection[collection].findIndex(entry=>entry.id===item.id);if(index===-1)store.collection[collection].push(item);else store.collection[collection][index]=item;$('#modal-root').innerHTML='';render();showToast('Registro guardado correctamente.');}catch(error){showToast(error.message,'error');}});
+document.addEventListener('submit',async event=>{if(event.target.id!=='advanced-form')return;event.preventDefault();const values=Object.fromEntries(new FormData(event.target));const collection=values.collection;const actionLabel=(event.target.querySelector('[data-confirm-label]')?.dataset.confirmLabel||'Guardar registro');const confirmed = window.confirm(`¿Deseas confirmar ${actionLabel.toLowerCase()}? Se modificará la información registrada.`);
+if(!confirmed)return;const item={...values,id:values.id.trim()||nextAdvancedId(store.collection,collection),amount:Number(values.amount||0),createdAt:new Date().toISOString(),createdBy:JSON.parse(localStorage.getItem('famimuebles-user')||'{}').username||'usuario'};delete item.collection;try{await persistDomainRecord(collection,item);if(!Array.isArray(store.collection[collection]))store.collection[collection]=[];const index=store.collection[collection].findIndex(entry=>entry.id===item.id);if(index===-1)store.collection[collection].push(item);else store.collection[collection][index]=item;$('#modal-root').innerHTML='';render();showToast(`${actionLabel} guardado correctamente.`);}catch(error){showToast(error.message,'error');}});
 async function parityPost(path, payload) { return api.post(path, {...payload, tenantId:activeTenantId()}, {headers:{'X-Tenant-ID':activeTenantId()}}); }
 document.addEventListener('click', async event=>{
 	const action=event.target.closest('[data-action]')?.dataset.action;
@@ -1212,11 +1258,15 @@ document.addEventListener('submit',async event=>{
 	const form=event.target;
 	if(form.id==='parity-payroll-form'){
 		event.preventDefault();
-		try { const values=Object.fromEntries(new FormData(form)); const payload=await parityPost('/api/parity/nomina',{action:'close',start:values.start,end:values.end,local:values.local,commissionRate:Number(values.rate||0),employees:values.employees?JSON.parse(values.employees):[]}); form.querySelector('[data-parity-result]').innerHTML=formatParityResult(payload); showToast('Nómina cerrada y guardada.'); } catch(error) { showToast(error.message,'error'); }
+		try {
+			const values=Object.fromEntries(new FormData(form));
+			if (!window.confirm('Se cerrará la nómina del período y se guardarán los cambios en los datos del local. ¿Deseas continuar?')) return;
+			const payload=await parityPost('/api/parity/nomina',{action:'close',start:values.start,end:values.end,local:values.local,commissionRate:Number(values.rate||0),employees:values.employees?JSON.parse(values.employees):[]}); form.querySelector('[data-parity-result]').innerHTML=formatParityResult(payload); showToast('Nómina cerrada y guardada.');
+		} catch(error) { showToast(error.message,'error'); }
 	}
 	if(form.id==='parity-count-form'){
 		event.preventDefault();
-		try { const sessionId=form.dataset.sessionId; const results=[...form.querySelectorAll('[data-count-product]')].map(row=>({codigo:row.dataset.countProduct,descripcion:row.dataset.countDescription,cantidad_fisica:Number(row.querySelector('[data-count-physical]')?.value||0),motivo:row.querySelector('[data-count-reason]')?.value||'',observacion:row.querySelector('[data-count-note]')?.value||''})); const values=Object.fromEntries(new FormData(form)); const payload=await parityPost('/api/parity/conteo',sessionId?{action:'apply',sessionId,results}:{action:'create',local:values.local,products:results}); if(!sessionId){form.dataset.sessionId=payload.id;form.innerHTML=`<button type="button" class="modal-close">x</button><p class="eyebrow">INVENTARIO</p><h2>Aplicar conteo ${payload.id}</h2><p class="muted">Confirma nuevamente las cantidades antes de aplicarlas.</p>${results.map(item=>`<div class="count-row" data-count-product="${item.codigo}" data-count-description="${item.descripcion}"><span>${item.descripcion}</span><small>${item.codigo}</small><input class="field" data-count-physical type="number" min="0" value="${item.cantidad_fisica}" aria-label="Cantidad física"><input class="field" data-count-reason placeholder="Motivo"></div>`).join('')}<button class="primary wide">Aplicar ajustes confirmados</button><div data-parity-result></div>`;form.querySelector('.modal-close').onclick=()=>$('#modal-root').innerHTML='';showToast('Sesión de conteo creada.');}else{$('#modal-root').innerHTML='';showToast(`Conteo aplicado: ${payload.applied} productos.`);} } catch(error) { showToast(error.message,'error'); }
+		try { const sessionId=form.dataset.sessionId; const results=[...form.querySelectorAll('[data-count-product]')].map(row=>({codigo:row.dataset.countProduct,descripcion:row.dataset.countDescription,cantidad_fisica:Number(row.querySelector('[data-count-physical]')?.value||0),motivo:row.querySelector('[data-count-reason]')?.value||'',observacion:row.querySelector('[data-count-note]')?.value||''})); const values=Object.fromEntries(new FormData(form)); if (!window.confirm('Este conteo modificará el inventario real del local y debe guardarse. ¿Deseas continuar?')) return; const payload=await parityPost('/api/parity/conteo',sessionId?{action:'apply',sessionId,results}:{action:'create',local:values.local,products:results}); if(!sessionId){form.dataset.sessionId=payload.id;form.innerHTML=`<button type="button" class="modal-close">x</button><p class="eyebrow">INVENTARIO</p><h2>Aplicar conteo ${payload.id}</h2><p class="muted">Confirma nuevamente las cantidades antes de aplicarlas.</p>${results.map(item=>`<div class="count-row" data-count-product="${item.codigo}" data-count-description="${item.descripcion}"><span>${item.descripcion}</span><small>${item.codigo}</small><input class="field" data-count-physical type="number" min="0" value="${item.cantidad_fisica}" aria-label="Cantidad física"><input class="field" data-count-reason placeholder="Motivo"></div>`).join('')}<button class="primary wide">Aplicar ajustes confirmados y guardar</button><div data-parity-result></div>`;form.querySelector('.modal-close').onclick=()=>$('#modal-root').innerHTML='';showToast('Sesión de conteo creada.');}else{$('#modal-root').innerHTML='';showToast(`Conteo aplicado: ${payload.applied} productos.`);} } catch(error) { showToast(error.message,'error'); }
 	}
 	if(form.id==='sistecredito-date-edit-form'){
 		event.preventDefault();
@@ -1235,22 +1285,28 @@ document.addEventListener('submit',async event=>{
 	}
 	if(form.id==='parity-sistecredito-form'){
 		event.preventDefault();
-		try { const values=Object.fromEntries(new FormData(form)); const payload=await parityPost('/api/parity/sistecredito',{vendedor:values.vendedor,local:values.local,amount:Number(values.amount)}); form.querySelector('[data-parity-result]').innerHTML=`<p class="muted">Operación registrada: ${payload.id}.</p>`; showToast('Sistecrédito registrado.'); } catch(error) { showToast(error.message,'error'); }
+		try { const values=Object.fromEntries(new FormData(form)); if (!window.confirm('Se registrará esta operación de Sistecrédito y se modificarán los datos del día. ¿Deseas continuar?')) return; const payload=await parityPost('/api/parity/sistecredito',{vendedor:values.vendedor,local:values.local,amount:Number(values.amount)}); form.querySelector('[data-parity-result]').innerHTML=`<p class="muted">Operación registrada: ${payload.id}.</p>`; showToast('Sistecrédito registrado.'); } catch(error) { showToast(error.message,'error'); }
 	}
 	if(form.id==='parity-payroll-config-form'){
 		event.preventDefault();
-		try { const values=Object.fromEntries(new FormData(form)); const kind=values.kind; const payload=kind==='parameter'?{kind,name:values.name,value:values.value}:kind==='employee'?{kind,id_telegram:values.identifier,nombre:values.name,salario_base:Number(values.value||0),local:values.local}:{kind,codigo:values.identifier,producto:values.name,comision:Number(values.value||0)}; await parityPost('/api/parity/nomina/config',payload); form.querySelector('[data-parity-result]').textContent='Configuración guardada.'; showToast('Configuración de nómina guardada.'); } catch(error) { showToast(error.message,'error'); }
+		try { const values=Object.fromEntries(new FormData(form)); if (!window.confirm('Se guardará esta configuración de nómina y afectará el cálculo siguiente. ¿Deseas continuar?')) return; const kind=values.kind; const payload=kind==='parameter'?{kind,name:values.name,value:values.value}:kind==='employee'?{kind,id_telegram:values.identifier,nombre:values.name,salario_base:Number(values.value||0),local:values.local}:{kind,codigo:values.identifier,producto:values.name,comision:Number(values.value||0)}; await parityPost('/api/parity/nomina/config',payload); form.querySelector('[data-parity-result]').textContent='Configuración guardada.'; showToast('Configuración de nómina guardada.'); } catch(error) { showToast(error.message,'error'); }
 	}
 });
 document.addEventListener('input', event => {
 	const control=event.target.closest('[data-audit-filter]');
-	if(!control)return;
+	if(!control || !['text','search'].includes(control.type || 'text'))return;
 	const name=control.dataset.auditFilter;
 	const caret=typeof control.selectionStart==='number' ? control.selectionStart : null;
 	setAuditFilters({[name]:control.value});
 	render();
 	const next=document.querySelector(`[data-audit-filter="${name}"]`);
 	if(next){next.focus();if(caret!==null)next.setSelectionRange(caret,caret);}
+});
+document.addEventListener('click', event => {
+	const button=event.target.closest('[data-audit-reset]');
+	if(!button)return;
+	resetAuditFilters(button.dataset.auditReset);
+	render();
 });
 document.addEventListener('change', event => {
 	const control=event.target.closest('[data-audit-filter]');
@@ -1445,7 +1501,40 @@ new MutationObserver(ensureViewActions).observe($('#app-content'),{childList:tru
 document.addEventListener('click',event=>{if(!event.target.closest('[data-action="new-product"],[data-action="edit-product"]'))return;setTimeout(()=>{const form=$('#data-modal');if(!form||!form.querySelector('h2')?.textContent.toLowerCase().includes('producto'))return;form.querySelectorAll('input').forEach(input=>{input.required=input.name==='name'||input.name==='code';});if(event.target.closest('[data-action="new-product"]')){const code=form.querySelector('[name="code"]');if(code){code.required=false;code.placeholder='Se genera automáticamente';}}},0);});
 document.addEventListener('click',event=>{const button=event.target.closest('[data-action="edit-product"]');if(!button)return;setTimeout(()=>{const form=$('#data-modal');if(!form||form.querySelector('[data-action="delete-product"]'))return;const deleteButton=document.createElement('button');deleteButton.type='button';deleteButton.className='outline danger-text';deleteButton.dataset.action='delete-product';deleteButton.dataset.productId=button.dataset.productId;deleteButton.textContent='Eliminar producto';form.querySelector('button.primary')?.before(deleteButton);},0);});
 document.addEventListener('click',event=>{const button=event.target.closest('[data-action="delete-product"]');if(button)deleteProduct(button.dataset.productId);});
-document.addEventListener('change',event=>{if(!event.target.matches('[data-credit-filter]'))return;creditViewState.filter=event.target.value;render();});
+function rerenderFinanceList(event, viewState, key, selector, resetPage = false) {
+	const activeElement = event.target;
+	const selectionStart = typeof activeElement.selectionStart === 'number' ? activeElement.selectionStart : null;
+	viewState[key] = activeElement.value;
+	if(resetPage)viewState.page=1;
+	render();
+	const replacement = $(selector);
+	replacement?.focus({preventScroll:true});
+	if(selectionStart !== null && typeof replacement?.setSelectionRange === 'function') {
+		replacement.setSelectionRange(selectionStart, selectionStart);
+	}
+}
+document.addEventListener('input',event=>{
+	if(event.target.matches('[data-credit-search]'))rerenderFinanceList(event,creditViewState,'query','[data-credit-search]',true);
+	if(event.target.matches('[data-apartado-search]'))rerenderFinanceList(event,apartadoViewState,'query','[data-apartado-search]',true);
+});
+document.addEventListener('search',event=>{
+	if(event.target.matches('[data-credit-search]'))rerenderFinanceList(event,creditViewState,'query','[data-credit-search]',true);
+	if(event.target.matches('[data-apartado-search]'))rerenderFinanceList(event,apartadoViewState,'query','[data-apartado-search]',true);
+});
+document.addEventListener('change',event=>{
+	if(event.target.matches('[data-credit-filter]'))rerenderFinanceList(event,creditViewState,'filter','[data-credit-filter]',true);
+	if(event.target.matches('[data-credit-page-size]'))rerenderFinanceList(event,creditViewState,'pageSize','[data-credit-page-size]',true);
+	if(event.target.matches('[data-apartado-filter]'))rerenderFinanceList(event,apartadoViewState,'filter','[data-apartado-filter]',true);
+	if(event.target.matches('[data-apartado-page-size]'))rerenderFinanceList(event,apartadoViewState,'pageSize','[data-apartado-page-size]',true);
+});
+document.addEventListener('click',event=>{
+	const button=event.target.closest('[data-action="credit-page"],[data-action="apartado-page"]');
+	if(!button||button.disabled)return;
+	const viewState=button.dataset.action==='credit-page'?creditViewState:apartadoViewState;
+	viewState.page=Number(button.dataset.page)||1;
+	render();
+	document.querySelector(`[data-action="${button.dataset.action}"][data-page="${viewState.page}"]`)?.focus({preventScroll:true});
+});
 function openCreditScheduleEditModal(id){
 	const item=store.collection.credits.find(entry=>String(entry.id)===String(id));
 	if(!item)return;
