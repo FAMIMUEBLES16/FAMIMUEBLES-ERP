@@ -4,14 +4,14 @@ function showTransferDetail(transferId){const transfer=transferRecord(transferId
 function editTransfer(transferId){const transfer=transferRecord(transferId);if(!transfer)return showToast('No se encontro el traslado.','error');$('#modal-root').innerHTML=`<div class="modal-backdrop"><form class="modal" id="transfer-edit-form"><button type="button" class="modal-close">×</button><p class="eyebrow">INVENTARIO</p><h2>Editar traslado</h2><textarea class="field" name="data" rows="12" required>${JSON.stringify(transfer,null,2)}</textarea><button class="primary wide">Guardar cambios</button></form></div>`;$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';$('#transfer-edit-form').onsubmit=async event=>{event.preventDefault();try{const updated=JSON.parse(new FormData(event.target).get('data'));if(String(updated.id)!==String(transfer.id))throw new Error('El ID no puede cambiarse.');await persistDomainRecord('transfers',updated);store.collection.transfers=[...(store.collection.transfers||[]).filter(item=>String(item.id)!==String(updated.id)),updated];$('#modal-root').innerHTML='';render();showToast('Traslado actualizado correctamente.');}catch(error){showToast(error.message,'error');}};}
 async function deleteTransferRemote(transferId){if(!window.confirm('¿Eliminar este traslado?'))return;try{await persistCatalogRecord(`/api/domain/transfers/${encodeURIComponent(transferId)}`,{},'DELETE');store.collection.transfers=(store.collection.transfers||[]).filter(item=>String(item.id)!==String(transferId));$('#modal-root').innerHTML='';render();showToast('Traslado eliminado correctamente.');}catch(error){showToast(error.message,'error');}}
 import { store } from './data/store.js?v=20';
-import { hydrateState, hydrateStateWithRetry, hydrateCatalog, saveState, authHeaders, activeTenantId, isStaticDeployment } from './data/storage.js?v=27';
+import { hydrateState, hydrateStateWithRetry, hydrateCatalog, saveState, authHeaders, activeTenantId, isStaticDeployment } from './data/storage.js?v=28';
 import { generateId } from './utils/ids.js';
 import { currentRoute, startRouter } from './router.js?v=18';
 import { navItems, navGroups } from './components/sidebar.js?v=22';
 import { showToast } from './components/toast.js';
 import { table } from './components/tables.js';
 import { renderNotifications } from './components/notifications.js';
-import { renderDashboard } from './modules/dashboard-v3.js?v=20261004105826';
+import { renderDashboard } from './modules/dashboard-v3.js?v=20261005091948';
 import { canonicalSellerName, renderVentas, salesTable, salesSummary, normalizeSales, salesMonthKey, saleTimestamp, filterSales, salesPaymentMethods } from './modules/ventas.js?v=27';
 import { renderFacturacion, cartTotal, productResults, customerResults } from './modules/facturacion.js?v=23';
 import { renderProductos, productTable, productMatches } from './modules/productos.js?v=22';
@@ -53,6 +53,8 @@ import { api } from './services/api-client.js?v=8';
 
 const state = { cart:[], payment:'Efectivo', customerId:'CLI-00001', storeId:store.collection.stores[0]?.id || '', transport:0, transportDestination:'', transportNote:'' };
 let sharedRefreshInFlight = false;
+let sharedRefreshTimer = null;
+let automaticSharedRefreshEnabled = false;
 let inventoryViewState = { store:'all', query:'', active:'active', status:'all', sort:'name', version:0 };
 let creditViewState = { filter:'all' };
 let salesViewState = { query:'', store:'all', month:`${new Date().getFullYear()}-${String(new Date().getMonth()+1).padStart(2,'0')}`, payment:'all', version:0 };
@@ -327,20 +329,25 @@ async function loadDomainCollections(state,collections,timeout=5000,concurrency=
 	}
 	return results;
 }
-function hydrateSecondaryDomainCollections(state){
+function hydrateSecondaryDomainCollections(state, renderWhenLoaded=true, requireComplete=false){
 	const deferredTalonarios=['talonarios','talonarioJustifications'];
 	const deferredAttendance=['workSchedules','staffAbsences'];
 	const secondary=remoteDomainCollections.filter(collection=>!criticalDomainCollections.has(collection)&&!deferredTalonarios.includes(collection)&&!deferredAttendance.includes(collection));
-	loadDomainCollections(state,secondary,3000,3).then(()=>{if(currentRoute()!=='dashboard')render();});
+	return loadDomainCollections(state,secondary,3000,3).then(results=>{
+		if(requireComplete&&results.some(result=>!result))throw new Error('No se pudieron cargar todas las colecciones compartidas.');
+		if(renderWhenLoaded&&currentRoute()!=='dashboard')render();
+		return results;
+	});
 }
-async function hydrateDomainCollections(state, loadSecondary=true){
+async function hydrateDomainCollections(state, loadSecondary=true, allowSideEffects=true, requireComplete=false){
  const deferredTalonarios=['talonarios','talonarioJustifications'];
  const deferredAttendance=['workSchedules','staffAbsences'];
  const critical=remoteDomainCollections.filter(collection=>criticalDomainCollections.has(collection)&&!deferredTalonarios.includes(collection));
  const payableCollections=['suppliers','accountsPayable'].filter(collection=>critical.includes(collection));
- await loadDomainCollections(state,payableCollections,10000,2,1);
+ const payableResults=await loadDomainCollections(state,payableCollections,10000,2,1);
+ if(requireComplete&&payableResults.some(result=>!result))throw new Error('No se pudieron cargar todas las cuentas por pagar.');
  const normalizedPayables=normalizePayableSuppliers(state);
- if(normalizedPayables.length){
+ if(allowSideEffects&&normalizedPayables.length){
   store.save();
   Promise.allSettled(normalizedPayables.map(account=>persistDomainRecord('accountsPayable',account))).then(results=>results.filter(result=>result.status==='rejected').forEach(result=>console.warn('No se pudo normalizar el proveedor de una cuenta por pagar:',result.reason?.message||result.reason)));
  }
@@ -350,8 +357,12 @@ async function hydrateDomainCollections(state, loadSecondary=true){
   loadDomainCollections(state,[...remainingCritical,...deferredAttendance],5000,3),
   loadDomainCollections(state,deferredTalonarios,5000,2)
  ]);
+ if(requireComplete&&loadResults.flat().some(result=>!result))throw new Error('No se pudieron cargar todas las colecciones compartidas.');
  const talonarioResults=loadResults[1];
 	if(talonarioResults[0]){
+		state.talonarios=normalizeActiveTalonarios(state.talonarios||[]);
+	}
+	if(talonarioResults[0]&&allowSideEffects){
 		store.collection.talonarios=normalizeActiveTalonarios(store.collection.talonarios||[]);
 		Promise.resolve().then(async()=>{
 			await seedHistoricalTalonarios(state);
@@ -418,9 +429,12 @@ async function hydrateUsers(state){
 	return state;
 }
 async function hydrateCurrentUserPermissions(){const user=JSON.parse(localStorage.getItem('famimuebles-user')||'{}');if(!user.id){userPermissions=[];return;}try{const payload=await api.get(`/api/users/${encodeURIComponent(user.id)}/permissions`,{headers:{'X-Tenant-ID':activeTenantId()},cache:'no-store',timeout:4000});userPermissions=Array.isArray(payload.items)?payload.items:[];}catch(error){userPermissions=[];}}
-async function refreshSharedState(){
-	if(document.querySelector('.modal-backdrop') || sharedRefreshInFlight)return;
+async function refreshSharedState(automatic=false){
+	if(document.querySelector('.modal-backdrop') || sharedRefreshInFlight)return false;
 	sharedRefreshInFlight=true;
+	const previousState=store.state;
+	const viewSnapshot=captureViewState();
+	let replacedState=false;
 	try{
 		const route=currentRoute();
 		const inventoryVersion=inventoryViewState.version;
@@ -430,21 +444,34 @@ async function refreshSharedState(){
 		const productVersion=productViewState.version;
 		const productFilters=route==='productos' ? {...productViewState} : null;
 		const normalized=await hydrateState();
-		if(!normalized)return;
-		store.state=normalized;
-		await hydrateCatalog(store.state);
-		await hydrateDomainCollections(store.state);
-		repairTalonario15301().catch(error=>console.warn('No se pudo corregir el talonario 15301-15350:',error.message));
-		refreshTalonarioSalesAlerts().then(()=>{if(currentRoute()==='talonarios')render();}).catch(error=>console.warn('No se pudieron actualizar las alertas de talonarios:',error.message));
-		await hydrateUsers(store.state);
+		if(!normalized)return false;
+		if(automatic){
+			await hydrateCatalog(normalized,false,true);
+			await hydrateDomainCollections(normalized,false,false,true);
+			await hydrateSecondaryDomainCollections(normalized,false,true);
+			await hydrateUsers(normalized);
+			if(document.querySelector('.modal-backdrop') || document.activeElement?.matches('input,select,textarea'))return true;
+			store.state=normalized;
+			replacedState=true;
+		}else{
+			store.state=normalized;
+			replacedState=true;
+			await hydrateCatalog(store.state);
+			await hydrateDomainCollections(store.state);
+			repairTalonario15301().catch(error=>console.warn('No se pudo corregir el talonario 15301-15350:',error.message));
+			refreshTalonarioSalesAlerts().then(()=>{if(currentRoute()==='talonarios')render();}).catch(error=>console.warn('No se pudieron actualizar las alertas de talonarios:',error.message));
+			await hydrateUsers(store.state);
+		}
 		normalizePayableSuppliers(store.state);
 		syncCustomerBalances();
-		try {
-			await parityPost('/api/shared-payment', { kind:'mora', amount:0 });
-			const overdue = await api.get('/api/parity/mora', {headers:{'X-Tenant-ID':activeTenantId()}, cache:'no-store'});
-			const existing = new Set(store.collection.notifications.map(item=>item.key));
-			(overdue.items || []).forEach(item=>{ const key=`overdue-quota:${item.id}`; if(!existing.has(key))store.collection.notifications.push({id:`MORA-${item.id}`,key,text:`Cuota vencida de ${item.cliente || 'cliente'} por ${money(Number(item.valor_programado || 0) - Number(item.valor_pagado || 0))}.`,type:'danger',action:'credit-payment',targetId:item.credito_id,read:false,createdAt:new Date().toISOString()}); });
-		} catch (error) { }
+		if(!automatic){
+			try {
+				await parityPost('/api/shared-payment', { kind:'mora', amount:0 });
+				const overdue = await api.get('/api/parity/mora', {headers:{'X-Tenant-ID':activeTenantId()}, cache:'no-store'});
+				const existing = new Set(store.collection.notifications.map(item=>item.key));
+				(overdue.items || []).forEach(item=>{ const key=`overdue-quota:${item.id}`; if(!existing.has(key))store.collection.notifications.push({id:`MORA-${item.id}`,key,text:`Cuota vencida de ${item.cliente || 'cliente'} por ${money(Number(item.valor_programado || 0) - Number(item.valor_pagado || 0))}.`,type:'danger',action:'credit-payment',targetId:item.credito_id,read:false,createdAt:new Date().toISOString()}); });
+			} catch (error) { }
+		}
 		if(!store.collection.stores.some(item=>String(item.id)===String(state.storeId)))state.storeId=resolveActiveStore();
 		if(inventoryFilters && currentRoute()==='inventario'){
 			const currentFilters=inventoryViewState.version===inventoryVersion ? inventoryFilters : inventoryViewState;
@@ -475,11 +502,45 @@ async function refreshSharedState(){
 			render();
 			restoreViewState(viewSnapshot);
 		}
+		return true;
 	}catch(error){
+		if(replacedState){
+			store.state=previousState;
+			render();
+			restoreViewState(viewSnapshot);
+		}
 		console.warn('No se pudo actualizar la informacion compartida:',error.message);
+		return false;
 	}finally{
 		sharedRefreshInFlight=false;
 	}
+}
+function stopAutomaticSharedRefresh(){
+	automaticSharedRefreshEnabled=false;
+	if(sharedRefreshTimer){
+		clearInterval(sharedRefreshTimer);
+		sharedRefreshTimer=null;
+	}
+}
+async function runAutomaticSharedRefresh(){
+	if(!automaticSharedRefreshEnabled || document.hidden || navigator.onLine===false || document.querySelector('.modal-backdrop') || sharedRefreshInFlight)return;
+	const activeElement=document.activeElement;
+	if(activeElement?.matches('input,select,textarea'))return;
+	const refreshed=await refreshSharedState(true);
+	if(!refreshed){
+		stopAutomaticSharedRefresh();
+		console.warn('Se pauso la actualizacion automatica. La sincronizacion manual sigue disponible.');
+		showToast('Se pauso la actualizacion automatica. Puedes actualizar con el boton de sincronizacion.','error');
+	}
+}
+function startAutomaticSharedRefresh(){
+	if(isStaticDeployment() || sharedRefreshTimer)return;
+	automaticSharedRefreshEnabled=true;
+	sharedRefreshTimer=setInterval(runAutomaticSharedRefresh,30000);
+	document.addEventListener('visibilitychange',()=>{
+		if(!document.hidden)runAutomaticSharedRefresh();
+	});
+	window.addEventListener('online',runAutomaticSharedRefresh);
 }
 function openUserModal(){
 	const stores=store.collection.stores.map(item=>`<option value="${item.id}">${item.name}</option>`).join('');
@@ -1280,6 +1341,7 @@ async function boot() {
 	syncCustomerBalances();
 	render();
 	hydrateDomainCollections(store.state).catch(error => console.warn('No se pudieron cargar los datos adicionales:', error.message));
+	startAutomaticSharedRefresh();
 }
 document.addEventListener('click', async event => {
 	if (!event.target.closest('#sync-data')) return;
@@ -1288,7 +1350,11 @@ document.addEventListener('click', async event => {
 	button.disabled = true;
 	button.classList.add('is-loading');
 	try {
-		await refreshSharedState();
+		const refreshed=await refreshSharedState();
+		if(!refreshed){
+			showToast('No se pudieron actualizar los datos. La informacion actual se conserva.','error');
+			return;
+		}
 		showToast('Datos actualizados desde PostgreSQL.');
 	} finally {
 		button.disabled = false;
