@@ -401,7 +401,6 @@ function initCharts(data) {
       if (target === 'all' || target === 'ranking') renderRanking(period);
     };
     renderPeriod('today');
-    renderRanking(today.slice(0, 7), true);
     document.querySelectorAll('[data-chart-filter]').forEach((filter, index) => {
       const targets = ['store', 'payment', 'seller', 'ranking'];
       filter.addEventListener('change', event => renderPeriod(event.target.value, targets[index] || 'all'));
