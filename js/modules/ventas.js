@@ -69,6 +69,19 @@ function localKey(value) {
   return String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 }
 
+function customerMatchKey(value) {
+  return String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+export function findMatchingSaleCustomer(sale, customers = []) {
+  const customerId = String(sale?.customerId ?? sale?.customer_id ?? sale?.cliente_id ?? '').trim();
+  const customerName = String(sale?.customer ?? sale?.cliente ?? sale?.cliente_nombre ?? sale?.customer_name ?? sale?.nombre_cliente ?? customerId).trim();
+  const nameKey = customerMatchKey(customerName);
+  return customers.find(customer =>
+    (customerId && String(customer.id) === customerId)
+    || (nameKey && customerMatchKey(customer.name ?? customer.customer ?? customer.nombre) === nameKey)
+  ) || null;
+}
 function paymentKey(value) {
   return String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase().trim();
 }
