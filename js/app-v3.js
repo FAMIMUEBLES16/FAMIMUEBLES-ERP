@@ -12,7 +12,7 @@ import { showToast } from './components/toast.js';
 import { table } from './components/tables.js';
 import { renderNotifications } from './components/notifications.js';
 import { renderDashboard } from './modules/dashboard-v3.js?v=20261006191847-ranking-today-v1';
-import { canonicalSellerName, renderVentas, salesTable, salesSummary, normalizeSales, salesMonthKey, saleTimestamp, filterSales, salesPaymentMethods } from './modules/ventas.js?v=27';
+import { canonicalSellerName, renderVentas, salesTable, salesSummary, normalizeSales, salesMonthKey, saleTimestamp, filterSales, salesPaymentMethods, findMatchingSaleCustomer } from './modules/ventas.js?v=28';
 import { renderFacturacion, cartTotal, productResults, customerResults } from './modules/facturacion.js?v=23';
 import { renderProductos, productTable, productMatches } from './modules/productos.js?v=22';
 import { renderInventario, inventoryContent } from './modules/inventario.js?v=20';
@@ -690,13 +690,18 @@ function localDateValue(){const date=new Date();date.setMinutes(date.getMinutes(
 function openSaleEditModal(saleId){
 	const sale=(store.collection.sales||[]).find(item=>String(item.id)===String(saleId)) || (store.collection.ventas||[]).find(item=>String(item.id)===String(saleId));
 	if(!sale)return;
-	const customers=store.collection.customers.map(item=>`<option value="${item.id}" ${String(item.id)===String(sale.customerId)?'selected':''}>${item.name}</option>`).join('');
+	const saleCustomerName=String(sale.customer||sale.cliente||sale.cliente_nombre||sale.customer_name||sale.nombre_cliente||sale.customerId||sale.customer_id||sale.cliente_id||'').trim();
+	const matchingCustomer=findMatchingSaleCustomer(sale,store.collection.customers);
+	const currentCustomerValue=String(matchingCustomer?.id??saleCustomerName);
+	const escapeOption=value=>String(value??'').replace(/[&<>"']/g,character=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[character]));
+	const customerOptions=store.collection.customers.map(item=>`<option value="${escapeOption(item.id)}" ${String(item.id)===currentCustomerValue?'selected':''}>${escapeOption(item.name)}</option>`).join('');
+	const currentCustomerOption=matchingCustomer?'':`<option value="${escapeOption(currentCustomerValue)}" selected>${escapeOption(saleCustomerName||'Cliente sin nombre')}</option>`;
 	const currentPayment=String(sale.paymentMethod??sale.metodo_pago??sale.forma_pago??sale.payment??'').trim();
 	const paymentMethods=['Efectivo','Transferencia','Tarjeta','Sistecrédito','Crédito interno FAMIMUEBLES','Apartado'];
 	if(currentPayment && !paymentMethods.some(method=>method.toLowerCase()===currentPayment.toLowerCase()))paymentMethods.push(currentPayment);
 	const paymentOptions=paymentMethods.map(method=>`<option value="${method}" ${method.toLowerCase()===currentPayment.toLowerCase()?'selected':''}>${method}</option>`).join('');
 	const saleDate=String(sale.date||sale.fecha||sale.fecha_venta||sale.created_at||sale.createdAt||'').slice(0,10)||localDateValue();
-	$('#modal-root').innerHTML=`<div class="modal-backdrop"><form class="modal" id="sale-edit-modal"><button type="button" class="modal-close">×</button><p class="eyebrow">ADMINISTRACION</p><h2>Editar venta ${sale.id}</h2><label class="input-label">Fecha de venta<input class="field" type="date" name="date" value="${saleDate}" required></label><label class="input-label">Cliente<select class="field" name="customerId">${customers}</select></label><label class="input-label">Metodo de pago<select class="field" name="paymentMethod">${paymentOptions}</select></label><button class="primary wide">Guardar cambios</button></form></div>`;
+	$('#modal-root').innerHTML=`<div class="modal-backdrop"><form class="modal" id="sale-edit-modal"><button type="button" class="modal-close">×</button><p class="eyebrow">ADMINISTRACION</p><h2>Editar venta ${sale.id}</h2><label class="input-label">Fecha de venta<input class="field" type="date" name="date" value="${saleDate}" required></label><label class="input-label">Cliente<select class="field" name="customerId">${currentCustomerOption}${customerOptions}</select></label><label class="input-label">Metodo de pago<select class="field" name="paymentMethod">${paymentOptions}</select></label><button class="primary wide">Guardar cambios</button></form></div>`;
 	$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';
 	$('#sale-edit-modal').onsubmit=async event=>{event.preventDefault();try{const values=Object.fromEntries(new FormData(event.target));await persistCatalogRecord('/api/catalog/sale',{...sale,...values,paymentMethod:values.paymentMethod||currentPayment},'PUT');Object.assign(sale,values,{paymentMethod:values.paymentMethod||currentPayment});await hydrateCatalog(store.state);$('#modal-root').innerHTML='';render();showToast('Venta actualizada correctamente.');}catch(error){showToast(error.message,'error');}};
 }
