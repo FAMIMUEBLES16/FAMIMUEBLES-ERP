@@ -1872,6 +1872,22 @@ def _create_shared_apartado_record(database: _PostgresConnection, payload: dict,
     return {"id": int(result["id"]), "total": total_amount, "initial": initial_amount}
 
 
+def resolve_shared_sale_customer(database, payload: dict, current_name: str, current_tenant: str) -> str:
+    customer_id = str(
+        payload.get("customerId")
+        or payload.get("cliente")
+        or payload.get("customer")
+        or ""
+    ).strip()
+    if not customer_id:
+        return current_name
+    customer = database.execute(
+        "SELECT nombre FROM clientes WHERE tenant_id = %s AND (external_id = %s OR id::text = %s)",
+        (current_tenant, customer_id, customer_id),
+    ).fetchone()
+    return str(customer["nombre"]) if customer else customer_id
+
+
 def _create_shared_sale(database: _PostgresConnection, payload: dict, user: dict, handler: "AppHandler") -> dict:
     """Registra una venta del ERP como movimiento del esquema del bot."""
     _, cached = claim_idempotency(database, handler, payload, "/api/catalog/sale")
@@ -3880,18 +3896,18 @@ class AppHandler(SimpleHTTPRequestHandler):
                     items = json.loads(items)
                 if _postgres_enabled():
                     with connection() as database:
-                        sale = database.execute("SELECT id, local_origen FROM movimientos WHERE id = %s AND UPPER(COALESCE(tipo, '')) = 'VENTA' FOR UPDATE", (identifier,)).fetchone()
+                        sale = database.execute("SELECT id, local_origen, cliente FROM movimientos WHERE id = %s AND UPPER(COALESCE(tipo, '')) = 'VENTA' FOR UPDATE", (identifier,)).fetchone()
                         if not sale:
                             self.send_json(404, {"error": "Venta no encontrada"})
                             return
                         store_id = str(sale["local_origen"] or "")
                         enforce_user_store_proxy(current_user, store_id)
-                        customer_id = str(payload.get("customerId") or payload.get("cliente") or payload.get("customer") or "").strip()
-                        customer = database.execute(
-                            "SELECT nombre FROM clientes WHERE tenant_id = %s AND (external_id = %s OR id::text = %s)",
-                            (tenant_id(self, payload), customer_id, customer_id),
-                        ).fetchone()
-                        customer_name = str(customer["nombre"]) if customer else customer_id
+                        customer_name = resolve_shared_sale_customer(
+                            database,
+                            payload,
+                            str(sale["cliente"] or ""),
+                            tenant_id(self, payload),
+                        )
                         old_items = database.execute("SELECT codigo, cantidad FROM movimiento_productos WHERE movimiento_id = %s FOR UPDATE", (identifier,)).fetchall()
                         for old_item in old_items:
                             database.execute("UPDATE inventarios SET cantidad = cantidad + %s, actualizado = CURRENT_TIMESTAMP WHERE local = %s AND codigo = %s", (int(old_item["cantidad"] or 0), store_id, old_item["codigo"]))

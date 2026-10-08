@@ -11,8 +11,8 @@ import { navItems, navGroups } from './components/sidebar.js?v=23';
 import { showToast } from './components/toast.js';
 import { table } from './components/tables.js';
 import { renderNotifications } from './components/notifications.js';
-import { renderDashboard } from './modules/dashboard-v3.js?v=20261005091948';
-import { canonicalSellerName, renderVentas, salesTable, salesSummary, normalizeSales, salesMonthKey, saleTimestamp, filterSales, salesPaymentMethods } from './modules/ventas.js?v=27';
+import { renderDashboard } from './modules/dashboard-v3.js?v=20261007101229-ranking-today-v1';
+import { canonicalSellerName, renderVentas, salesTable, salesSummary, normalizeSales, salesMonthKey, saleTimestamp, filterSales, salesPaymentMethods, findMatchingSaleCustomer } from './modules/ventas.js?v=28';
 import { renderFacturacion, cartTotal, productResults, customerResults } from './modules/facturacion.js?v=23';
 import { renderProductos, productTable, productMatches } from './modules/productos.js?v=22';
 import { renderInventario, inventoryContent } from './modules/inventario.js?v=20';
@@ -29,7 +29,7 @@ import { renderGasolina } from './modules/gasolina.js?v=18';
 import { mergeUserSources, renderUsuarios } from './modules/usuarios.js?v=22';
 import { renderDescansos } from './modules/descansos.js?v=7';
 import { renderAuditoria, resetAuditFilters, setAuditFilters } from './modules/auditoria.js?v=27';
-import { renderTalonarios, talonarioModal, setTalonarioFilters, currentTalonarioNumber, normalizeActiveTalonarios } from './modules/talonarios.js?v=17';
+import { renderTalonarios, talonarioModal, setTalonarioFilters, currentTalonarioNumber, normalizeActiveTalonarios } from './modules/talonarios.js?v=19';
 import { historicalTalonarios, historicalRecibos, storedTalonarios } from './modules/talonarios-historial.js?v=1';
 import { renderApartados } from './modules/apartados.js?v=20';
 import { createApartado, decreaseSaleInventory, runTransaction, addMovement } from './modules/finanzas.js?v=18';
@@ -221,14 +221,25 @@ async function saveTalonarioForm(form){
 		const destinationId=String(destinationOption?.value||'').trim();
 		const destinationName=String(destinationOption?.textContent||'').replace(/\s+·.*$/,'').trim();
 		if(!destinationId||!destinationName)throw new Error('Selecciona un local destino valido.');
-		source.status='ENVIADO';
-		source.sentAt=new Date().toISOString();
-		source.destinationStoreId=destinationId;
-		const destination={...source,id:`TAL-${Date.now()}-${Math.random().toString(36).slice(2,7)}`,storeId:destinationId,destinationName,status:'EN_USO',currentNumber:source.startNumber,sentFrom:'INV CRR 5 3 26',sentAt:new Date().toISOString()};
+		const destinationKey=talonarioNameKey(destinationId);
+		const destinationKeys=new Set([destinationId,destinationName].map(talonarioNameKey));
+		const alreadyAssigned=(store.collection.talonarios||[]).some(item=>String(item.type).toUpperCase()===String(source.type).toUpperCase()&&Number(item.startNumber)===Number(source.startNumber)&&Number(item.endNumber)===Number(source.endNumber)&&[item.storeId,item.destinationName].some(value=>destinationKeys.has(talonarioNameKey(value)))&&String(item.status||'').toUpperCase()!=='ALMACENADO');
+		if(alreadyAssigned)throw new Error('Ese rango ya esta asignado a este local.');
+		const sentAt=new Date().toISOString();
+		const sourceUpdate={...source,status:'ENVIADO',sentAt,destinationStoreId:destinationId};
+		const destination={...sourceUpdate,id:`TAL-${source.id}-${destinationKey}`,storeId:destinationId,destinationName,status:'EN_USO',currentNumber:source.startNumber,sentFrom:'INV CRR 5 3 26',sentAt};
 		delete destination.destinationStoreId;
-		await persistDomainRecord('talonarios',source);
 		await persistDomainRecord('talonarios',destination);
-		store.collection.talonarios.push(destination);
+		try{
+			await persistDomainRecord('talonarios',sourceUpdate);
+		}catch(error){
+			try{await api.delete(`/api/domain/talonarios/${encodeURIComponent(destination.id)}`,{}, {headers:{'X-Tenant-ID':activeTenantId()}});}catch(rollbackError){console.warn('No se pudo retirar el envio incompleto:',rollbackError.message);}
+			throw error;
+		}
+		Object.assign(source,sourceUpdate);
+		const destinationIndex=store.collection.talonarios.findIndex(item=>String(item.id)===String(destination.id));
+		if(destinationIndex<0)store.collection.talonarios.push(destination);
+		else store.collection.talonarios[destinationIndex]=destination;
 		refreshTalonarioLowStockNotification(source.type);
 	}else{
 		const destinationOption=form.elements.destinationStoreId?.selectedOptions?.[0];
@@ -690,13 +701,18 @@ function localDateValue(){const date=new Date();date.setMinutes(date.getMinutes(
 function openSaleEditModal(saleId){
 	const sale=(store.collection.sales||[]).find(item=>String(item.id)===String(saleId)) || (store.collection.ventas||[]).find(item=>String(item.id)===String(saleId));
 	if(!sale)return;
-	const customers=store.collection.customers.map(item=>`<option value="${item.id}" ${String(item.id)===String(sale.customerId)?'selected':''}>${item.name}</option>`).join('');
+	const saleCustomerName=String(sale.customer||sale.cliente||sale.cliente_nombre||sale.customer_name||sale.nombre_cliente||sale.customerId||sale.customer_id||sale.cliente_id||'').trim();
+	const matchingCustomer=findMatchingSaleCustomer(sale,store.collection.customers);
+	const currentCustomerValue=String(matchingCustomer?.id??saleCustomerName);
+	const escapeOption=value=>String(value??'').replace(/[&<>"']/g,character=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[character]));
+	const customerOptions=store.collection.customers.map(item=>`<option value="${escapeOption(item.id)}" ${String(item.id)===currentCustomerValue?'selected':''}>${escapeOption(item.name)}</option>`).join('');
+	const currentCustomerOption=matchingCustomer?'':`<option value="${escapeOption(currentCustomerValue)}" selected>${escapeOption(saleCustomerName||'Cliente sin nombre')}</option>`;
 	const currentPayment=String(sale.paymentMethod??sale.metodo_pago??sale.forma_pago??sale.payment??'').trim();
 	const paymentMethods=['Efectivo','Transferencia','Tarjeta','Sistecrédito','Crédito interno FAMIMUEBLES','Apartado'];
 	if(currentPayment && !paymentMethods.some(method=>method.toLowerCase()===currentPayment.toLowerCase()))paymentMethods.push(currentPayment);
 	const paymentOptions=paymentMethods.map(method=>`<option value="${method}" ${method.toLowerCase()===currentPayment.toLowerCase()?'selected':''}>${method}</option>`).join('');
 	const saleDate=String(sale.date||sale.fecha||sale.fecha_venta||sale.created_at||sale.createdAt||'').slice(0,10)||localDateValue();
-	$('#modal-root').innerHTML=`<div class="modal-backdrop"><form class="modal" id="sale-edit-modal"><button type="button" class="modal-close">×</button><p class="eyebrow">ADMINISTRACION</p><h2>Editar venta ${sale.id}</h2><label class="input-label">Fecha de venta<input class="field" type="date" name="date" value="${saleDate}" required></label><label class="input-label">Cliente<select class="field" name="customerId">${customers}</select></label><label class="input-label">Metodo de pago<select class="field" name="paymentMethod">${paymentOptions}</select></label><button class="primary wide">Guardar cambios</button></form></div>`;
+	$('#modal-root').innerHTML=`<div class="modal-backdrop"><form class="modal" id="sale-edit-modal"><button type="button" class="modal-close">×</button><p class="eyebrow">ADMINISTRACION</p><h2>Editar venta ${sale.id}</h2><label class="input-label">Fecha de venta<input class="field" type="date" name="date" value="${saleDate}" required></label><label class="input-label">Cliente<select class="field" name="customerId">${currentCustomerOption}${customerOptions}</select></label><label class="input-label">Metodo de pago<select class="field" name="paymentMethod">${paymentOptions}</select></label><button class="primary wide">Guardar cambios</button></form></div>`;
 	$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';
 	$('#sale-edit-modal').onsubmit=async event=>{event.preventDefault();try{const values=Object.fromEntries(new FormData(event.target));await persistCatalogRecord('/api/catalog/sale',{...sale,...values,paymentMethod:values.paymentMethod||currentPayment},'PUT');Object.assign(sale,values,{paymentMethod:values.paymentMethod||currentPayment});await hydrateCatalog(store.state);$('#modal-root').innerHTML='';render();showToast('Venta actualizada correctamente.');}catch(error){showToast(error.message,'error');}};
 }
@@ -1750,32 +1766,41 @@ async function repairTalonario15301(){
 	try{await persistDomainRecord('talonarios',item);}catch(error){console.warn('No se pudo actualizar el talonario 15301-15350:',error.message);}
 }
 const configuredTalonariosActivos=[
-	{local:'INV CARTAGENITA',type:'REMISION',startNumber:15451,endNumber:15500,currentNumber:15473},
-	{local:'INV CARTAGENITA II',type:'REMISION',startNumber:15851,endNumber:15900,currentNumber:15851},
-	{local:'INV CRR 5 3 17',type:'REMISION',startNumber:14051,endNumber:14100,currentNumber:14095},
-	{local:'INV CRR 5 3 26',type:'REMISION',startNumber:15801,endNumber:15850,currentNumber:15808},
-	{local:'INV CRR 5 5 56',type:'REMISION',startNumber:15701,endNumber:15750,currentNumber:15708},
-	{local:'INV CRR 7 6A 15',type:'REMISION',startNumber:15651,endNumber:15700,currentNumber:15656},
-	{local:'INV MANABLANCA',type:'REMISION',startNumber:15751,endNumber:15800,currentNumber:15754}
+	{local:'INV CARTAGENITA',aliases:['Cartagenita','Cartagenita / Vital'],type:'REMISION',startNumber:15451,endNumber:15500,currentNumber:15496},
+	{local:'INV CARTAGENITA II',aliases:['Cartagenita II'],type:'REMISION',startNumber:15851,endNumber:15900,currentNumber:15857},
+	{local:'INV CRR 5 3 17',aliases:['Local Esquina'],type:'REMISION',startNumber:14051,endNumber:14100,currentNumber:14100,active:false},
+	{local:'INV CRR 5 3 26',aliases:['Cr 5 #3-26','Cr 5 -3-26'],type:'REMISION',startNumber:15801,endNumber:15850,currentNumber:15821},
+	{local:'INV CRR 5 5 56',aliases:['Cr 5 - 56','Cr 5 #5 Sur'],type:'REMISION',startNumber:15701,endNumber:15750,currentNumber:15734},
+	{local:'INV CRR 7 6A 15',aliases:['Cr 7 #6A-15'],type:'REMISION',startNumber:15651,endNumber:15700},
+	{local:'INV MANABLANCA',aliases:['Manablanca','Local Manablanca'],type:'REMISION',startNumber:15751,endNumber:15800,currentNumber:15791},
+	{local:'INV CARTAGENITA',aliases:['Cartagenita'],type:'RECIBO',startNumber:5551,endNumber:5600,currentNumber:5550},
+	{local:'INV CARTAGENITA II',aliases:['Cartagenita II'],type:'RECIBO',startNumber:5751,endNumber:5800,currentNumber:5750},
+	{local:'INV CRR 5 3 17',aliases:[],type:'RECIBO',startNumber:5101,endNumber:5150,currentNumber:5100},
+	{local:'INV CRR 5 3 26',aliases:['Cr 5 #3-26','Cr 5 -3-26'],type:'RECIBO',startNumber:5651,endNumber:5700,currentNumber:5650},
+	{local:'INV CRR 5 5 56',aliases:['Cr 5 - 56','Cr 5 #5 Sur'],type:'RECIBO',startNumber:5501,endNumber:5550,currentNumber:5500},
+	{local:'INV MANABLANCA',aliases:['Manablanca','Local Manablanca'],type:'RECIBO',startNumber:5701,endNumber:5750,currentNumber:5700}
 ];
 const talonarioNameKey=value=>String(value||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^A-Z0-9]/gi,'').toUpperCase();
 async function seedConfiguredTalonariosActivos(){
 	if(!Array.isArray(store.collection.talonarios))store.collection.talonarios=[];
 	for(const config of configuredTalonariosActivos){
-		const local=store.collection.stores.find(item=>talonarioNameKey(item.id)===talonarioNameKey(config.local)||talonarioNameKey(item.name)===talonarioNameKey(config.local));
+		const localKeys=[config.local,...(config.aliases||[])].map(talonarioNameKey);
+		const local=store.collection.stores.find(item=>localKeys.includes(talonarioNameKey(item.id))||localKeys.includes(talonarioNameKey(item.name)));
 		const storeId=local?.id||config.local;
-		let item=store.collection.talonarios.find(entry=>String(entry.type).toUpperCase()===config.type&&Number(entry.startNumber)===config.startNumber&&Number(entry.endNumber)===config.endNumber&&(talonarioNameKey(entry.storeId)===talonarioNameKey(storeId)||talonarioNameKey(entry.destinationName)===talonarioNameKey(config.local)));
+		const matches=store.collection.talonarios.filter(entry=>String(entry.type).toUpperCase()===config.type&&Number(entry.startNumber)===config.startNumber&&Number(entry.endNumber)===config.endNumber);
+		let item=matches.find(entry=>localKeys.includes(talonarioNameKey(entry.storeId))||localKeys.includes(talonarioNameKey(entry.destinationName))||talonarioNameKey(entry.storeId)===talonarioNameKey(storeId));
+		if(!item)item=matches.find(entry=>talonarioNameKey(entry.storeId)==='INVCRR5326'&&String(entry.status||'').toUpperCase()==='ALMACENADO'&&!entry.destinationStoreId);
 		let shouldPersist=false;
 		if(!item){
-			item={id:`TAL-ACTIVO-${config.type}-${config.startNumber}-${talonarioNameKey(config.local)}`,...config,storeId,destinationName:local?.name||config.local,status:'EN_USO',sentFrom:'INV CRR 5 3 26',historical:false};
+			item={id:`TAL-ACTIVO-${config.type}-${config.startNumber}-${talonarioNameKey(config.local)}`,type:config.type,startNumber:config.startNumber,endNumber:config.endNumber,currentNumber:config.currentNumber??config.startNumber-1,storeId,destinationName:local?.name||config.local,status:config.active===false?'TERMINADO':'EN_USO',sentFrom:'INV CRR 5 3 26',historical:false};
 			store.collection.talonarios.push(item);
 			shouldPersist=true;
 		}else{
 			const destinationName=local?.name||config.local;
-			const exhausted=Number(item.currentNumber||item.startNumber)>=Number(item.endNumber||item.startNumber);
-			const nextStatus=exhausted?'TERMINADO':'EN_USO';
-			shouldPersist=String(item.storeId)!==String(storeId)||String(item.destinationName)!==String(destinationName)||String(item.status||'').toUpperCase()!==nextStatus;
-			item.storeId=storeId;item.destinationName=destinationName;item.status=nextStatus;
+			const nextCurrent=config.currentNumber===undefined?Number(item.currentNumber??config.startNumber-1):Number(config.currentNumber);
+			const nextStatus=config.active===false||nextCurrent>=Number(item.endNumber||item.startNumber)?'TERMINADO':'EN_USO';
+			shouldPersist=String(item.storeId)!==String(storeId)||String(item.destinationName)!==String(destinationName)||String(item.status||'').toUpperCase()!==nextStatus||Number(item.currentNumber)!==nextCurrent;
+			item.storeId=storeId;item.destinationName=destinationName;item.currentNumber=nextCurrent;item.status=nextStatus;
 		}
 		if(shouldPersist)try{await persistDomainRecord('talonarios',item);}catch(error){console.warn('No se pudo preparar talonario activo:',error.message);}
 	}
@@ -1786,23 +1811,6 @@ async function seedConfiguredTalonariosActivos(){
 			item.status='TERMINADO';
 			try{await persistDomainRecord('talonarios',item);}catch(error){console.warn('No se pudo retirar talonario reemplazado:',error.message);}
 		}
-	}
-	const currentRanges=[[15701,15750,'INV CRR 5 5 56'],[15751,15800,'INV MANABLANCA'],[15801,15850,'INV CRR 5 3 26']];
-	for(const [startNumber,endNumber,localName] of currentRanges){
-		const local=store.collection.stores.find(item=>talonarioNameKey(item.id)===talonarioNameKey(localName)||talonarioNameKey(item.name)===talonarioNameKey(localName));
-		const storeId=local?.id||localName;
-		const item=store.collection.talonarios.find(entry=>String(entry.type).toUpperCase()==='REMISION'&&Number(entry.startNumber)===startNumber&&Number(entry.endNumber)===endNumber);
-		const activeItem=item||{id:generateId('TAL',store.collection.talonarios),type:'REMISION',startNumber,endNumber,currentNumber:startNumber,storeId,destinationName:local?.name||localName,status:'EN_USO',sentFrom:'INV CRR 5 3 26',sentAt:new Date().toISOString(),historical:false};
-		const exhausted=Number(activeItem.currentNumber||activeItem.startNumber)>=Number(activeItem.endNumber||activeItem.startNumber);
-		activeItem.storeId=storeId;activeItem.destinationName=local?.name||localName;activeItem.status=exhausted?'TERMINADO':'EN_USO';
-		if(!item)store.collection.talonarios.push(activeItem);
-		try{await persistDomainRecord('talonarios',activeItem);}catch(error){console.warn('No se pudo activar talonario vigente:',error.message);}
-	}
-	const sent15701=store.collection.talonarios.filter(item=>String(item.type).toUpperCase()==='REMISION'&&Number(item.startNumber)===15701&&Number(item.endNumber)===15750);
-	let canonical15701=sent15701[0];
-	if(canonical15701){
-		canonical15701.storeId='INV CRR 5 5 56';canonical15701.destinationName='INV CRR 5 5 56';canonical15701.status='EN_USO';
-		try{await persistDomainRecord('talonarios',canonical15701);}catch(error){console.warn('No se pudo marcar talonario enviado:',error.message);}
 	}
 }
 function openTalonarioJustificationModal(talonarioId, number){

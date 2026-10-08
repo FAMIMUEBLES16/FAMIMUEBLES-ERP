@@ -1,31 +1,58 @@
 import { page, table, badge } from '../components/tables.js';
 
 const CENTRAL = 'INV CRR 5 3 26';
-const CURRENT_RANGES = new Map([
-  ['INVCARTAGENITA:REMISION', 15451],
-  ['INVCARTAGENITAII:REMISION', 15851],
-  ['INVCRR5317:REMISION', 14051],
-  ['INVCRR5326:REMISION', 15801],
-  ['INVCRR5556:REMISION', 15701],
-  ['INVCRR76A15:REMISION', 15651],
-  ['INVMANABLANCA:REMISION', 15751]
-]);
-const CURRENT_RECEIPT_RANGES = new Set([5651, 5601, 5551, 5501]);
-const SENT_RANGES = new Set([15751, 15851]);
+const CONFIGURED_RANGES = [
+  { local: 'INVCARTAGENITA', aliases: ['CARTAGENITA', 'CARTAGENITA / VITAL'], type: 'REMISION', start: 15451, end: 15500, current: 15496 },
+  { local: 'INVCARTAGENITAII', aliases: ['CARTAGENITA II'], type: 'REMISION', start: 15851, end: 15900, current: 15857 },
+  { local: 'INVCRR5317', aliases: ['LOCAL ESQUINA'], type: 'REMISION', start: 14051, end: 14100, current: 14100, active: false },
+  { local: 'INVCRR5326', aliases: ['CR 5 #3-26', 'CR 5 -3-26'], type: 'REMISION', start: 15801, end: 15850, current: 15821 },
+  { local: 'INVCRR5556', aliases: ['CR 5 - 56', 'CR 5 #5 SUR'], type: 'REMISION', start: 15701, end: 15750, current: 15734 },
+  { local: 'INVCRR76A15', aliases: ['CR 7 #6A-15'], type: 'REMISION', start: 15651, end: 15700 },
+  { local: 'INVMANABLANCA', aliases: ['MANABLANCA', 'LOCAL MANABLANCA'], type: 'REMISION', start: 15751, end: 15800, current: 15791 },
+  { local: 'INVCARTAGENITA', aliases: ['CARTAGENITA'], type: 'RECIBO', start: 5551, end: 5600 },
+  { local: 'INVCARTAGENITAII', aliases: ['CARTAGENITA II'], type: 'RECIBO', start: 5751, end: 5800 },
+  { local: 'INVCRR5317', aliases: [], type: 'RECIBO', start: 5101, end: 5150 },
+  { local: 'INVCRR5326', aliases: ['CR 5 #3-26', 'CR 5 -3-26'], type: 'RECIBO', start: 5651, end: 5700 },
+  { local: 'INVCRR5556', aliases: ['CR 5 - 56', 'CR 5 #5 SUR'], type: 'RECIBO', start: 5501, end: 5550 },
+  { local: 'INVMANABLANCA', aliases: ['MANABLANCA', 'LOCAL MANABLANCA'], type: 'RECIBO', start: 5701, end: 5750 }
+];
+const CONFIGURED_LOCAL_LABELS = {
+  INVCARTAGENITA: 'INV CARTAGENITA',
+  INVCARTAGENITAII: 'INV CARTAGENITA II',
+  INVCRR5317: 'INV CRR 5 3 17',
+  INVCRR5326: 'INV CRR 5 3 26',
+  INVCRR5556: 'INV CRR 5 5 56',
+  INVCRR76A15: 'INV CRR 7 6A 15',
+  INVMANABLANCA: 'INV MANABLANCA'
+};
 const labelType = value => String(value).toUpperCase() === 'RECIBO' ? 'Recibos' : 'Remisiones';
 const range = item => `${item.startNumber} - ${item.endNumber}`;
 const dateLabel = item => item.historicalDate || String(item.sentAt || '').slice(0, 10) || '-';
 const localKey = value => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 const localLabel = item => item.destinationName || item.storeId || 'Sin local';
-const isCentralStore = item => localKey(String(item?.storeId || item?.destinationName || item?.sentFrom || CENTRAL)) === localKey(CENTRAL);
+const configuredRangeFor = item => {
+  const keys = [item?.storeId, item?.destinationName].map(localKey);
+  const type = String(item?.type || 'REMISION').toUpperCase();
+  return CONFIGURED_RANGES.find(config => config.type === type && Number(item.startNumber) === config.start && Number(item.endNumber) === config.end)
+    || CONFIGURED_RANGES.find(config => config.type === type && [config.local, ...config.aliases.map(localKey)].some(key => keys.includes(key)));
+};
+const isConfiguredLocal = (item, config) => [item?.storeId, item?.destinationName].map(localKey).some(key => [config.local, ...config.aliases.map(localKey)].includes(key));
+const localIdentity = (value, type) => CONFIGURED_RANGES.find(config => config.type === type && [config.local, ...config.aliases.map(localKey)].includes(localKey(value)))?.local || localKey(value);
+const isCentralStore = item => {
+  if (localKey(String(item?.storeId || item?.destinationName || item?.sentFrom || CENTRAL)) !== localKey(CENTRAL)) return false;
+  const status = String(item?.status || '').toUpperCase();
+  const hasDestination = Boolean(item?.destinationStoreId && localKey(item.destinationStoreId) !== localKey(CENTRAL));
+  const isActiveCentralLocalRange = CONFIGURED_RANGES.some(config => config.type === String(item?.type || 'REMISION').toUpperCase() && Number(item?.startNumber) === config.start && Number(item?.endNumber) === config.end) && status !== 'ALMACENADO' && !item?.historical && !item?.historicalDate;
+  return hasDestination || !isActiveCentralLocalRange;
+};
 const isHistoricalCentralEntry = item => Boolean(item?.historical || item?.historicalDate) && isCentralStore(item);
-const currentRangeKey = item => `${localKey(localLabel(item))}:${String(item.type || 'REMISION').toUpperCase()}`;
-const isConfiguredCurrent = item => Number(item.startNumber) === CURRENT_RANGES.get(currentRangeKey(item));
+const localGroupKey = item => `${configuredRangeFor(item)?.local || localKey(localLabel(item))}:${String(item.type || 'REMISION').toUpperCase()}`;
+const isConfiguredCurrent = item => {
+  const config = configuredRangeFor(item);
+  return Boolean(config && !isCentralStore(item) && isConfiguredLocal(item, config) && Number(item.startNumber) === config.start && Number(item.endNumber) === config.end);
+};
 const isConfiguredCurrentCentral = item => isCentralStore(item) && isConfiguredCurrent(item);
-const isExactCurrent = item => String(item.type || '').toUpperCase() === 'REMISION'
-  ? isConfiguredCurrent(item)
-  : String(item.type || '').toUpperCase() === 'RECIBO' && CURRENT_RECEIPT_RANGES.has(Number(item.startNumber));
-const isExactSent = item => String(item.type || '').toUpperCase() === 'REMISION' && SENT_RANGES.has(Number(item.startNumber));
+const isExactCurrent = item => isConfiguredCurrent(item);
 const hasActualSendEvidence = item => {
   const destination = String(item.destinationStoreId || item.destinationName || item.sentFrom || '').trim();
   const sentAt = String(item.sentAt || '').trim();
@@ -41,7 +68,7 @@ function activeRangeWinner(items = []) {
   return [...candidates].sort((left, right) => Number(right.startNumber) - Number(left.startNumber))[0];
 }
 function isCurrentActiveRange(item, items = []) {
-  const sameGroup = items.filter(candidate => localKey(localLabel(candidate)) === localKey(localLabel(item)) && String(candidate.type || '').toUpperCase() === String(item.type || '').toUpperCase());
+  const sameGroup = items.filter(candidate => localGroupKey(candidate) === localGroupKey(item));
   const configuredCurrent = sameGroup.find(candidate => isConfiguredCurrent(candidate));
   if (configuredCurrent) {
     return Number(item.startNumber) === Number(configuredCurrent.startNumber) && Number(item.endNumber) === Number(configuredCurrent.endNumber);
@@ -55,7 +82,7 @@ export function normalizeActiveTalonarios(items = []) {
   const groups = new Map();
   for (const item of items) {
     const type = String(item?.type || 'REMISION').toUpperCase();
-    const local = localKey(localLabel(item));
+    const local = localGroupKey(item);
     if (!local) continue;
     const key = `${local}:${type}`;
     if (!groups.has(key)) groups.set(key, []);
@@ -66,6 +93,16 @@ export function normalizeActiveTalonarios(items = []) {
     const current = Number(item.currentNumber ?? item.startNumber ?? 0);
     const start = Number(item.startNumber || 0);
     const isCentral = isCentralStore(item);
+    const configured = configuredRangeFor(item);
+    if (configured && !isCentral && !isConfiguredLocal(item, configured)) {
+      item.storeId = CONFIGURED_LOCAL_LABELS[configured.local] || configured.local;
+      item.destinationName = CONFIGURED_LOCAL_LABELS[configured.local] || configured.local;
+    }
+    if (configured && isConfiguredCurrent(item)) {
+      if (configured.current !== undefined) item.currentNumber = Number(configured.current);
+      item.status = configured.active === false ? 'TERMINADO' : 'EN_USO';
+      continue;
+    }
     if (isCentral && ['TERMINADO', 'ENVIADO', 'EN_USO'].includes(status) && !hasActualSendEvidence(item)) {
       if (isConfiguredCurrentCentral(item)) {
         item.status = 'EN_USO';
@@ -87,9 +124,11 @@ export function normalizeActiveTalonarios(items = []) {
       continue;
     }
     if (isExactCurrent(item)) {
-      item.status = 'EN_USO';
-    } else if (isExactSent(item) && current <= start) {
+      item.status = configured?.active === false ? 'TERMINADO' : 'EN_USO';
+    } else if (configured && Number(item.startNumber) > configured.start && hasActualSendEvidence(item)) {
       item.status = 'ENVIADO';
+    } else if (status === 'ENVIADO' && hasActualSendEvidence(item)) {
+      continue;
     } else if (status === 'TERMINADO') {
       continue;
     } else if (status !== 'ALMACENADO' || !isCentral) {
@@ -97,12 +136,25 @@ export function normalizeActiveTalonarios(items = []) {
     }
   }
   for (const matches of groups.values()) {
+    const configured = matches.map(configuredRangeFor).find(Boolean);
+    if (configured) {
+      for (const item of matches) {
+        const status = String(item.status || '').toUpperCase();
+        if (isCentralStore(item) && hasActualSendEvidence(item)) {
+          item.status = 'ENVIADO';
+          continue;
+        }
+        if (isCentralStore(item) || status === 'ALMACENADO' || isConfiguredCurrent(item)) continue;
+        if (Number(item.startNumber) < configured.start && status === 'EN_USO') item.status = 'TERMINADO';
+        if (Number(item.startNumber) > configured.start && status === 'EN_USO') item.status = hasActualSendEvidence(item) ? 'ENVIADO' : 'TERMINADO';
+      }
+      continue;
+    }
     const started = matches.filter(item => {
       const status = String(item.status || '').toUpperCase();
       const current = Number(item.currentNumber ?? item.startNumber ?? 0);
       const start = Number(item.startNumber || 0);
-      const exactSent = isExactSent(item);
-      return status !== 'ALMACENADO' && current >= start && !(status === 'ENVIADO' && current === start && exactSent);
+      return status !== 'ALMACENADO' && current >= start && !(isCentralStore(item) && hasActualSendEvidence(item));
     });
     const active = [...started]
       .filter(item => Number(item.currentNumber ?? item.startNumber ?? 0) < Number(item.endNumber || item.startNumber || 0))
@@ -119,7 +171,11 @@ export function normalizeActiveTalonarios(items = []) {
       const end = Number(item.endNumber || start);
       const status = String(item.status || '').toUpperCase();
       const isCentral = isCentralStore(item);
-      const startedInRange = current >= start && !(status === 'ENVIADO' && current === start && isExactSent(item));
+      const startedInRange = current >= start;
+      if (isCentral && hasActualSendEvidence(item)) {
+        item.status = 'ENVIADO';
+        continue;
+      }
       if (isCentral && ['TERMINADO', 'ENVIADO', 'EN_USO'].includes(status) && !hasActualSendEvidence(item)) {
         if (isConfiguredCurrentCentral(item)) {
           item.status = 'EN_USO';
@@ -148,15 +204,11 @@ export function normalizeActiveTalonarios(items = []) {
         item.status = 'TERMINADO';
         continue;
       }
-      if (isExactSent(item) && current <= start) {
-        item.status = 'ENVIADO';
-        continue;
-      }
       if (active && item.id === active.id && isExactCurrent(item)) {
         item.status = 'EN_USO';
         continue;
       }
-      if (nextSent && item.id === nextSent.id && isExactSent(item)) {
+      if (nextSent && item.id === nextSent.id && status === 'ENVIADO') {
         item.status = 'ENVIADO';
         continue;
       }
@@ -184,20 +236,38 @@ export function talonarioSalesDocuments(talonario, sales = []) {
   const start = Number(talonario.startNumber);
   const end = Number(talonario.endNumber);
   const type = String(talonario.type || 'REMISION').toUpperCase();
+  const isCartagenitaIIHistory = type === 'REMISION' && start === 15401 && end === 15450 && localKey(localLabel(talonario)) === localKey('Cartagenita');
+  const owner = isCartagenitaIIHistory ? localKey('INV CARTAGENITA II') : localIdentity(localLabel(talonario), type);
   return sales.filter(sale => {
     const number = saleNumber(sale, talonario);
     const documentType = saleType(sale);
-    return Number.isInteger(number) && number >= start && number <= end && (!documentType || documentType === type);
+    const saleStore = sale.storeId || sale.store || sale.localId || sale.local;
+    const sameLocal = !saleStore || localIdentity(saleStore, type) === owner;
+    return Number.isInteger(number) && number >= start && number <= end && (!documentType || documentType === type) && sameLocal;
   }).map(sale => saleNumber(sale, talonario));
+}
+export function deduplicateTalonarioHistory(items = []) {
+  const statusPriority = { EN_USO: 3, ENVIADO: 2, TERMINADO: 1 };
+  const unique = new Map();
+  for (const item of items) {
+    const key = `${localGroupKey(item)}:${Number(item.startNumber)}:${Number(item.endNumber)}`;
+    const existing = unique.get(key);
+    const priority = statusPriority[String(item.status || '').toUpperCase()] || 0;
+    const existingPriority = statusPriority[String(existing?.status || '').toUpperCase()] || 0;
+    const preferred = isConfiguredCurrent(item) && !item.historical && !item.historicalDate;
+    const existingPreferred = existing && isConfiguredCurrent(existing) && !existing.historical && !existing.historicalDate;
+    if (!existing || preferred && !existingPreferred || preferred === existingPreferred && (priority > existingPriority || (priority === existingPriority && dateLabel(item) > dateLabel(existing)))) unique.set(key, item);
+  }
+  return [...unique.values()];
 }
 export function currentTalonarioNumber(talonario, sales = []) {
   const start = Number(talonario.startNumber);
   const documents = talonarioSalesDocuments(talonario, sales);
-  if (documents.length) return Math.max(...documents, start);
-  return start - 1;
+  const savedCurrent = Number(talonario.currentNumber ?? start - 1);
+  return Math.max(savedCurrent, ...documents, start - 1);
 }
 export const activeTalonariosFor = (talonario, items) => {
-  const matches = items.filter(item => ['EN_USO', 'ENVIADO'].includes(String(item.status || '').toUpperCase()) && String(item.type || '').toUpperCase() === String(talonario.type || '').toUpperCase() && localKey(localLabel(item)) === localKey(localLabel(talonario))).sort((left, right) => Number(left.startNumber) - Number(right.startNumber));
+  const matches = items.filter(item => ['EN_USO', 'ENVIADO'].includes(String(item.status || '').toUpperCase()) && localGroupKey(item) === localGroupKey(talonario)).sort((left, right) => Number(left.startNumber) - Number(right.startNumber));
   if (!matches.length) return [];
   const configuredCurrent = matches.find(item => isConfiguredCurrent(item));
   if (configuredCurrent) return [configuredCurrent];
@@ -255,7 +325,7 @@ export function setTalonarioFilters(filters) { talonarioFilters = { ...talonario
 
 export function renderTalonariosSummary(state) {
   const talonarios = state?.talonarios || [];
-  const active = talonarios.filter(item => String(item.type || '').toUpperCase() === 'REMISION' && String(item.status || '').toUpperCase() === 'EN_USO' && isCurrentActiveRange(item, talonarios));
+  const active = deduplicateTalonarioHistory(talonarios.filter(item => String(item.type || '').toUpperCase() === 'REMISION' && String(item.status || '').toUpperCase() === 'EN_USO' && isCurrentActiveRange(item, talonarios)));
   const sales = state?.sales || state?.ventas || [];
   const rows = active
     .sort((left, right) => localLabel(left).localeCompare(localLabel(right), 'es'))
@@ -280,7 +350,7 @@ export function renderTalonarios(state) {
   const sales = state?.sales || state?.ventas || [];
   const summaryMap = new Map();
   activeItems.forEach(item => {
-    const key = `${localKey(localLabel(item))}:${String(item.type || '').toUpperCase()}`;
+    const key = localGroupKey(item);
     const previous = summaryMap.get(key);
     if (!previous || isCurrentActiveRange(item, items) && !isCurrentActiveRange(previous, items)) summaryMap.set(key, item);
   });
@@ -301,7 +371,7 @@ export function renderTalonarios(state) {
     byStore.get(key).push(item);
   });
   const centralRows = central.map(item => `<tr><td>${labelType(item.type)}</td><td><strong>${range(item)}</strong></td><td>${item.supplierName || 'MISELANEA PAPELERIA'}</td><td>${badge(item.status || 'ALMACENADO')}</td><td><button class="table-action" data-action="send-talonario" data-talonario-id="${item.id}">Enviar</button></td></tr>`);
-  const localRows = filteredItems.filter(item => String(item.status || '').toUpperCase() !== 'ALMACENADO').sort((left, right) => Number(right.startNumber || 0) - Number(left.startNumber || 0)).map(item => { const storeId=String(item.destinationName || item.storeId || 'Sin local'); return `<tr><td>${dateLabel(item)}</td><td>${storeNames.get(storeId) || storeId}</td><td>${labelType(item.type)}</td><td><strong>${range(item)}</strong></td><td>${currentTalonarioNumber(item, sales)}</td><td>${badge(item.status || 'EN_USO')}</td></tr>`; });
+  const localRows = deduplicateTalonarioHistory(filteredItems.filter(item => !isCentralStore(item) && String(item.status || '').toUpperCase() !== 'ALMACENADO')).sort((left, right) => Number(right.startNumber || 0) - Number(left.startNumber || 0)).map(item => { const storeId=String(item.destinationName || item.storeId || 'Sin local'); return `<tr><td>${dateLabel(item)}</td><td>${storeNames.get(storeId) || storeId}</td><td>${labelType(item.type)}</td><td><strong>${range(item)}</strong></td><td>${currentTalonarioNumber(item, sales)}</td><td>${badge(item.status || 'EN_USO')}</td></tr>`; });
   const storeOptions = [...new Set([CENTRAL, ...items.filter(item => String(item.storeId || '') !== CENTRAL).map(item => String(item.destinationName || item.storeId || '')).filter(Boolean)])].sort((left, right) => left.localeCompare(right, 'es')).map(store => `<option value="${store}" ${talonarioFilters.store === store ? 'selected' : ''}>${store}</option>`).join('');
   return page('ADMINISTRACION', 'Talonarios', '<button class="primary" data-action="new-talonario">＋ Registrar talonario</button>', `<section class="panel talonarios-summary"><h3>Facturas disponibles por local</h3><p class="muted">Resumen del talonario actualmente en uso.</p>${table(['Local','Tipo','Talonario','Ultima factura','Le quedan','No registradas'], summaryRows.length ? summaryRows : '<tr><td colspan="6" class="muted">No hay talonarios en uso registrados.</td></tr>')}</section><div class="talonarios-filters"><input class="field" data-talonario-filter="query" value="${talonarioFilters.query}" placeholder="Buscar rango o local"><select class="field" data-talonario-filter="type"><option value="all">Todos los tipos</option><option value="REMISION" ${talonarioFilters.type === 'REMISION' ? 'selected' : ''}>Remisiones</option><option value="RECIBO" ${talonarioFilters.type === 'RECIBO' ? 'selected' : ''}>Recibos</option></select><select class="field" data-talonario-filter="store"><option value="all">Todos los locales</option>${storeOptions}</select><select class="field" data-talonario-filter="status"><option value="all">Todos los estados</option><option value="ALMACENADO" ${talonarioFilters.status === 'ALMACENADO' ? 'selected' : ''}>Almacenados</option><option value="EN_USO" ${talonarioFilters.status === 'EN_USO' ? 'selected' : ''}>En uso</option><option value="ENVIADO" ${talonarioFilters.status === 'ENVIADO' ? 'selected' : ''}>Enviados</option><option value="TERMINADO" ${talonarioFilters.status === 'TERMINADO' ? 'selected' : ''}>Terminados</option></select></div><div class="talonarios-layout">
     <section class="panel"><h3>Historial por local</h3><p class="muted">Los consecutivos mas recientes aparecen primero.</p><div class="talonarios-history-scroll">${table(['Fecha','Local','Tipo','Rango','Usando','Estado'], localRows.length ? localRows : '<tr><td colspan="6" class="muted">Aun no hay envios registrados.</td></tr>')}</div></section>
