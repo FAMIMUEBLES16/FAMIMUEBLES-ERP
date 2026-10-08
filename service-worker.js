@@ -20,7 +20,7 @@ CORE.push('./js/app-v3.js?v=20261005091948-auto-transfer-v1-users-v1-payables-v1
 CORE.push('./js/app-v3.js?v=20261005091948-auto-transfer-v1-users-v3-payables-v1-payments-v1-domain-hydration-v1-auto-refresh-v1-credit-ledger-v1-payment-scope-v1-long-finance-lists-v3-attendance-active-sellers-v1', './js/modules/usuarios.js?v=22');
 CORE.push('./js/app-v3.js?v=20261005091948-auto-transfer-v1-users-v3-payables-v1-payments-v1-domain-hydration-v1-auto-refresh-v2-credit-ledger-v1-payment-scope-v1-long-finance-lists-v3-attendance-active-sellers-v1');
 CORE.push('./js/app-v3.js?v=20261005091948-auto-transfer-v1-users-v3-payables-v1-payments-v1-domain-hydration-v1-auto-refresh-v2-credit-ledger-v1-payment-scope-v1-long-finance-lists-v3-attendance-active-sellers-v1-ranking-today-v1');
-CORE.push('./js/app-v3.js?v=20261008-talonarios-owner-v1', './js/modules/talonarios.js?v=19');
+CORE.push('./js/app-v3.js?v=20261008-talonarios-owner-v1', './js/modules/talonarios.js?v=20');
 const UNIQUE_CORE = [...new Map(CORE.map(path => [new URL(path, self.location.href).pathname, path])).values()];
 CORE.push('./js/app-v3.js?v=20261005195117','./js/modules/dashboard-v3.js?v=20261005195117');
 CORE.push('./js/app-v3.js?v=20261006101055','./js/modules/dashboard-v3.js?v=20261006101055');

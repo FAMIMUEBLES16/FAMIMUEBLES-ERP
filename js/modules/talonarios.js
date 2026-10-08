@@ -232,7 +232,7 @@ const saleNumber = (sale, talonario = null) => {
   return shifted >= Number(talonario.startNumber) && shifted <= Number(talonario.endNumber) ? shifted : raw;
 };
 const saleType = sale => String(sale.documentType || sale.tipo_documento || '').toUpperCase();
-export function talonarioSalesDocuments(talonario, sales = []) {
+export function talonarioSalesDocuments(talonario, sales = [], options = {}) {
   const start = Number(talonario.startNumber);
   const end = Number(talonario.endNumber);
   const type = String(talonario.type || 'REMISION').toUpperCase();
@@ -242,7 +242,7 @@ export function talonarioSalesDocuments(talonario, sales = []) {
     const number = saleNumber(sale, talonario);
     const documentType = saleType(sale);
     const saleStore = sale.storeId || sale.store || sale.localId || sale.local;
-    const sameLocal = !saleStore || localIdentity(saleStore, type) === owner;
+    const sameLocal = options.includeOtherStores === true || !saleStore || localIdentity(saleStore, type) === owner;
     return Number.isInteger(number) && number >= start && number <= end && (!documentType || documentType === type) && sameLocal;
   }).map(sale => saleNumber(sale, talonario));
 }
@@ -284,10 +284,11 @@ export function missingTalonarioNumbers(talonario, sales = [], justifications = 
   const start = Number(talonario.startNumber);
   const end = Number(talonario.endNumber);
   const documents = talonarioSalesDocuments(talonario, sales);
+  const registeredDocuments = talonarioSalesDocuments(talonario, sales, { includeOtherStores: true });
   const baseline = Number(talonario.consecutiveBaseline ?? currentTalonarioNumber(talonario, sales));
   const latest = Math.max(currentTalonarioNumber(talonario, sales), ...documents, start);
   if (latest <= baseline) return [];
-  const used = new Set(documents);
+  const used = new Set(registeredDocuments);
   const justified = new Set(justifications.filter(item => String(item.talonarioId)===String(talonario.id) && String(item.status || 'JUSTIFICADA').toUpperCase()==='JUSTIFICADA').map(item => Number(item.number)));
   const missing=[];
   for(let number=Math.max(start, baseline + 1);number<=latest;number+=1)if(!used.has(number)&&!justified.has(number))missing.push(number);
@@ -302,7 +303,7 @@ export function missingTalonarioNumbersForLocal(talonario, talonarios = [], sale
     .flatMap(item => {
       const status = String(item.status || '').toUpperCase();
       if (status === 'EN_USO') return missingTalonarioNumbers(item, sales, justifications);
-      const documents = talonarioSalesDocuments(item, sales);
+      const documents = talonarioSalesDocuments(item, sales, { includeOtherStores: true });
       if (!documents.length) return [];
       const orderedDocuments = [...new Set(documents)].sort((left, right) => left - right);
       const justified = new Set(justifications.filter(entry => String(entry.talonarioId) === String(item.id) && String(entry.status || 'JUSTIFICADA').toUpperCase() === 'JUSTIFICADA').map(entry => Number(entry.number)));
