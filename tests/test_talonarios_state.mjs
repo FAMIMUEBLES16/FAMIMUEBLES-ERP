@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { missingTalonarioNumbers, missingTalonarioNumbersForLocal, normalizeActiveTalonarios, talonarioSalesDocuments } from '../js/modules/talonarios.js';
+import { currentTalonarioNumber, deduplicateTalonarioHistory, missingTalonarioNumbers, missingTalonarioNumbersForLocal, normalizeActiveTalonarios, talonarioSalesDocuments } from '../js/modules/talonarios.js';
 
 const manablancaTalonario = {
   id: 'MANABLANCA-15751',
@@ -18,8 +18,8 @@ const saleFromOtherStore = {
 
 assert.deepEqual(
   talonarioSalesDocuments(manablancaTalonario, [saleFromOtherStore]),
-  [15761],
-  'a remision registered from another store should count against its assigned range'
+  [],
+  'a remision registered at another store should not count against this local range'
 );
 assert.deepEqual(
   missingTalonarioNumbers(manablancaTalonario, [saleFromOtherStore]),
@@ -28,10 +28,10 @@ assert.deepEqual(
 );
 assert.deepEqual(
   missingTalonarioNumbersForLocal(
-    { ...manablancaTalonario, startNumber: 15851, endNumber: 15900 },
+    { ...manablancaTalonario, startNumber: 15851, endNumber: 15900, storeId: 'INV CARTAGENITA II', destinationName: 'INV CARTAGENITA II' },
     [
-      { ...manablancaTalonario, id: 'CARTAGENITA-OLD', startNumber: 15401, endNumber: 15450, status: 'TERMINADO' },
-      { ...manablancaTalonario, id: 'CARTAGENITA-CURRENT', startNumber: 15851, endNumber: 15900, currentNumber: 15853, consecutiveBaseline: 15850 },
+      { ...manablancaTalonario, id: 'CARTAGENITA-OLD', startNumber: 15401, endNumber: 15450, status: 'TERMINADO', storeId: 'INV CARTAGENITA', destinationName: 'Cartagenita' },
+      { ...manablancaTalonario, id: 'CARTAGENITA-CURRENT', startNumber: 15851, endNumber: 15900, currentNumber: 15853, consecutiveBaseline: 15850, storeId: 'INV CARTAGENITA II', destinationName: 'INV CARTAGENITA II' },
     ],
     [
       { invoiceNumber: '15448', documentType: 'REMISION', storeId: 'INV CARTAGENITA II' },
@@ -156,8 +156,8 @@ const staleState = [
   {
     id: 'FUTURE-OLD',
     type: 'REMISION',
-    startNumber: 15801,
-    endNumber: 15850,
+    startNumber: 15951,
+    endNumber: 16000,
     storeId: 'INV FUTURO',
     destinationName: 'INV FUTURO',
     status: 'EN_USO',
@@ -166,12 +166,12 @@ const staleState = [
   {
     id: 'FUTURE-NEXT',
     type: 'REMISION',
-    startNumber: 15851,
-    endNumber: 15900,
+    startNumber: 16001,
+    endNumber: 16050,
     storeId: 'INV FUTURO',
     destinationName: 'INV FUTURO',
     status: 'ENVIADO',
-    currentNumber: 15854,
+    currentNumber: 16001,
   },
 ];
 
@@ -199,9 +199,10 @@ assert.equal(
 );
 assert.equal(
   normalized.find((item) => item.id === 'SENT-15751')?.status,
-  'ENVIADO',
-  'the configured sent range should remain sent'
+  'EN_USO',
+  'a configured range should be moved to its owning local'
 );
+assert.equal(normalized.find((item) => item.id === 'SENT-15751')?.storeId, 'INV MANABLANCA');
 assert.equal(
   normalized.find((item) => item.id === 'MANABLANCA-OLD')?.status,
   'TERMINADO',
@@ -221,6 +222,58 @@ assert.equal(
   normalized.find((item) => item.id === 'FUTURE-NEXT')?.status,
   'EN_USO',
   'the rotation should activate any newer started range'
+);
+
+const reportedTalonarios = [
+  { id: 'CARTAGENITA-CURRENT', type: 'REMISION', startNumber: 15451, endNumber: 15500, currentNumber: 15473, storeId: 'INV CARTAGENITA', destinationName: 'INV CARTAGENITA', status: 'ENVIADO' },
+  { id: 'CARTAGENITA-SENT', type: 'REMISION', startNumber: 15901, endNumber: 15950, currentNumber: 15901, storeId: 'INV CARTAGENITA', destinationName: 'INV CARTAGENITA', sentFrom: 'INV CRR 5 3 26', sentAt: '2026-10-08T10:00:00Z', status: 'EN_USO' },
+  { id: 'CARTAGENITA-CENTRAL-SOURCE', type: 'REMISION', startNumber: 15901, endNumber: 15950, currentNumber: 15901, storeId: 'INV CRR 5 3 26', destinationName: 'INV CRR 5 3 26', destinationStoreId: 'INV CARTAGENITA', sentAt: '2026-10-08T10:00:00Z', status: 'ENVIADO' },
+  { id: 'CARTAGENITA-II-CURRENT', type: 'REMISION', startNumber: 15851, endNumber: 15900, currentNumber: 15851, storeId: 'INV CARTAGENITA II', destinationName: 'INV CARTAGENITA II', status: 'ENVIADO' },
+  { id: 'CRR5317-CURRENT', type: 'REMISION', startNumber: 14051, endNumber: 14100, currentNumber: 14095, storeId: 'INV CRR 5 3 17', destinationName: 'INV CRR 5 3 17', status: 'EN_USO' },
+  { id: 'CRR5326-CURRENT', type: 'REMISION', startNumber: 15801, endNumber: 15850, currentNumber: 15808, storeId: 'INV CRR 5 3 26', destinationName: 'INV CRR 5 3 26', status: 'ENVIADO' },
+  { id: 'CRR5556-CURRENT', type: 'REMISION', startNumber: 15701, endNumber: 15750, currentNumber: 15708, storeId: 'INV CRR 5 5 56', destinationName: 'INV CRR 5 5 56', status: 'ENVIADO' },
+  { id: 'CRR76A15-CURRENT', type: 'REMISION', startNumber: 15651, endNumber: 15700, currentNumber: 15656, storeId: 'INV CRR 7 6A 15', destinationName: 'INV CRR 7 6A 15', status: 'ENVIADO' },
+  { id: 'MANABLANCA-CURRENT', type: 'REMISION', startNumber: 15751, endNumber: 15800, currentNumber: 15754, storeId: 'INV MANABLANCA', destinationName: 'INV MANABLANCA', status: 'ENVIADO' },
+  { id: 'CRR5326-RECEIPT', type: 'RECIBO', startNumber: 5651, endNumber: 5700, currentNumber: 5700, storeId: 'INV CRR 5 3 26', destinationName: 'INV CRR 5 3 26', status: 'ENVIADO' },
+];
+
+normalizeActiveTalonarios(reportedTalonarios);
+const wrongLocalRange = { id: 'WRONG-CARTAGENITA-15801', type: 'REMISION', startNumber: 15801, endNumber: 15850, currentNumber: 15822, consecutiveBaseline: 15801, storeId: 'INV CARTAGENITA', destinationName: 'INV CARTAGENITA', sentFrom: 'INV CRR 5 3 26', sentAt: '2026-10-08T18:32:22Z', status: 'ENVIADO' };
+normalizeActiveTalonarios([wrongLocalRange]);
+assert.equal(wrongLocalRange.storeId, 'INV CRR 5 3 26');
+assert.equal(wrongLocalRange.destinationName, 'INV CRR 5 3 26');
+assert.equal(wrongLocalRange.status, 'EN_USO');
+assert.equal(currentTalonarioNumber(wrongLocalRange, [
+  { invoiceNumber: '15822', documentType: 'REMISION', storeId: 'INV CRR 5 3 17' },
+]), 15821);
+assert.equal(reportedTalonarios.find((item) => item.id === 'CARTAGENITA-CURRENT')?.status, 'EN_USO');
+assert.equal(currentTalonarioNumber(reportedTalonarios.find((item) => item.id === 'CARTAGENITA-CURRENT')), 15496);
+assert.equal(reportedTalonarios.find((item) => item.id === 'CARTAGENITA-SENT')?.status, 'ENVIADO');
+assert.equal(reportedTalonarios.find((item) => item.id === 'CARTAGENITA-CENTRAL-SOURCE')?.status, 'ENVIADO');
+assert.equal(currentTalonarioNumber(reportedTalonarios.find((item) => item.id === 'CARTAGENITA-II-CURRENT')), 15857);
+assert.equal(reportedTalonarios.find((item) => item.id === 'CRR5317-CURRENT')?.status, 'TERMINADO');
+assert.equal(currentTalonarioNumber(reportedTalonarios.find((item) => item.id === 'CRR5317-CURRENT')), 14100);
+assert.equal(currentTalonarioNumber(reportedTalonarios.find((item) => item.id === 'CRR5326-CURRENT')), 15821);
+assert.equal(currentTalonarioNumber(reportedTalonarios.find((item) => item.id === 'CRR5556-CURRENT')), 15734);
+assert.equal(reportedTalonarios.find((item) => item.id === 'CRR76A15-CURRENT')?.status, 'EN_USO');
+assert.equal(currentTalonarioNumber(reportedTalonarios.find((item) => item.id === 'MANABLANCA-CURRENT')), 15791);
+assert.equal(reportedTalonarios.find((item) => item.id === 'CRR5326-RECEIPT')?.status, 'EN_USO');
+const reportedReceipts = [
+  { id: 'RECEIPT-CARTAGENITA', type: 'RECIBO', startNumber: 5551, endNumber: 5600, storeId: 'INV CARTAGENITA', destinationName: 'INV CARTAGENITA', status: 'ENVIADO' },
+  { id: 'RECEIPT-CARTAGENITA-II', type: 'RECIBO', startNumber: 5751, endNumber: 5800, storeId: 'INV CARTAGENITA II', destinationName: 'INV CARTAGENITA II', status: 'ENVIADO' },
+  { id: 'RECEIPT-CRR5317', type: 'RECIBO', startNumber: 5101, endNumber: 5150, storeId: 'INV CRR 5 3 17', destinationName: 'INV CRR 5 3 17', status: 'ENVIADO' },
+  { id: 'RECEIPT-CRR5556', type: 'RECIBO', startNumber: 5501, endNumber: 5550, storeId: 'INV CRR 5 5 56', destinationName: 'INV CRR 5 5 56', status: 'ENVIADO' },
+  { id: 'RECEIPT-MANABLANCA', type: 'RECIBO', startNumber: 5701, endNumber: 5750, storeId: 'INV MANABLANCA', destinationName: 'INV MANABLANCA', status: 'ENVIADO' },
+];
+normalizeActiveTalonarios(reportedReceipts);
+assert.deepEqual(reportedReceipts.map((item) => item.status), ['EN_USO', 'EN_USO', 'EN_USO', 'EN_USO', 'EN_USO']);
+assert.deepEqual(
+  deduplicateTalonarioHistory([
+    { id: 'DUPLICATE-OLD', type: 'REMISION', startNumber: 15801, endNumber: 15850, storeId: 'INV CRR 5 3 26', destinationName: 'INV CRR 5 3 26', status: 'ENVIADO', sentAt: '2026-09-17' },
+    { id: 'DUPLICATE-NEW', type: 'REMISION', startNumber: 15801, endNumber: 15850, storeId: 'INV CRR 5 3 26', destinationName: 'INV CRR 5 3 26', status: 'EN_USO', sentAt: '2026-10-08' },
+  ]).map((item) => item.id),
+  ['DUPLICATE-NEW'],
+  'the local history should show only the strongest record for a repeated range'
 );
 
 console.log('talonarios state regression checks passed');

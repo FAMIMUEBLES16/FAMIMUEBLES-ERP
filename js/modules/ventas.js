@@ -82,7 +82,6 @@ export function findMatchingSaleCustomer(sale, customers = []) {
     || (nameKey && customerMatchKey(customer.name ?? customer.customer ?? customer.nombre) === nameKey)
   ) || null;
 }
-
 function paymentKey(value) {
   return String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase().trim();
 }
