@@ -38,6 +38,16 @@ const configuredRangeFor = item => {
 };
 const isConfiguredLocal = (item, config) => [item?.storeId, item?.destinationName].map(localKey).some(key => [config.local, ...config.aliases.map(localKey)].includes(key));
 const localIdentity = (value, type) => CONFIGURED_RANGES.find(config => config.type === type && [config.local, ...config.aliases.map(localKey)].includes(localKey(value)))?.local || localKey(value);
+export function configuredTalonarioOwnerLabel(type, startNumber, endNumber) {
+  const config = CONFIGURED_RANGES.find(item => item.type === String(type || 'REMISION').toUpperCase() && item.start === Number(startNumber) && item.end === Number(endNumber));
+  return config ? CONFIGURED_LOCAL_LABELS[config.local] || config.local : '';
+}
+export function configuredTalonarioOwnerMatches(type, startNumber, endNumber, localValues = []) {
+  const config = CONFIGURED_RANGES.find(item => item.type === String(type || 'REMISION').toUpperCase() && item.start === Number(startNumber) && item.end === Number(endNumber));
+  if (!config) return true;
+  const allowed = [config.local, ...config.aliases.map(localKey)];
+  return localValues.map(localKey).some(key => allowed.includes(key));
+}
 const isCentralStore = item => {
   if (localKey(String(item?.storeId || item?.destinationName || item?.sentFrom || CENTRAL)) !== localKey(CENTRAL)) return false;
   const status = String(item?.status || '').toUpperCase();

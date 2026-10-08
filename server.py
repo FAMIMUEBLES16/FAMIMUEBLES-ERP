@@ -616,6 +616,82 @@ def record_id(payload: dict) -> str:
     return value
 
 
+TALONARIO_CONFIGURED_OWNERS = {
+    ("REMISION", 15451, 15500): ("INV CARTAGENITA", {"INVCARTAGENITA", "CARTAGENITA", "CARTAGENITAVITAL"}),
+    ("REMISION", 15851, 15900): ("INV CARTAGENITA II", {"INVCARTAGENITAII", "CARTAGENITAII"}),
+    ("REMISION", 14051, 14100): ("INV CRR 5 3 17", {"INVCRR5317", "LOCALESQUINA"}),
+    ("REMISION", 15801, 15850): ("INV CRR 5 3 26", {"INVCRR5326", "CR5326"}),
+    ("REMISION", 15701, 15750): ("INV CRR 5 5 56", {"INVCRR5556", "CR556", "CR55SUR"}),
+    ("REMISION", 15651, 15700): ("INV CRR 7 6A 15", {"INVCRR76A15", "CR76A15"}),
+    ("REMISION", 15751, 15800): ("INV MANABLANCA", {"INVMANABLANCA", "MANABLANCA", "LOCALMANABLANCA"}),
+    ("RECIBO", 5551, 5600): ("INV CARTAGENITA", {"INVCARTAGENITA", "CARTAGENITA"}),
+    ("RECIBO", 5751, 5800): ("INV CARTAGENITA II", {"INVCARTAGENITAII", "CARTAGENITAII"}),
+    ("RECIBO", 5101, 5150): ("INV CRR 5 3 17", {"INVCRR5317"}),
+    ("RECIBO", 5651, 5700): ("INV CRR 5 3 26", {"INVCRR5326", "CR5326"}),
+    ("RECIBO", 5501, 5550): ("INV CRR 5 5 56", {"INVCRR5556", "CR556", "CR55SUR"}),
+    ("RECIBO", 5701, 5750): ("INV MANABLANCA", {"INVMANABLANCA", "MANABLANCA", "LOCALMANABLANCA"}),
+}
+
+
+def talonario_local_key(value: object) -> str:
+    return re.sub(r"[^A-Z0-9]", "", str(value or "").upper())
+
+
+def validate_talonario_assignment(database, tenant: str, identifier: str, item: dict) -> None:
+    status = str(item.get("status") or "").upper()
+    if status not in {"EN_USO", "ENVIADO"} or (status == "ENVIADO" and item.get("destinationStoreId")):
+        return
+    try:
+        start_number = int(str(item.get("startNumber") or ""))
+        end_number = int(str(item.get("endNumber") or ""))
+    except (TypeError, ValueError):
+        raise ValueError("El talonario requiere un rango numerico valido") from None
+    talonario_type = str(item.get("type") or "REMISION").upper()
+    if talonario_type not in {"REMISION", "RECIBO"} or end_number < start_number:
+        raise ValueError("El tipo o rango del talonario no es valido")
+
+    configured_owner = TALONARIO_CONFIGURED_OWNERS.get((talonario_type, start_number, end_number))
+    local_key = talonario_local_key(item.get("destinationName") or item.get("storeId"))
+    if configured_owner and local_key not in configured_owner[1]:
+        owner_label = configured_owner[0]
+        raise ValueError(f"El rango {start_number}-{end_number} pertenece a {owner_label}; no puede asignarse a {item.get('destinationName') or item.get('storeId') or 'ese local'}")
+
+    lock_name = f"talonario:{tenant}:{talonario_type}:{start_number}:{end_number}"
+    lock_key = int.from_bytes(hashlib.sha256(lock_name.encode("utf-8")).digest()[:8], "big", signed=True)
+    database.execute("SELECT pg_advisory_xact_lock(?)", (lock_key,))
+    rows = database.execute(
+        "SELECT id, data_json FROM domain_records WHERE tenant_id = ? AND collection = 'talonarios'",
+        (tenant,),
+    ).fetchall()
+    for row in rows:
+        if str(row[0]) == str(identifier):
+            continue
+        previous = json.loads(row[1])
+        try:
+            previous_start = int(previous.get("startNumber") or 0)
+            previous_end = int(previous.get("endNumber") or 0)
+        except (TypeError, ValueError):
+            continue
+        if (
+            str(previous.get("status") or "").upper() == "ENVIADO"
+            and previous.get("destinationStoreId")
+            and str(previous.get("type") or "REMISION").upper() == talonario_type
+            and previous_start == start_number
+            and previous_end == end_number
+        ):
+            previous_destination = talonario_local_key(previous.get("destinationStoreId"))
+            if previous_destination != local_key:
+                raise ValueError(f"El rango {start_number}-{end_number} ya fue enviado a {previous.get('destinationStoreId')}")
+            continue
+        if (
+            str(previous.get("status") or "").upper() in {"EN_USO", "ENVIADO"}
+            and str(previous.get("type") or "REMISION").upper() == talonario_type
+            and previous_start == start_number
+            and previous_end == end_number
+        ):
+            raise ValueError(f"El rango {start_number}-{end_number} ya esta asignado a {previous.get('destinationName') or previous.get('storeId') or 'otro local'}")
+
+
 def has_meaningful_domain_payload(payload: dict) -> bool:
     ignored_keys = {
         "id",
@@ -3396,6 +3472,8 @@ class AppHandler(SimpleHTTPRequestHandler):
                     expected_version = payload.get("_version", payload.get("version"))
                     if previous and expected_version is not None and int(expected_version) != int(previous[1]):
                         raise ValueError("El registro cambio mientras lo editabas. Recarga la informacion e intenta nuevamente.")
+                    if collection == "talonarios":
+                        validate_talonario_assignment(database, current_tenant, identifier, payload)
                     product_id = str(payload.get("productId", "")).strip()
                     store_id = str(payload.get("storeId", "")).strip()
                     quantity = float(payload.get("quantity", 0) or 0)

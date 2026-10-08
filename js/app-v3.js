@@ -29,7 +29,7 @@ import { renderGasolina } from './modules/gasolina.js?v=18';
 import { mergeUserSources, renderUsuarios } from './modules/usuarios.js?v=22';
 import { renderDescansos } from './modules/descansos.js?v=7';
 import { renderAuditoria, resetAuditFilters, setAuditFilters } from './modules/auditoria.js?v=27';
-import { renderTalonarios, talonarioModal, setTalonarioFilters, currentTalonarioNumber, normalizeActiveTalonarios } from './modules/talonarios.js?v=20';
+import { renderTalonarios, talonarioModal, setTalonarioFilters, currentTalonarioNumber, normalizeActiveTalonarios, configuredTalonarioOwnerLabel, configuredTalonarioOwnerMatches } from './modules/talonarios.js?v=21';
 import { historicalTalonarios, historicalRecibos, storedTalonarios } from './modules/talonarios-historial.js?v=1';
 import { renderApartados } from './modules/apartados.js?v=20';
 import { createApartado, decreaseSaleInventory, runTransaction, addMovement } from './modules/finanzas.js?v=18';
@@ -204,6 +204,12 @@ function openTalonarioModal(itemId=''){
 	$('#modal-root').innerHTML=talonarioModal(store.collection,item);
 	$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';
 }
+function validateLocalTalonarioAssignment(type,startNumber,endNumber,destinationId,destinationName){
+	const owner=configuredTalonarioOwnerLabel(type,startNumber,endNumber);
+	if(owner&&!configuredTalonarioOwnerMatches(type,startNumber,endNumber,[destinationId,destinationName]))throw new Error(`El rango ${startNumber}-${endNumber} pertenece a ${owner}.`);
+	const existing=(store.collection.talonarios||[]).find(item=>String(item.type).toUpperCase()===String(type).toUpperCase()&&Number(item.startNumber)===Number(startNumber)&&Number(item.endNumber)===Number(endNumber)&&['EN_USO','ENVIADO'].includes(String(item.status||'').toUpperCase()));
+	if(existing)throw new Error(`Ese rango ya esta asignado a ${existing.destinationStoreId||existing.destinationName||existing.storeId||'otro local'}.`);
+}
 async function saveTalonarioForm(form){
 	if(!Array.isArray(store.state.talonarios))store.state.talonarios=[];
 	const values=Object.fromEntries(new FormData(form));
@@ -222,9 +228,7 @@ async function saveTalonarioForm(form){
 		const destinationName=String(destinationOption?.textContent||'').replace(/\s+·.*$/,'').trim();
 		if(!destinationId||!destinationName)throw new Error('Selecciona un local destino valido.');
 		const destinationKey=talonarioNameKey(destinationId);
-		const destinationKeys=new Set([destinationId,destinationName].map(talonarioNameKey));
-		const alreadyAssigned=(store.collection.talonarios||[]).some(item=>String(item.type).toUpperCase()===String(source.type).toUpperCase()&&Number(item.startNumber)===Number(source.startNumber)&&Number(item.endNumber)===Number(source.endNumber)&&[item.storeId,item.destinationName].some(value=>destinationKeys.has(talonarioNameKey(value)))&&String(item.status||'').toUpperCase()!=='ALMACENADO');
-		if(alreadyAssigned)throw new Error('Ese rango ya esta asignado a este local.');
+		validateLocalTalonarioAssignment(source.type,source.startNumber,source.endNumber,destinationId,destinationName);
 		const sentAt=new Date().toISOString();
 		const sourceUpdate={...source,status:'ENVIADO',sentAt,destinationStoreId:destinationId};
 		const destination={...sourceUpdate,id:`TAL-${source.id}-${destinationKey}`,storeId:destinationId,destinationName,status:'EN_USO',currentNumber:source.startNumber,sentFrom:'INV CRR 5 3 26',sentAt};
@@ -246,6 +250,7 @@ async function saveTalonarioForm(form){
 		const destinationId=String(destinationOption?.value||'').trim() || 'INV CRR 5 3 26';
 		const destinationName=String(destinationOption?.textContent||destinationId).replace(/\s+·.*$/,'').trim();
 		const sent=destinationId!=='INV CRR 5 3 26';
+		if(sent)validateLocalTalonarioAssignment(values.type,startNumber,endNumber,destinationId,destinationName);
 		const item={id:`TAL-${Date.now()}-${Math.random().toString(36).slice(2,7)}`,type:values.type,startNumber,endNumber,currentNumber:startNumber,storeId:destinationId,destinationName,status:sent?'EN_USO':'ALMACENADO',sentFrom:sent?'INV CRR 5 3 26':'',sentAt:sent?new Date().toISOString():'',createdAt:new Date().toISOString()};
 		await persistDomainRecord('talonarios',item);
 		if(!Array.isArray(store.collection.talonarios))store.collection.talonarios=[];
