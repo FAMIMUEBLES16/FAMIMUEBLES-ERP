@@ -22,28 +22,57 @@ function telegramId(user) {
   return /^\d{5,}$/.test(id) ? id : '';
 }
 
-function isActive(user) {
+export function isActive(user) {
+  const affirmativeValues = new Set([
+    true, 1, '1', 'si', 'sí', 'yes', 'y', 'activo', 'activa', 'active', 'enabled', 'habilitado', 'habilitada', 'on'
+  ]);
   const inactiveValues = new Set([
     false, 0, '0', 'false', 'no', 'n', 'off',
-    'inactivo', 'inactiva', 'inactive', 'desactivado', 'desactivada', 'disabled',
+    'inactivo', 'inactiva', 'inactive', 'desactivado', 'desactivada', 'disabled', 'suspendido', 'suspendida'
   ]);
-  const active = user.active ?? user.activo;
-  if (active !== undefined && active !== null && active !== '') {
-    return !inactiveValues.has(typeof active === 'string' ? active.trim().toLowerCase() : active);
+
+  for (const candidate of [user.active, user.activo, user.enabled, user.habilitado, user.status, user.estado]) {
+    if (candidate === undefined || candidate === null || candidate === '') continue;
+    const normalized = typeof candidate === 'string' ? candidate.trim().toLowerCase() : candidate;
+    if (affirmativeValues.has(normalized)) return true;
+    if (inactiveValues.has(normalized)) return false;
   }
-  return !inactiveValues.has(String(user.status || user.estado || '').trim().toLowerCase());
+
+  const fallback = String(user.status || user.estado || '').trim().toLowerCase();
+  return !inactiveValues.has(fallback) && fallback !== 'false' && fallback !== '0';
 }
 
-function employees(data) {
+function employeeLabel(user) {
+  const candidates = [
+    user.displayName, user.display_name, user.name, user.nombre, user.empleado, user.fullName, user.full_name,
+    user.username, user.usuario, user.telegramUsername, user.telegram_username, user.id_telegram, user.idTelegram, user.id
+  ];
+  const label = candidates.find(candidate => {
+    if (candidate === undefined || candidate === null || candidate === false) return false;
+    const value = String(candidate).trim();
+    return value.length > 0 && !/^telegram_\d+$/i.test(value);
+  });
+  return String(label ?? '').trim() || 'Usuario sin nombre';
+}
+
+export function employees(data) {
   return (Array.isArray(data.users) ? data.users : [])
-    .filter(user => user && !String(user.role || user.rol || '').toUpperCase().includes('ADMIN'))
+    .filter(user => {
+      if (!user) return false;
+      const isAdmin = String(user.role || user.rol || '').toUpperCase().includes('ADMIN');
+      const hasAssignedStore = Boolean(user.storeId || user.store_id || user.local_asignado || user.storeName);
+      return !isAdmin || hasAssignedStore;
+    })
     .filter(isActive)
-    .map(user => ({
-      ...user,
-      telegramId: telegramId(user),
-      label: String(user.displayName || user.display_name || user.name || user.nombre || user.username || user.id || '').trim(),
-    }))
-    .filter(user => user.telegramId && user.label)
+    .map(user => {
+      const resolvedTelegramId = telegramId(user) || String(user.id_telegram || user.idTelegram || user.id || '').trim();
+      return {
+        ...user,
+        telegramId: resolvedTelegramId,
+        label: employeeLabel(user),
+      };
+    })
+    .filter(user => user.label && (user.telegramId || String(user.id || '').trim()))
     .sort((left, right) => left.label.localeCompare(right.label, 'es'));
 }
 
@@ -53,11 +82,22 @@ function recordUserIds(item) {
   return new Set([...ids, single].filter(Boolean).map(String));
 }
 
-function sameLocal(person, selectedStore) {
+function normalizeStoreKey(value) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]/gi, '')
+    .toLowerCase();
+}
+
+export function sameLocal(person, selectedStore) {
   if (!selectedStore) return false;
-  const personStore = String(person.storeId || person.store_id || person.local_asignado || '').trim().toLowerCase();
-  return personStore === String(selectedStore.id || '').trim().toLowerCase()
-    || personStore === String(selectedStore.name || '').trim().toLowerCase();
+  const personStore = String(person.storeId || person.store_id || person.local_asignado || person.storeName || '').trim();
+  const selectedId = String(selectedStore.id || '').trim();
+  const selectedName = String(selectedStore.name || '').trim();
+  return normalizeStoreKey(personStore) === normalizeStoreKey(selectedId)
+    || normalizeStoreKey(personStore) === normalizeStoreKey(selectedName)
+    || normalizeStoreKey(personStore) === normalizeStoreKey(selectedStore.local || '');
 }
 
 function ruleScope(rule) {

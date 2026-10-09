@@ -637,9 +637,19 @@ def talonario_local_key(value: object) -> str:
     return re.sub(r"[^A-Z0-9]", "", str(value or "").upper())
 
 
+def talonario_assignment_local_key(item: dict | None) -> str:
+    if not isinstance(item, dict):
+        return ""
+    for key in ("destinationStoreId", "destinationName", "storeId", "localId", "local", "sentFrom"):
+        value = item.get(key)
+        if value is not None and str(value).strip():
+            return talonario_local_key(value)
+    return ""
+
+
 def validate_talonario_assignment(database, tenant: str, identifier: str, item: dict) -> None:
     status = str(item.get("status") or "").upper()
-    if status not in {"EN_USO", "ENVIADO"} or (status == "ENVIADO" and item.get("destinationStoreId")):
+    if status not in {"EN_USO", "ENVIADO"}:
         return
     try:
         start_number = int(str(item.get("startNumber") or ""))
@@ -651,10 +661,10 @@ def validate_talonario_assignment(database, tenant: str, identifier: str, item: 
         raise ValueError("El tipo o rango del talonario no es valido")
 
     configured_owner = TALONARIO_CONFIGURED_OWNERS.get((talonario_type, start_number, end_number))
-    local_key = talonario_local_key(item.get("destinationName") or item.get("storeId"))
+    local_key = talonario_assignment_local_key(item)
     if configured_owner and local_key not in configured_owner[1]:
         owner_label = configured_owner[0]
-        raise ValueError(f"El rango {start_number}-{end_number} pertenece a {owner_label}; no puede asignarse a {item.get('destinationName') or item.get('storeId') or 'ese local'}")
+        raise ValueError(f"El rango {start_number}-{end_number} pertenece a {owner_label}; no puede asignarse a {item.get('destinationName') or item.get('destinationStoreId') or item.get('storeId') or 'ese local'}")
 
     lock_name = f"talonario:{tenant}:{talonario_type}:{start_number}:{end_number}"
     lock_key = int.from_bytes(hashlib.sha256(lock_name.encode("utf-8")).digest()[:8], "big", signed=True)
@@ -672,24 +682,17 @@ def validate_talonario_assignment(database, tenant: str, identifier: str, item: 
             previous_end = int(previous.get("endNumber") or 0)
         except (TypeError, ValueError):
             continue
-        if (
-            str(previous.get("status") or "").upper() == "ENVIADO"
-            and previous.get("destinationStoreId")
-            and str(previous.get("type") or "REMISION").upper() == talonario_type
-            and previous_start == start_number
-            and previous_end == end_number
-        ):
-            previous_destination = talonario_local_key(previous.get("destinationStoreId"))
-            if previous_destination != local_key:
-                raise ValueError(f"El rango {start_number}-{end_number} ya fue enviado a {previous.get('destinationStoreId')}")
+        previous_status = str(previous.get("status") or "").upper()
+        previous_type = str(previous.get("type") or "REMISION").upper()
+        previous_local_key = talonario_assignment_local_key(previous)
+        if previous_type != talonario_type or previous_start != start_number or previous_end != end_number:
             continue
-        if (
-            str(previous.get("status") or "").upper() in {"EN_USO", "ENVIADO"}
-            and str(previous.get("type") or "REMISION").upper() == talonario_type
-            and previous_start == start_number
-            and previous_end == end_number
-        ):
-            raise ValueError(f"El rango {start_number}-{end_number} ya esta asignado a {previous.get('destinationName') or previous.get('storeId') or 'otro local'}")
+        if previous_local_key and previous_local_key != local_key and previous_status in {"EN_USO", "ENVIADO"}:
+            raise ValueError(f"El rango {start_number}-{end_number} ya esta asignado a {previous.get('destinationName') or previous.get('destinationStoreId') or previous.get('storeId') or 'otro local'}")
+        if previous_status == "ENVIADO" and previous_local_key == local_key:
+            continue
+        if previous_status in {"EN_USO", "ENVIADO"} and previous_local_key != local_key:
+            raise ValueError(f"El rango {start_number}-{end_number} ya fue enviado a {previous.get('destinationStoreId') or previous.get('destinationName') or previous.get('storeId') or 'otro local'}")
 
 
 def has_meaningful_domain_payload(payload: dict) -> bool:
@@ -1344,9 +1347,9 @@ def _shared_app_user_items(database: _PostgresConnection) -> list[dict]:
     return users
 
 
-def _sync_shared_app_user(database: _PostgresConnection, telegram_id: str | None, active: bool, display_name: str, role: str, store_id: str | None) -> None:
+def _sync_shared_app_user(database: _PostgresConnection, telegram_id: str | None, active: bool, display_name: str, role: str, store_id: str | None) -> bool:
     if not telegram_id:
-        return
+        return False
     columns = database.execute(
         "SELECT table_name, column_name, data_type FROM information_schema.columns "
         "WHERE table_schema = 'public' AND table_name IN ('empleados', 'administradores')"
@@ -1355,6 +1358,7 @@ def _sync_shared_app_user(database: _PostgresConnection, telegram_id: str | None
     for row in columns:
         schema.setdefault(row["table_name"], {})[row["column_name"]] = row["data_type"]
 
+    updated = False
     for table_name in ("empleados", "administradores"):
         table_columns = schema.get(table_name, {})
         id_column = next((name for name in ("id_telegram", "telegram_id") if name in table_columns), None)
@@ -1381,10 +1385,12 @@ def _sync_shared_app_user(database: _PostgresConnection, telegram_id: str | None
             values[store_column] = store_id or ""
         if values:
             assignments = ", ".join(f"{column} = %s" for column in values)
-            database.execute(
+            result = database.execute(
                 f"UPDATE {table_name} SET {assignments} WHERE {id_column} = %s",
                 (*values.values(), telegram_id),
             )
+            updated = updated or getattr(result, "rowcount", 0) > 0
+    return updated
 
 
 def normalize_apartado_detail_edits(items: list[dict]) -> tuple[list[dict], Decimal]:
@@ -2788,13 +2794,16 @@ class AppHandler(SimpleHTTPRequestHandler):
                 display_name = str(payload.get("displayName", payload.get("name", username))).strip() or username
                 password = str(payload.get("password", ""))
                 role = str(payload.get("role", "VENDEDOR")).strip().upper()
+                active = 0 if payload.get("active") is False else 1
                 if len(username) < 3 or len(password) < 8:
                     raise ValueError("El usuario requiere 3 caracteres y la clave 8")
                 if role not in {"ADMINISTRADOR", "GERENTE", "CONTADOR", "SUPERVISOR", "BODEGA", "CAJERO", "VENDEDOR"}:
                     raise ValueError("Rol no valido")
                 user_id = secrets.token_hex(8)
                 with connection() as database:
-                    database.execute("INSERT INTO auth_users (id, username, email, phone, password_hash, role, store_id, tenant_id, telegram_id, display_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (user_id, username, str(payload.get("email", "")).strip(), str(payload.get("phone", "")).strip(), password_hash(password), role, payload.get("storeId"), tenant_id(self, payload), telegram_id or None, display_name))
+                    database.execute("INSERT INTO auth_users (id, username, email, phone, password_hash, role, store_id, tenant_id, telegram_id, display_name, active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (user_id, username, str(payload.get("email", "")).strip(), str(payload.get("phone", "")).strip(), password_hash(password), role, payload.get("storeId"), tenant_id(self, payload), telegram_id or None, display_name, active))
+                    if tenant_id(self, payload) == DEFAULT_TENANT:
+                        _sync_shared_app_user(database, telegram_id, bool(active), display_name, role, payload.get("storeId"))
                 self.send_json(201, {"ok": True, "id": user_id, "username": username, "role": role, "telegramId": telegram_id, "displayName": display_name})
                 return
             if path.startswith("/api/users/") and path.endswith("/permissions"):
@@ -3920,7 +3929,18 @@ class AppHandler(SimpleHTTPRequestHandler):
                 with connection() as database:
                     existing = database.execute("SELECT id, telegram_id FROM auth_users WHERE id = ? AND tenant_id = ?", (identifier, tenant_id(self, payload))).fetchone()
                     if not existing:
-                        self.send_json(404, {"error": "Usuario no encontrado"})
+                        linked_employee = tenant_id(self, payload) == DEFAULT_TENANT and _sync_shared_app_user(
+                            database,
+                            identifier,
+                            bool(active),
+                            display_name,
+                            role,
+                            payload.get("storeId"),
+                        )
+                        if not linked_employee:
+                            self.send_json(404, {"error": "Usuario no encontrado"})
+                            return
+                        self.send_json(200, {"ok": True, "id": identifier, "employeeUpdated": True})
                         return
                     telegram_id = updated_user_telegram_id(payload, existing)
                     if password:

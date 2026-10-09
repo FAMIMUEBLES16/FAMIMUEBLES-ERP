@@ -1,32 +1,33 @@
 import { page, table, badge } from '../components/tables.js';
 
 function normalizeUserName(user) {
-  const displayName = user?.displayName || user?.display_name || user?.name || user?.nombre || user?.empleado;
+  const displayName = user?.displayName || user?.display_name || user?.name || user?.nombre || user?.empleado || user?.fullName || user?.full_name;
   if (displayName) return displayName;
   const username = user?.username || user?.usuario;
   const telegramAccount = String(username || '').match(/^telegram_(\d+)$/i);
   if (telegramAccount) return `Usuario Telegram ${telegramAccount[1]}`;
-  return username || (user?.id ? `Cuenta ${user.id}` : 'Usuario sin identificación');
+  const fallback = user?.id_telegram || user?.idTelegram || user?.id;
+  if (fallback) return `Usuario ${String(fallback)}`;
+  return username || 'Usuario sin identificación';
 }
 
 function normalizeRole(user) {
   return String(user?.role || user?.rol || 'VENDEDOR').toUpperCase();
 }
 
-function hasManagedAccount(user) {
-  return user?.managedAccount === true;
-}
-
 function isUserActive(user) {
-  const active = user?.active ?? user?.activo;
-  if (active !== undefined && active !== null && active !== '') {
-    return ![false, 0, '0', 'false', 'inactivo', 'inactive', 'no'].includes(
-      typeof active === 'string' ? active.trim().toLowerCase() : active
-    );
+  const affirmativeValues = new Set([true, 1, '1', 'si', 'sí', 'yes', 'y', 'activo', 'activa', 'active', 'enabled', 'habilitado', 'habilitada', 'on']);
+  const inactiveValues = new Set([false, 0, '0', 'false', 'no', 'n', 'off', 'inactivo', 'inactiva', 'inactive', 'desactivado', 'desactivada', 'disabled', 'suspendido', 'suspendida']);
+
+  for (const candidate of [user?.active, user?.activo, user?.enabled, user?.habilitado, user?.status, user?.estado]) {
+    if (candidate === undefined || candidate === null || candidate === '') continue;
+    const normalized = typeof candidate === 'string' ? candidate.trim().toLowerCase() : candidate;
+    if (affirmativeValues.has(normalized)) return true;
+    if (inactiveValues.has(normalized)) return false;
   }
-  return !['inactivo', 'inactive', 'false', '0', 'no'].includes(
-    String(user?.status || user?.estado || '').trim().toLowerCase()
-  );
+
+  const fallback = String(user?.status || user?.estado || '').trim().toLowerCase();
+  return !inactiveValues.has(fallback) && fallback !== 'false' && fallback !== '0';
 }
 
 function normalizeDocument(user) {
@@ -113,8 +114,17 @@ export function mergeUserSources(employeeItems, authItems) {
     if (namedAccounts.length === 1) candidates.add(namedAccounts[0]);
     const selectedAccount = [...candidates].sort((left, right) => accountQuality(right) - accountQuality(left))[0];
     candidates.forEach(account => matchedAccounts.add(account));
-    if (!selectedAccount || isSyntheticTelegramAccount(selectedAccount)) {
+    if (!selectedAccount) {
       return { ...employee, id: employee.id || employee.telegramId, managedAccount: false };
+    }
+    if (isSyntheticTelegramAccount(selectedAccount)) {
+      return {
+        ...employee,
+        id: selectedAccount.id,
+        authAccountId: selectedAccount.id,
+        username: selectedAccount.username || selectedAccount.usuario,
+        managedAccount: false,
+      };
     }
     return {
       ...employee,
@@ -156,11 +166,9 @@ export function renderUsuarios(state) {
     const contactPhone = user.phone || user.telefono || '-';
     const document = normalizeDocument(user);
     const userId = user.id || user.id_telegram || user.idTelegram || '';
-    const actions = hasManagedAccount(user)
-      ? `<button class="table-action" data-action="edit-user" data-user-id="${userId}">Editar</button>
-          <button class="table-action" data-action="user-permissions" data-user-id="${userId}">Permisos</button>
-          <button class="table-action" data-action="toggle-user-active" data-user-id="${userId}" data-active="${active ? 'true' : 'false'}">${active ? 'Desactivar' : 'Activar'}</button>`
-      : '<span class="muted">Sin cuenta de acceso</span>';
+    const actions = `<button class="table-action" data-action="edit-user" data-user-id="${userId}">Editar</button>
+        <button class="table-action" data-action="user-permissions" data-user-id="${userId}">Permisos</button>
+        <button class="table-action" data-action="toggle-user-active" data-user-id="${userId}" data-active="${active ? 'true' : 'false'}">${active ? 'Desactivar' : 'Activar'}</button>`;
     return `<tr>
       <td><strong>${rowName}</strong></td>
       <td>${contactEmail}</td>

@@ -26,10 +26,10 @@ import { renderReportes, renderReportPreview, reportDefinition } from './modules
 import { renderConfiguracion } from './modules/configuracion.js?v=18';
 import { renderGastos } from './modules/gastos.js?v=19';
 import { renderGasolina } from './modules/gasolina.js?v=18';
-import { mergeUserSources, renderUsuarios } from './modules/usuarios.js?v=22';
-import { renderDescansos } from './modules/descansos.js?v=7';
+import { mergeUserSources, renderUsuarios } from './modules/usuarios.js?v=24';
+import { renderDescansos } from './modules/descansos.js?v=9';
 import { renderAuditoria, resetAuditFilters, setAuditFilters } from './modules/auditoria.js?v=27';
-import { renderTalonarios, talonarioModal, setTalonarioFilters, currentTalonarioNumber, normalizeActiveTalonarios, configuredTalonarioOwnerLabel, configuredTalonarioOwnerMatches } from './modules/talonarios.js?v=21';
+import { renderTalonarios, talonarioModal, setTalonarioFilters, currentTalonarioNumber, normalizeActiveTalonarios, availableCentralTalonarios, nextAvailableCentralTalonario, configuredTalonarioOwnerLabel, configuredTalonarioOwnerMatches } from './modules/talonarios.js?v=23';
 import { historicalTalonarios, historicalRecibos, storedTalonarios } from './modules/talonarios-historial.js?v=1';
 import { renderApartados } from './modules/apartados.js?v=20';
 import { createApartado, decreaseSaleInventory, runTransaction, addMovement } from './modules/finanzas.js?v=18';
@@ -217,7 +217,7 @@ async function saveTalonarioForm(form){
 	if(!Number.isInteger(startNumber)||!Number.isInteger(endNumber)||endNumber<startNumber)throw new Error('El rango de consecutivos no es valido.');
 	let sourceId=form.dataset.talonarioId;
 	if(!sourceId){
-		const source=(store.collection.talonarios||[]).filter(item=>String(item.type).toUpperCase()===String(values.type).toUpperCase()&&String(item.storeId||'INV CRR 5 3 26')==='INV CRR 5 3 26'&&String(item.status||'ALMACENADO')==='ALMACENADO').sort((left,right)=>Number(left.startNumber)-Number(right.startNumber))[0];
+		const source=nextAvailableCentralTalonario(store.collection.talonarios||[],values.type);
 		sourceId=source?.id || '';
 	}
 	if(sourceId){
@@ -263,7 +263,7 @@ async function saveTalonarioForm(form){
 }
 function refreshTalonarioLowStockNotification(type){
 	if(!Array.isArray(store.collection.notifications))store.collection.notifications=[];
-	const available=(store.collection.talonarios||[]).filter(item=>String(item.type).toUpperCase()===String(type).toUpperCase()&&String(item.storeId||'INV CRR 5 3 26')==='INV CRR 5 3 26'&&String(item.status||'ALMACENADO')==='ALMACENADO').length;
+	const available=availableCentralTalonarios(store.collection.talonarios||[],type).length;
 	const normalized=String(type).toUpperCase()==='RECIBO'?'recibos':'remisiones';
 	if(available<3){
 		const today=localDateValue();
@@ -412,7 +412,7 @@ function isUserActive(user){
 	return !['inactivo','inactive','false','0','no'].includes(String(user?.status||user?.estado||'').trim().toLowerCase());
 }
 function hasManagedUserAccount(user){
-	return user?.managedAccount===true;
+	return user?.managedAccount===true||Boolean(user?.authAccountId);
 }
 async function hydrateUsers(state){
 	const localUsers=Array.isArray(state.users)?state.users:[];
@@ -566,27 +566,38 @@ function openUserModal(){
 		}
 	};
 }
-function openEditUserModal(userId){
-	const user=store.collection.users.find(item=>String(item.id)===String(userId)&&hasManagedUserAccount(item));
-	if(!user)return;
-	const stores=store.collection.stores.map(item=>`<option value="${item.id}" ${String(item.id)===String(user.storeId)?'selected':''}>${item.name}</option>`).join('');
-	$('#modal-root').innerHTML=`<div class="modal-backdrop"><form class="modal" id="edit-user-form"><button type="button" class="modal-close">x</button><p class="eyebrow">ADMINISTRACION</p><h2>Editar usuario</h2><label class="input-label">Usuario<input class="field" name="username" minlength="3" value="${user.username||user.name||''}" required></label><label class="input-label">Correo<input class="field" name="email" type="email" value="${user.email||''}"></label><label class="input-label">Telefono<input class="field" name="phone" type="tel" value="${user.phone||''}"></label><label class="input-label">Nueva clave<input class="field" name="password" type="password" minlength="8" placeholder="Dejar vacia para conservarla"></label><label class="input-label">Rol<select class="field" name="role">${['VENDEDOR','CAJERO','BODEGA','SUPERVISOR','CONTADOR','GERENTE','ADMINISTRADOR'].map(role=>`<option ${role===String(user.role).toUpperCase()?'selected':''}>${role}</option>`).join('')}</select></label><label class="input-label">Local<select class="field" name="storeId"><option value="">Todos</option>${stores}</select></label><label class="input-label">Estado<select class="field" name="active"><option value="true" ${isUserActive(user)?'selected':''}>Activo</option><option value="false" ${!isUserActive(user)?'selected':''}>Inactivo</option></select></label><p class="danger-text" data-user-error></p><button class="primary wide">Guardar cambios</button></form></div>`;
+function userFormHtml(value){
+	return String(value??'').replace(/[&<>"']/g,character=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[character]));
+}
+function openEditUserModal(userId,permissionsAfterCreate=false){
+	const user=store.collection.users.find(item=>String(item.id)===String(userId));
+	if(!user)return showToast('No se encontro el usuario.','error');
+	const managed=hasManagedUserAccount(user);
+	const displayName=user.displayName||user.name||user.nombre||user.username||'Usuario';
+	const initialUsername=user.username||String(displayName).normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]+/g,'.').replace(/^\.|\.$/g,'');
+	const stores=store.collection.stores.map(item=>`<option value="${userFormHtml(item.id)}" ${String(item.id)===String(user.storeId||user.store_id||user.local_asignado)?'selected':''}>${userFormHtml(item.name||item.id)}</option>`).join('');
+	const selectedRole=String(user.role||user.rol||'VENDEDOR').toUpperCase();
+	const roleOptions=['VENDEDOR','CAJERO','BODEGA','SUPERVISOR','CONTADOR','GERENTE','ADMINISTRADOR'].map(role=>`<option value="${role}" ${role===selectedRole?'selected':''}>${role}</option>`).join('');
+	const accountNote=!managed?`<p class="muted">${permissionsAfterCreate?'Crea el acceso para continuar y asignar sus permisos.':'Este usuario aun no tiene cuenta de acceso. Al guardar se creara su acceso y podras asignarle el local.'}</p>`:'';
+	$('#modal-root').innerHTML=`<div class="modal-backdrop"><form class="modal" id="edit-user-form"><button type="button" class="modal-close">x</button><p class="eyebrow">ADMINISTRACION</p><h2>${managed?'Editar usuario':`Dar acceso a ${userFormHtml(displayName)}`}</h2>${accountNote}<label class="input-label">Usuario<input class="field" name="username" minlength="3" value="${userFormHtml(initialUsername)}" required></label><label class="input-label">Correo<input class="field" name="email" type="email" value="${userFormHtml(user.email||user.correo||'')}"></label><label class="input-label">Telefono<input class="field" name="phone" type="tel" value="${userFormHtml(user.phone||user.telefono||'')}"></label><label class="input-label">${managed?'Nueva clave':'Clave de acceso'}<input class="field" name="password" type="password" minlength="8" ${managed?'placeholder="Dejar vacia para conservarla"':'required'}></label><label class="input-label">Rol<select class="field" name="role">${roleOptions}</select></label><label class="input-label">Local<select class="field" name="storeId"><option value="">Todos</option>${stores}</select></label><label class="input-label">Estado<select class="field" name="active"><option value="true" ${isUserActive(user)?'selected':''}>Activo</option><option value="false" ${!isUserActive(user)?'selected':''}>Inactivo</option></select></label><p class="danger-text" data-user-error></p><button class="primary wide">${managed?'Guardar cambios':'Crear acceso'}</button></form></div>`;
 	$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';
 	$('#edit-user-form').onsubmit=async event=>{
 		event.preventDefault();
 		const form=event.target;
 		const values=Object.fromEntries(new FormData(form));
-		values.id=user.id;
 		values.active=values.active==='true';
-		values.displayName=user.displayName||user.name||user.username||values.username;
-		if(!values.password)delete values.password;
+		values.displayName=displayName;
+		values.telegramId=String(user.telegramId||user.telegram_id||user.id_telegram||user.idTelegram||(!managed?user.id:'')||'');
+		if(managed)values.id=user.authAccountId||user.id;
+		if(managed&&!values.password)delete values.password;
 		try{
-			await persistCatalogRecord('/api/users',values,'PUT');
+			const result=await persistCatalogRecord('/api/users',values,managed?'PUT':'POST');
 			await hydrateUsers(store.state);
 			store.save();
 			$('#modal-root').innerHTML='';
 			render();
-			showToast('Usuario actualizado correctamente.');
+			showToast(managed?'Usuario actualizado correctamente.':'Acceso creado y local asignado correctamente.');
+			if(!managed&&permissionsAfterCreate&&result?.id)await openUserPermissionsModal(result.id);
 		}catch(error){
 			form.querySelector('[data-user-error]').textContent=error.message;
 		}
@@ -1221,7 +1232,7 @@ document.addEventListener('change',event=>{
 	if(!event.target.matches('#talonario-form select[name="type"]'))return;
 	const form=event.target.form;
 	const type=event.target.value;
-	const source=(store.collection.talonarios||[]).filter(item=>String(item.type).toUpperCase()===type&&String(item.storeId||'').trim()==='INV CRR 5 3 26'&&String(item.status||'').toUpperCase()==='ALMACENADO').sort((left,right)=>Number(left.startNumber)-Number(right.startNumber))[0];
+	const source=nextAvailableCentralTalonario(store.collection.talonarios||[],type);
 	if(source){form.elements.startNumber.value=source.startNumber;form.elements.endNumber.value=source.endNumber;form.querySelector('[data-talonario-next]').textContent=`${source.startNumber} - ${source.endNumber}`;form.querySelector('button.primary').disabled=false;}else{form.elements.startNumber.value='';form.elements.endNumber.value='';form.querySelector('[data-talonario-next]').textContent='Sin talonarios disponibles';form.querySelector('button.primary').disabled=true;}
 });
 document.addEventListener('submit',async event=>{if(event.target.id!=='advanced-form')return;event.preventDefault();const values=Object.fromEntries(new FormData(event.target));const collection=values.collection;const actionLabel=(event.target.querySelector('[data-confirm-label]')?.dataset.confirmLabel||'Guardar registro');const confirmed = window.confirm(`¿Deseas confirmar ${actionLabel.toLowerCase()}? Se modificará la información registrada.`);
@@ -1343,21 +1354,21 @@ document.addEventListener('click',async event=>{
 	const button=event.target.closest('[data-action="toggle-user-active"]');
 	if(!button)return;
 	event.stopImmediatePropagation();
-	const user=store.collection.users.find(item=>String(item.id)===String(button.dataset.userId)&&hasManagedUserAccount(item));
-	if(!user)return showToast('No se encontro la cuenta de usuario.','error');
+	const user=store.collection.users.find(item=>String(item.id)===String(button.dataset.userId));
+	if(!user)return showToast('No se encontro el usuario.','error');
 	const active=!isUserActive(user);
 	const action=active?'activar':'desactivar';
-	if(!window.confirm(`¿Deseas ${action} al usuario ${user.username||user.name}?`))return;
+	if(!window.confirm(`¿Deseas ${action} al usuario ${user.username||user.displayName||user.name}?`))return;
 	try{
 		await persistCatalogRecord('/api/users',{
-			id:user.id,
-			username:user.username||user.name,
+			id:user.authAccountId||user.id,
+			username:user.username||user.displayName||user.name,
 			displayName:user.displayName||user.name||user.username,
-			email:user.email||'',
-			phone:user.phone||'',
-			role:user.role,
-			storeId:user.storeId||'',
-			telegramId:user.telegramId||'',
+			email:user.email||user.correo||'',
+			phone:user.phone||user.telefono||'',
+			role:user.role||user.rol||'VENDEDOR',
+			storeId:user.storeId||user.store_id||user.local_asignado||'',
+			telegramId:user.telegramId||user.telegram_id||user.id_telegram||user.idTelegram||(!hasManagedUserAccount(user)?user.id:''),
 			active
 		},'PUT');
 		await hydrateUsers(store.state);
@@ -1575,7 +1586,7 @@ boot();
 
 document.addEventListener('click',event=>{const action=event.target.closest('[data-action]')?.dataset.action;if(action==='new-external-payable'){event.preventDefault();event.stopImmediatePropagation();externalPayableModalV2();}if(action==='supplier-payment'){event.preventDefault();event.stopImmediatePropagation();supplierPaymentModal();}},true);
 
-async function openUserPermissionsModal(userId){const user=store.collection.users.find(item=>String(item.id)===String(userId));if(!user)return;const resources=['Usuarios','Locales','Ventas','Compras','Traslados','Inventario','Productos','Clientes','Proveedores','Creditos','Cartera','Apartados','Gastos','Reportes'];let current=[];try{const payload=await api.get(`/api/users/${encodeURIComponent(userId)}/permissions`,{headers:{'X-Tenant-ID':activeTenantId()}});current=payload.items||[];}catch(error){showToast('No se pudieron cargar los permisos.','error');return;}const allowed=(resource,action)=>current.some(item=>item.resource===resource&&item.action===action&&item.allowed);$('#modal-root').innerHTML=`<div class="modal-backdrop"><form class="modal" id="permissions-form"><button type="button" class="modal-close">×</button><p class="eyebrow">ADMINISTRACION</p><h2>Permisos: ${user.name||user.username}</h2>${resources.map(resource=>`<div class="permission-row"><strong>${resource}</strong>${['view','create','edit','delete'].map(action=>`<label><input type="checkbox" name="${resource}:${action}" ${allowed(resource,action)?'checked':''}> ${action==='view'?'Ver':action==='create'?'Crear':action==='edit'?'Editar':'Eliminar'}</label>`).join('')}</div>`).join('')}<button class="primary wide">Guardar permisos</button></form></div>`;$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';$('#permissions-form').onsubmit=async event=>{event.preventDefault();const form=new FormData(event.target);const permissions=[];resources.forEach(resource=>['view','create','edit','delete'].forEach(action=>permissions.push({resource,action,allowed:form.has(`${resource}:${action}`)})));try{await persistCatalogRecord(`/api/users/${encodeURIComponent(userId)}/permissions`,{permissions});$('#modal-root').innerHTML='';showToast('Permisos guardados correctamente.');}catch(error){showToast(error.message,'error');}};
+async function openUserPermissionsModal(userId){const user=store.collection.users.find(item=>String(item.id)===String(userId)||String(item.authAccountId||'')===String(userId));if(!user)return showToast('No se encontro el usuario.','error');if(!hasManagedUserAccount(user)){openEditUserModal(user.id,true);return;}const permissionUserId=user.authAccountId||user.id;const resources=['Usuarios','Locales','Ventas','Compras','Traslados','Inventario','Productos','Clientes','Proveedores','Creditos','Cartera','Apartados','Gastos','Reportes'];let current=[];try{const payload=await api.get(`/api/users/${encodeURIComponent(permissionUserId)}/permissions`,{headers:{'X-Tenant-ID':activeTenantId()}});current=payload.items||[];}catch(error){showToast('No se pudieron cargar los permisos.','error');return;}const allowed=(resource,action)=>current.some(item=>item.resource===resource&&item.action===action&&item.allowed);$('#modal-root').innerHTML=`<div class="modal-backdrop"><form class="modal" id="permissions-form"><button type="button" class="modal-close">×</button><p class="eyebrow">ADMINISTRACION</p><h2>Permisos: ${user.name||user.displayName||user.username}</h2>${resources.map(resource=>`<div class="permission-row"><strong>${resource}</strong>${['view','create','edit','delete'].map(action=>`<label><input type="checkbox" name="${resource}:${action}" ${allowed(resource,action)?'checked':''}> ${action==='view'?'Ver':action==='create'?'Crear':action==='edit'?'Editar':'Eliminar'}</label>`).join('')}</div>`).join('')}<button class="primary wide">Guardar permisos</button></form></div>`;$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';$('#permissions-form').onsubmit=async event=>{event.preventDefault();const form=new FormData(event.target);const permissions=[];resources.forEach(resource=>['view','create','edit','delete'].forEach(action=>permissions.push({resource,action,allowed:form.has(`${resource}:${action}`)})));try{await persistCatalogRecord(`/api/users/${encodeURIComponent(permissionUserId)}/permissions`,{permissions});$('#modal-root').innerHTML='';showToast('Permisos guardados correctamente.');}catch(error){showToast(error.message,'error');}};
 }
 document.addEventListener('click',event=>{const button=event.target.closest('[data-action="user-permissions"]');if(button)openUserPermissionsModal(button.dataset.userId);});
 

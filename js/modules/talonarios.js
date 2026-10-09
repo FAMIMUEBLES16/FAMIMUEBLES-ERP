@@ -233,6 +233,21 @@ export function normalizeActiveTalonarios(items = []) {
   }
   return items;
 }
+export function availableCentralTalonarios(items = [], type = 'REMISION') {
+  if (!Array.isArray(items)) return [];
+  const normalized = normalizeActiveTalonarios(items.map(item => ({ ...item })));
+  const normalizedType = String(type || 'REMISION').toUpperCase();
+  const assignedRanges = new Set(normalized
+    .filter(item => String(item.type || 'REMISION').toUpperCase() === normalizedType && !isCentralStore(item))
+    .map(item => `${Number(item.startNumber)}:${Number(item.endNumber)}`));
+  return normalized
+    .filter(item => String(item.type || 'REMISION').toUpperCase() === normalizedType
+      && isCentralStore(item)
+      && String(item.status || '').toUpperCase() === 'ALMACENADO'
+      && !assignedRanges.has(`${Number(item.startNumber)}:${Number(item.endNumber)}`))
+    .sort((left, right) => Number(left.startNumber) - Number(right.startNumber));
+}
+export const nextAvailableCentralTalonario = (items = [], type = 'REMISION') => availableCentralTalonarios(items, type)[0] || null;
 const numberLabel = value => Number(value).toLocaleString('es-CO');
 const saleNumber = (sale, talonario = null) => {
   const raw = Number(String(sale.invoiceNumber || sale.numero_factura || sale.invoice || '').trim());
@@ -395,8 +410,8 @@ export function talonarioModal(state, item = null) {
   const centralStore = catalogStores.find(store => String(store.id).trim() === CENTRAL) || { id: CENTRAL, name: CENTRAL };
   const destinationStores = [centralStore, ...catalogStores.filter(store => String(store.id).trim() !== CENTRAL)];
   const stores = destinationStores.map(store => `<option value="${store.id}" ${String(item?.storeId || CENTRAL).trim() === String(store.id).trim() ? 'selected' : ''}>${store.name || store.id}</option>`).join('');
-  const nextRemision = (state?.talonarios || []).filter(entry => String(entry.type).toUpperCase() === 'REMISION' && String(entry.storeId || '').trim() === CENTRAL && String(entry.status || '').toUpperCase() === 'ALMACENADO').sort((left, right) => Number(left.startNumber) - Number(right.startNumber))[0];
-  const nextRecibo = (state?.talonarios || []).filter(entry => String(entry.type).toUpperCase() === 'RECIBO' && String(entry.storeId || '').trim() === CENTRAL && String(entry.status || '').toUpperCase() === 'ALMACENADO').sort((left, right) => Number(left.startNumber) - Number(right.startNumber))[0];
+  const nextRemision = nextAvailableCentralTalonario(state?.talonarios || [], 'REMISION');
+  const nextRecibo = nextAvailableCentralTalonario(state?.talonarios || [], 'RECIBO');
   const next = item || nextRemision || nextRecibo;
   const nextRange = item ? range(item) : (next ? range(next) : 'Sin talonarios disponibles');
   return `<div class="modal-backdrop"><form class="modal" id="talonario-form" data-talonario-id="${item?.id || ''}"><button type="button" class="modal-close">×</button><p class="eyebrow">ADMINISTRACION</p><h2>${item ? 'Enviar talonario' : 'Registrar talonario'}</h2>

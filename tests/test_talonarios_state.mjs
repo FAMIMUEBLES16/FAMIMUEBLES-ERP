@@ -1,5 +1,10 @@
 import assert from 'node:assert/strict';
-import { currentTalonarioNumber, deduplicateTalonarioHistory, missingTalonarioNumbers, missingTalonarioNumbersForLocal, normalizeActiveTalonarios, talonarioSalesDocuments } from '../js/modules/talonarios.js';
+import { availableCentralTalonarios, configuredTalonarioOwnerLabel, configuredTalonarioOwnerMatches, currentTalonarioNumber, deduplicateTalonarioHistory, missingTalonarioNumbers, missingTalonarioNumbersForLocal, nextAvailableCentralTalonario, normalizeActiveTalonarios, talonarioModal, talonarioSalesDocuments } from '../js/modules/talonarios.js';
+
+assert.equal(configuredTalonarioOwnerLabel('REMISION', 15801, 15850), 'INV CRR 5 3 26');
+assert.equal(configuredTalonarioOwnerMatches('REMISION', 15801, 15850, ['INV CRR 5 3 26']), true);
+assert.equal(configuredTalonarioOwnerMatches('REMISION', 15801, 15850, ['INV CARTAGENITA']), false);
+assert.equal(configuredTalonarioOwnerMatches('REMISION', 15901, 15950, ['INV CARTAGENITA']), true);
 
 const manablancaTalonario = {
   id: 'MANABLANCA-15751',
@@ -26,6 +31,24 @@ assert.deepEqual(
   [],
   'a cross-store sale should not appear as a missing remision'
 );
+const cr7Talonario = { type: 'REMISION', startNumber: 15651, endNumber: 15700, currentNumber: 15674, consecutiveBaseline: 15669, storeId: 'INV CRR 7 6A 15', destinationName: 'INV CRR 7 6A 15' };
+const cr7ForeignInvoice = { invoiceNumber: '15670', documentType: 'REMISION', storeId: 'INV CRR 5 3 17' };
+assert.equal(
+  missingTalonarioNumbers(cr7Talonario, [cr7ForeignInvoice]).includes(15670),
+  false,
+  'invoice 15670 recorded at another local should not appear as missing'
+);
+const cr26Talonario = { type: 'REMISION', startNumber: 15801, endNumber: 15850, currentNumber: 15821, consecutiveBaseline: 15819, storeId: 'INV CRR 5 3 26', destinationName: 'INV CRR 5 3 26' };
+const cr26Sales = [
+  { invoiceNumber: '15820', documentType: 'REMISION', storeId: 'INV CRR 5 3 17' },
+  { invoiceNumber: '15821', documentType: 'REMISION', storeId: 'INV CRR 5 3 26' },
+];
+assert.deepEqual(
+  missingTalonarioNumbers(cr26Talonario, cr26Sales),
+  [],
+  'invoice 15820 recorded at another local should count as used without changing the current local invoice'
+);
+assert.equal(currentTalonarioNumber(cr26Talonario, cr26Sales), 15821);
 assert.deepEqual(
   missingTalonarioNumbersForLocal(
     { ...manablancaTalonario, startNumber: 15851, endNumber: 15900, storeId: 'INV CARTAGENITA II', destinationName: 'INV CARTAGENITA II' },
@@ -258,6 +281,30 @@ assert.equal(currentTalonarioNumber(reportedTalonarios.find((item) => item.id ==
 assert.equal(reportedTalonarios.find((item) => item.id === 'CRR76A15-CURRENT')?.status, 'EN_USO');
 assert.equal(currentTalonarioNumber(reportedTalonarios.find((item) => item.id === 'MANABLANCA-CURRENT')), 15791);
 assert.equal(reportedTalonarios.find((item) => item.id === 'CRR5326-RECEIPT')?.status, 'EN_USO');
+
+const newerAvailableModalCase = {
+  stores: [{ id: 'INV CRR 5 3 26', name: 'INV CRR 5 3 26' }],
+  talonarios: [
+    { id: 'STALE-OLD', type: 'REMISION', startNumber: 15751, endNumber: 15800, storeId: 'INV CRR 5 3 26', destinationName: 'INV CRR 5 3 26', status: 'ALMACENADO' },
+    { id: 'MANABLANCA-ASSIGNED', type: 'REMISION', startNumber: 15751, endNumber: 15800, storeId: 'INV MANABLANCA', destinationName: 'INV MANABLANCA', status: 'EN_USO', currentNumber: 15792 },
+    { id: 'CENTRAL-IN-USE', type: 'REMISION', startNumber: 15801, endNumber: 15850, storeId: 'INV CRR 5 3 26', destinationName: 'INV CRR 5 3 26', status: 'EN_USO', currentNumber: 15821 },
+    { id: 'NEXT-FUTURE', type: 'REMISION', startNumber: 15951, endNumber: 16000, storeId: 'INV CRR 5 3 26', destinationName: 'INV CRR 5 3 26', status: 'ALMACENADO' },
+    { id: 'LATER-RANGE', type: 'REMISION', startNumber: 16801, endNumber: 16850, storeId: 'INV CRR 5 3 26', destinationName: 'INV CRR 5 3 26', status: 'ALMACENADO' },
+  ],
+};
+assert.equal(nextAvailableCentralTalonario(newerAvailableModalCase.talonarios, 'REMISION')?.id, 'NEXT-FUTURE');
+assert.deepEqual(availableCentralTalonarios(newerAvailableModalCase.talonarios, 'REMISION').map(item => item.id), ['NEXT-FUTURE', 'LATER-RANGE']);
+assert.match(
+  talonarioModal(newerAvailableModalCase),
+  /15951\s*-\s*16000/,
+  'the modal should skip stale duplicate and in-use ranges and show the next central range'
+);
+assert.doesNotMatch(
+  talonarioModal(newerAvailableModalCase),
+  /name="startNumber" value="15751"/,
+  'an already assigned range must not be offered for a new shipment'
+);
+
 const reportedReceipts = [
   { id: 'RECEIPT-CARTAGENITA', type: 'RECIBO', startNumber: 5551, endNumber: 5600, storeId: 'INV CARTAGENITA', destinationName: 'INV CARTAGENITA', status: 'ENVIADO' },
   { id: 'RECEIPT-CARTAGENITA-II', type: 'RECIBO', startNumber: 5751, endNumber: 5800, storeId: 'INV CARTAGENITA II', destinationName: 'INV CARTAGENITA II', status: 'ENVIADO' },

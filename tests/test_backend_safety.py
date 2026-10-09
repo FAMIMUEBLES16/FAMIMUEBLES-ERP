@@ -2,6 +2,7 @@ import io
 import json
 import unittest
 import zipfile
+from decimal import Decimal
 from unittest.mock import patch
 
 import server
@@ -9,6 +10,222 @@ from server import _create_shared_sale, _shared_domain_items, canonical_request_
 
 
 class BackendSafetyTests(unittest.TestCase):
+    def test_shared_transfer_moves_inventory_and_records_completed_movement(self):
+        class FakeResult:
+            def __init__(self, row=None):
+                self.row = row
+
+            def fetchone(self):
+                return self.row
+
+        class FakeDatabase:
+            def __init__(self):
+                self.stores = {"INV A", "INV B"}
+                self.products = {"P-1": "Producto uno"}
+                self.inventory = {("INV A", "P-1"): 10, ("INV B", "P-1"): 2}
+                self.movements = []
+                self.lines = []
+
+            def execute(self, query, params=()):
+                if "FROM locales" in query:
+                    return FakeResult({"id": 1} if params[0] in self.stores else None)
+                if "FROM productos" in query:
+                    name = self.products.get(params[0])
+                    return FakeResult({"nombre_producto": name} if name else None)
+                if "SELECT cantidad FROM inventarios" in query:
+                    quantity = self.inventory.get((params[0], params[1]))
+                    return FakeResult({"cantidad": quantity} if quantity is not None else None)
+                if "INSERT INTO movimientos" in query:
+                    self.movements.append(params)
+                    return FakeResult({"id": 765, "fecha": "2026-10-03T10:35:00"})
+                if "UPDATE inventarios SET cantidad" in query:
+                    delta, store_id, product_id = params
+                    self.inventory[(store_id, product_id)] += delta
+                elif "INSERT INTO inventarios" in query:
+                    store_id, product_id, _description, quantity = params
+                    self.inventory[(store_id, product_id)] = quantity
+                elif "INSERT INTO movimiento_productos" in query:
+                    self.lines.append(params)
+                return FakeResult()
+
+        database = FakeDatabase()
+        result = server._create_shared_transfer(
+            database,
+            {
+                "originStoreId": "INV A",
+                "destinationStoreId": "INV B",
+                "items": [
+                    {"productId": "P-1", "quantity": 2},
+                    {"productId": "P-1", "quantity": 3},
+                ],
+            },
+            {"username": "Michael", "id": "user-1", "store_id": "INV A", "role": "BODEGA"},
+            type("Handler", (), {"headers": {}})(),
+        )
+
+        self.assertEqual(database.inventory[("INV A", "P-1")], 5)
+        self.assertEqual(database.inventory[("INV B", "P-1")], 7)
+        self.assertEqual(len(database.movements), 1)
+        self.assertEqual(len(database.lines), 1)
+        self.assertEqual(database.lines[0][3:], (5, 5, 5))
+        self.assertEqual(result["transfer"]["id"], "PG-TRA-765")
+        self.assertEqual(result["transfer"]["status"], "RECIBIDO")
+        self.assertEqual(result["inventory"], [
+            {"productId": "P-1", "storeId": "INV A", "quantity": 5},
+            {"productId": "P-1", "storeId": "INV B", "quantity": 7},
+        ])
+
+    def test_shared_transfer_rejects_insufficient_stock_before_recording_movement(self):
+        class FakeResult:
+            def __init__(self, row=None):
+                self.row = row
+
+            def fetchone(self):
+                return self.row
+
+        class FakeDatabase:
+            def __init__(self):
+                self.movement_created = False
+
+            def execute(self, query, params=()):
+                if "FROM locales" in query:
+                    return FakeResult({"id": 1})
+                if "FROM productos" in query:
+                    return FakeResult({"nombre_producto": "Producto uno"})
+                if "SELECT cantidad FROM inventarios" in query:
+                    quantity = 1 if params[0] == "INV A" else 4
+                    return FakeResult({"cantidad": quantity})
+                if "INSERT INTO movimientos" in query:
+                    self.movement_created = True
+                    return FakeResult({"id": 1, "fecha": "2026-10-03"})
+                return FakeResult()
+
+        database = FakeDatabase()
+        with self.assertRaisesRegex(ValueError, "Stock insuficiente"):
+            server._create_shared_transfer(
+                database,
+                {"originStoreId": "INV A", "destinationStoreId": "INV B", "items": [{"productId": "P-1", "quantity": 2}]},
+                {"username": "Michael", "id": "user-1", "store_id": "INV A", "role": "BODEGA"},
+                type("Handler", (), {"headers": {}})(),
+            )
+
+        self.assertFalse(database.movement_created)
+
+    def test_apartado_detail_edits_recalculate_total_and_reject_removing_everything(self):
+        edits, total = server.normalize_apartado_detail_edits([
+            {"id": 10, "code": "S-1", "product": "Sofa real", "quantity": "2", "unitPrice": "125000"},
+            {"id": 11, "remove": True},
+        ])
+
+        self.assertEqual(total, 250000)
+        self.assertEqual(edits[0]["subtotal"], 250000)
+        with self.assertRaisesRegex(ValueError, "conservar al menos un producto"):
+            server.normalize_apartado_detail_edits([{"id": 10, "remove": True}])
+        with self.assertRaisesRegex(ValueError, "numero entero positivo"):
+            server.normalize_apartado_detail_edits([
+                {"id": 10, "code": "S-1", "product": "Sofa real", "quantity": 1.5, "unitPrice": 125000},
+            ])
+
+    def test_shared_apartado_update_preserves_paid_amount_and_updates_detail_values(self):
+        class FakeResult:
+            def __init__(self, row=None, rows=None):
+                self.row = row
+                self.rows = rows or []
+
+            def fetchone(self):
+                return self.row
+
+            def fetchall(self):
+                return self.rows
+
+        class FakeDatabase:
+            def __init__(self):
+                self.statements = []
+
+            def execute(self, query, params=()):
+                self.statements.append((query, params))
+                if "SELECT id, valor_pagado, estado FROM apartados" in query:
+                    return FakeResult({"id": 7, "valor_pagado": 50000, "estado": "PENDIENTE"})
+                if "SELECT id FROM apartado_detalles" in query:
+                    return FakeResult(rows=[{"id": 12}])
+                return FakeResult()
+
+        database = FakeDatabase()
+        result = server.update_shared_apartado(database, {
+            "id": "7",
+            "customer": "Cliente real",
+            "items": [{"id": 12, "code": "M-2", "product": "Mesa real", "quantity": 1, "unitPrice": 90000}],
+        })
+
+        self.assertEqual(result["total"], 90000)
+        self.assertEqual(result["paid"], 50000)
+        self.assertEqual(result["balance"], 40000)
+        self.assertTrue(any("SET codigo = %s" in query and params[:5] == ("M-2", "Mesa real", 1, Decimal("90000"), Decimal("90000")) for query, params in database.statements))
+        self.assertTrue(any("SET cliente_nombre = %s" in query and params[5:8] == (Decimal("90000"), Decimal("40000"), "PENDIENTE") for query, params in database.statements))
+
+    def test_shared_apartado_update_rejects_total_below_paid_without_writes(self):
+        class FakeResult:
+            def __init__(self, row=None, rows=None):
+                self.row = row
+                self.rows = rows or []
+
+            def fetchone(self):
+                return self.row
+
+            def fetchall(self):
+                return self.rows
+
+        class FakeDatabase:
+            def __init__(self):
+                self.statements = []
+
+            def execute(self, query, params=()):
+                self.statements.append((query, params))
+                if "SELECT id, valor_pagado, estado FROM apartados" in query:
+                    return FakeResult({"id": 7, "valor_pagado": 100000, "estado": "PENDIENTE"})
+                if "SELECT id FROM apartado_detalles" in query:
+                    return FakeResult(rows=[{"id": 12}])
+                return FakeResult()
+
+        database = FakeDatabase()
+        with self.assertRaisesRegex(ValueError, "menor que el valor ya pagado"):
+            server.update_shared_apartado(database, {
+                "id": "7",
+                "items": [{"id": 12, "code": "M-2", "product": "Mesa real", "quantity": 1, "unitPrice": 90000}],
+            })
+
+        self.assertFalse(any("UPDATE apartado_detalles" in query or "DELETE FROM apartado_detalles" in query for query, _ in database.statements))
+
+    def test_shared_domain_items_includes_apartado_product_details(self):
+        class FakeResult:
+            def __init__(self, rows):
+                self.rows = rows
+
+            def fetchall(self):
+                return self.rows
+
+        class FakeDatabase:
+            def execute(self, query, params=()):
+                if "SELECT * FROM apartados" in query:
+                    return FakeResult([{"id": 7, "valor_total": 90000, "valor_pagado": 10000, "saldo_pendiente": 80000}])
+                if "FROM apartado_detalles" in query:
+                    return FakeResult([{
+                        "id": 12,
+                        "apartado_id": 7,
+                        "codigo": "M-2",
+                        "producto": "Mesa real",
+                        "cantidad": 1,
+                        "valor_unitario": 90000,
+                        "subtotal": 90000,
+                    }])
+                return FakeResult([])
+
+        items = server._shared_domain_items(FakeDatabase(), "apartados")
+
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["items"][0]["id"], 12)
+        self.assertEqual(items[0]["items"][0]["unitPrice"], 90000)
+
     def test_idempotency_hash_is_order_independent(self):
         first = canonical_request_hash({"id": "VEN-1", "items": [{"productId": "P-1", "quantity": 2}], "requestId": "a"})
         second = canonical_request_hash({"items": [{"productId": "P-1", "quantity": 2}], "id": "VEN-1", "requestId": "b"})
@@ -23,6 +240,101 @@ class BackendSafetyTests(unittest.TestCase):
         self.assertFalse(server.has_meaningful_domain_payload({"tenantId": "tenant-default", "requestId": "abc"}))
         self.assertFalse(server.has_meaningful_domain_payload({"id": "TAL-1", "tenantId": "tenant-default", "status": "EN_USO"}))
         self.assertTrue(server.has_meaningful_domain_payload({"id": "TAL-1", "tenantId": "tenant-default", "status": "EN_USO", "type": "REMISION"}))
+
+    def test_talonario_rejects_configured_range_for_wrong_store(self):
+        with self.assertRaisesRegex(ValueError, "pertenece a INV CRR 5 3 26"):
+            server.validate_talonario_assignment(None, "tenant-default", "TAL-WRONG", {
+                "id": "TAL-WRONG",
+                "type": "REMISION",
+                "startNumber": 15801,
+                "endNumber": 15850,
+                "status": "EN_USO",
+                "storeId": "INV CARTAGENITA",
+                "destinationName": "INV CARTAGENITA",
+            })
+
+    def test_talonario_rejects_duplicate_active_assignment(self):
+        class FakeResult:
+            def __init__(self, rows=()):
+                self.rows = rows
+
+            def fetchall(self):
+                return self.rows
+
+        existing = {
+            "id": "TAL-EXISTING",
+            "type": "REMISION",
+            "startNumber": 17001,
+            "endNumber": 17050,
+            "status": "EN_USO",
+            "storeId": "INV LOCAL A",
+        }
+
+        class FakeDatabase:
+            def __init__(self):
+                self.statements = []
+
+            def execute(self, query, params=()):
+                self.statements.append((query, params))
+                if "SELECT id, data_json" in query:
+                    return FakeResult([("TAL-EXISTING", json.dumps(existing))])
+                return FakeResult()
+
+        database = FakeDatabase()
+        with self.assertRaisesRegex(ValueError, "ya esta asignado a INV LOCAL A"):
+            server.validate_talonario_assignment(database, "tenant-default", "TAL-DUPLICATE", {
+                "id": "TAL-DUPLICATE",
+                "type": "REMISION",
+                "startNumber": 17001,
+                "endNumber": 17050,
+                "status": "EN_USO",
+                "storeId": "INV LOCAL B",
+            })
+
+        self.assertTrue(any("pg_advisory_xact_lock" in query for query, _ in database.statements))
+
+    def test_talonario_allows_owner_update_with_matching_sent_source(self):
+        class FakeResult:
+            def __init__(self, rows=()):
+                self.rows = rows
+
+            def fetchall(self):
+                return self.rows
+
+        records = [
+            ("TAL-SOURCE", json.dumps({
+                "id": "TAL-SOURCE",
+                "type": "REMISION",
+                "startNumber": 15801,
+                "endNumber": 15850,
+                "status": "ENVIADO",
+                "storeId": "INV CRR 5 3 26",
+                "destinationStoreId": "INV CRR 5 3 26",
+            })),
+            ("TAL-DESTINATION", json.dumps({
+                "id": "TAL-DESTINATION",
+                "type": "REMISION",
+                "startNumber": 15801,
+                "endNumber": 15850,
+                "status": "EN_USO",
+                "storeId": "INV CRR 5 3 26",
+            })),
+        ]
+
+        class FakeDatabase:
+            def execute(self, query, params=()):
+                if "SELECT id, data_json" in query:
+                    return FakeResult(records)
+                return FakeResult()
+
+        server.validate_talonario_assignment(FakeDatabase(), "tenant-default", "TAL-DESTINATION", {
+            "id": "TAL-DESTINATION",
+            "type": "REMISION",
+            "startNumber": 15801,
+            "endNumber": 15850,
+            "status": "EN_USO",
+            "storeId": "INV CRR 5 3 26",
+        })
 
     def test_user_update_preserves_telegram_link_unless_field_is_sent(self):
         existing = {"telegram_id": "123456"}
@@ -495,6 +807,23 @@ class BackendSafetyTests(unittest.TestCase):
             self.assertTrue(server.can_access(FakeHandler(), "/api/catalog/sale", "POST"))
             self.assertTrue(server.can_access(FakeHandler(), "/api/tenants", "GET"))
 
+    def test_backup_and_restore_are_admin_only(self):
+        class FakeHandler:
+            headers = {"X-Tenant-ID": "tenant-default"}
+
+        for role in ("GERENTE", "CONTADOR", "SUPERVISOR", "VENDEDOR", "CAJERO", "BODEGA"):
+            user = {"id": "USR-1", "role": role, "tenant_id": "tenant-default"}
+            with patch("server.authenticated_user", return_value=user), \
+                 patch("server._postgres_enabled", return_value=False):
+                self.assertFalse(server.can_access(FakeHandler(), "/api/backup", "GET"), role)
+                self.assertFalse(server.can_access(FakeHandler(), "/api/restore", "POST"), role)
+
+        admin = {"id": "USR-1", "role": "ADMINISTRADOR", "tenant_id": "tenant-default"}
+        with patch("server.authenticated_user", return_value=admin), \
+             patch("server._postgres_enabled", return_value=False):
+            self.assertTrue(server.can_access(FakeHandler(), "/api/backup", "GET"))
+            self.assertTrue(server.can_access(FakeHandler(), "/api/restore", "POST"))
+
     def test_non_admin_user_can_access_action_specific_domain_permission(self):
         class FakeHandler:
             headers = {"X-Tenant-ID": "tenant-default"}
@@ -566,6 +895,43 @@ class BackendSafetyTests(unittest.TestCase):
         with patch("server.authenticated_user", return_value=fake_user), \
              patch("server.connection", return_value=FakeDatabase()):
             self.assertFalse(server.has_user_permission(object(), "Compras", "create"))
+
+    def test_sale_edit_without_customer_preserves_existing_customer_name(self):
+        class FakeDatabase:
+            def execute(self, query, params=()):
+                raise AssertionError("A date-only sale edit must not replace its customer")
+
+        self.assertEqual(
+            server.resolve_shared_sale_customer(
+                FakeDatabase(),
+                {"date": "2026-10-06", "paymentMethod": "Sistecrédito"},
+                "Samara Alzate",
+                "tenant-default",
+            ),
+            "Samara Alzate",
+        )
+
+    def test_sale_edit_resolves_selected_customer_id_to_name(self):
+        class FakeResult:
+            def fetchone(self):
+                return {"nombre": "Samara Alzate"}
+
+        class FakeDatabase:
+            def execute(self, query, params=()):
+                self.params = params
+                return FakeResult()
+
+        database = FakeDatabase()
+        self.assertEqual(
+            server.resolve_shared_sale_customer(
+                database,
+                {"customerId": "CLI-15566"},
+                "Otro cliente",
+                "tenant-default",
+            ),
+            "Samara Alzate",
+        )
+        self.assertEqual(database.params, ("tenant-default", "CLI-15566", "CLI-15566"))
 
 
 if __name__ == "__main__":
