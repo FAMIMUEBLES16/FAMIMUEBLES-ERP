@@ -43,12 +43,12 @@ function normalizeFuelRecords(items = []) {
   });
 }
 
-export function renderGasolina(state) {
+export function renderGasolina(state, canDelete = false) {
   const records = normalizeFuelRecords(state.fuelRecords || state.gasolina || []);
   return page(
     'OPERACION',
     'Gasolina',
     '<button class="primary" data-action="new-fuel">＋ Registrar gasolina</button>',
-    `<div class="admin-summary"><div><span>Total</span><strong>${formatCurrency(records.reduce((sum, item) => sum + Number(item.amount || 0), 0))}</strong></div><div><span>Combustible</span><strong>${records.reduce((sum, item) => sum + Number(item.quantity || 0), 0)} L</strong></div><div><span>Registros</span><strong>${records.length}</strong></div></div>${table(['Fecha','Local','Vehiculo','Conductor','Combustible','Valor','Kilometraje','Estacion'], records.map(item => `<tr><td>${item.date}</td><td>${(state.stores || []).find(store => store.id === item.storeId)?.name || item.storeId || 'Sin local'}</td><td>${item.vehicle}</td><td>${item.driver}</td><td>${item.quantity} ${item.unit}</td><td><strong>${formatCurrency(item.amount)}</strong></td><td>${item.mileage} km</td><td>${item.station}</td></tr>`))}`
+    `<div class="admin-summary"><div><span>Total</span><strong>${formatCurrency(records.reduce((sum, item) => sum + Number(item.amount || 0), 0))}</strong></div><div><span>Combustible</span><strong>${records.reduce((sum, item) => sum + Number(item.quantity || 0), 0)} L</strong></div><div><span>Registros</span><strong>${records.length}</strong></div></div>${table(['Fecha','Local','Vehiculo','Conductor','Combustible','Valor','Kilometraje','Estacion',...(canDelete?['Acciones']:[])], records.map(item => `<tr><td>${item.date}</td><td>${(state.stores || []).find(store => store.id === item.storeId)?.name || item.storeId || 'Sin local'}</td><td>${item.vehicle}</td><td>${item.driver}</td><td>${item.quantity} ${item.unit}</td><td><strong>${formatCurrency(item.amount)}</strong></td><td>${item.mileage} km</td><td>${item.station}</td>${canDelete?`<td><button class="table-action danger-text" data-action="delete-fuel" data-fuel-id="${item.id}">Eliminar</button></td>`:''}</tr>`))}`
   );
 }
