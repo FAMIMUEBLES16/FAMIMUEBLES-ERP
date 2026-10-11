@@ -1,4 +1,4 @@
-import { money, page, table, badge } from '../components/tables.js';
+import { money, page, table, badge, recordSummary } from '../components/tables.js?v=20261010-record-summary-v1';
 
 const creditBalance = item => Math.max(0, Number(item.total || 0) - Number(item.initial || 0) - Number(item.paid || 0));
 
@@ -188,7 +188,9 @@ export function renderCreditos(data) {
     ? table(['Credito','Cliente','Venta','Fecha','Valor','Inicial','Pagado','Saldo pendiente','Estado','Consulta','Administrar','Registrar abono'], rows)
     : '<p class="muted">No hay créditos que coincidan con la búsqueda y los filtros.</p>';
   const summary = `<div class="metric-grid compact"><div class="metric"><span>Créditos activos</span><strong>${credits.filter(item => item.pending > 0).length}</strong></div><div class="metric"><span>Cartera pendiente</span><strong>${money(totalPending)}</strong></div><div class="metric"><span>Pagado</span><strong>${money(credits.reduce((sum, item) => sum + item.paid, 0))}</strong></div></div>`;
-  return page('FINANCIACION', 'Cartera', '', `${summary}<div class="toolbar finance-list-filters">${search}${filterOptions}</div>${list}${renderPagination('credit', currentPage, pageSize, filteredCredits.length)}`);
+  const filteredPending = filteredCredits.reduce((sum, item) => sum + item.pending, 0);
+  const filteredSummary = recordSummary(filteredCredits.length, 'Resumen de cartera', filteredPending, 'Saldo pendiente');
+  return page('FINANCIACION', 'Cartera', '', `${summary}<div class="toolbar finance-list-filters">${search}${filterOptions}</div><div data-credit-summary>${filteredSummary}</div>${list}${renderPagination('credit', currentPage, pageSize, filteredCredits.length)}`);
 }
 
 export { normalizeCredit };

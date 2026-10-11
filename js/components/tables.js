@@ -11,3 +11,6 @@ export function table(headers, rows) {
   return `<div class="table-wrap"><table><thead><tr>${headers.map(header => `<th>${header}</th>`).join('')}</tr></thead><tbody>${body}</tbody></table></div>`;
 }
 export function page(kicker, heading, action, body) { return `<div class="page-head"><div><p class="eyebrow">${kicker}</p><h2>${heading}</h2></div>${action || ''}</div>${body}`; }
+export function recordSummary(count, title, amount, amountLabel = 'Valor') {
+  return `<div class="record-summary"><strong class="record-summary-count">${count}</strong><div><h3>${title}</h3><p>${amountLabel}: ${money(amount)}</p></div></div>`;
+}

@@ -1,7 +1,7 @@
 import { money, page } from '../components/tables.js';
 import { icons } from '../components/sidebar.js';
 import { calendarDate, formatDate, shiftCalendarDate } from '../utils/dates.js';
-import { canonicalSellerName, normalizeSales } from './ventas.js';
+import { canonicalSellerName, filterSales, normalizeSales } from './ventas.js';
 
 const CHART_COLORS = [
   '#2563EB', '#10B981', '#F59E0B', '#EF4444',
@@ -171,11 +171,61 @@ function periodSales(sales, period, today = calendarDate()) {
   });
 }
 
-function generateCharts(data = {}) {
-  const month = calendarDate().slice(0, 7);
-  const monthTotal = (data.sales || [])
-    .filter(sale => calendarDate(saleDate(sale)).startsWith(month))
+export function filterDashboardSalesByStore(sales = [], store = 'all', stores = []) {
+  return filterSales(normalizeSales(sales), { store, stores });
+}
+
+export function monthToDateSalesComparison(sales = [], today = calendarDate()) {
+  const currentMonthStart = `${today.slice(0, 7)}-01`;
+  const previousMonthEnd = shiftCalendarDate(currentMonthStart, -1);
+  const previousMonthDays = Number(previousMonthEnd.slice(8, 10));
+  const previousMonthStart = shiftCalendarDate(previousMonthEnd, -(previousMonthDays - 1));
+  const elapsedDays = Number(today.slice(8, 10));
+  const previousPeriodEnd = shiftCalendarDate(previousMonthStart, Math.min(elapsedDays, previousMonthDays) - 1);
+  const sumPeriod = (start, end) => sales
+    .filter(sale => {
+      const date = calendarDate(saleDate(sale));
+      return date >= start && date <= end;
+    })
     .reduce((sum, sale) => sum + safeNumber(sale.total), 0);
+
+  return {
+    currentTotal: sumPeriod(currentMonthStart, today),
+    previousTotal: sumPeriod(previousMonthStart, previousPeriodEnd),
+    previousPeriodStart: previousMonthStart,
+    previousPeriodEnd,
+  };
+}
+
+function formatComparisonPeriod(start, end) {
+  const year = Number(end.slice(0, 4));
+  const month = Number(end.slice(5, 7));
+  const monthName = new Intl.DateTimeFormat('es-CO', { month: 'short', timeZone: 'UTC' })
+    .format(new Date(Date.UTC(year, month - 1, 1)))
+    .replace(/\.$/, '');
+  return `${Number(start.slice(8, 10))} al ${Number(end.slice(8, 10))} de ${monthName} de ${year}`;
+}
+
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, character => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;',
+  })[character]);
+}
+
+function generateCharts(data = {}) {
+  const today = calendarDate();
+  const sales = normalizeSales(data.sales || data.ventas || []);
+  const stores = data.stores || [];
+  const comparison = monthToDateSalesComparison(sales, today);
+  const storeOptions = stores.map(store => {
+    const id = escapeHtml(store.id);
+    const name = escapeHtml(store.name || store.code || 'Sin local');
+    return `<option value="${id}">${name}</option>`;
+  }).join('');
   const todayRanking = sellerRanking(data, calendarDate()).slice(0, 5);
   const rankingItems = todayRanking.map((item, index) => {
     const medal = ['🥇', '🥈', '🥉'][index] || '✨';
@@ -193,7 +243,7 @@ function generateCharts(data = {}) {
   }).join('');
 
   return `<div class="charts-grid dashboard-charts">
-    <div class="chart-card chart-card-main"><div class="chart-card-heading"><div><span class="chart-kicker">TENDENCIA</span><h3>Ventas del mes</h3></div><div class="chart-main-total"><span>Total del mes</span><strong>${money(monthTotal)}</strong><small>COP</small></div></div><canvas id="salesChart"></canvas></div>
+    <div class="chart-card chart-card-main"><div class="chart-card-heading"><div><span class="chart-kicker">TENDENCIA</span><h3>Ventas del mes</h3><select class="chart-filter" data-main-store-filter aria-label="Filtrar ventas por local"><option value="all">Todos los locales</option>${storeOptions}</select></div><div class="chart-main-total"><div class="chart-main-total-item"><span>Total del mes</span><strong id="mainCurrentMonthTotal">${money(comparison.currentTotal)}</strong><small>COP</small></div><div class="chart-main-total-item chart-main-total-previous"><span>Mismo periodo mes anterior</span><strong id="mainPreviousMonthTotal">${money(comparison.previousTotal)}</strong><small>${formatComparisonPeriod(comparison.previousPeriodStart, comparison.previousPeriodEnd)}</small></div></div></div><canvas id="salesChart"></canvas></div>
     <div class="chart-card chart-card-small dashboard-chart-card">
       <div class="dashboard-card-header">
         <div class="dashboard-card-title-wrap">
@@ -320,24 +370,39 @@ function initCharts(data) {
     const previousMonthDaysInMonth = Number(previousMonthEnd.slice(8, 10));
     const previousMonthStart = shiftCalendarDate(previousMonthEnd, -(previousMonthDaysInMonth - 1));
     const previousMonthDays = currentMonthDays.map((_, i) => shiftCalendarDate(previousMonthStart, Math.min(i, previousMonthDaysInMonth - 1)));
-    const salesByDay = currentMonthDays.map(day => {
-      return data.sales.filter(s => calendarDate(saleDate(s)) === day).reduce((sum,s) => sum + safeNumber(s.total), 0);
+    const allSales = normalizeSales(data.sales || data.ventas || []);
+    const renderMainSalesChart = (store = 'all') => {
+      const selectedSales = filterDashboardSalesByStore(allSales, store, data.stores || []);
+      const salesByDay = currentMonthDays.map(day => selectedSales
+        .filter(sale => calendarDate(saleDate(sale)) === day)
+        .reduce((sum, sale) => sum + safeNumber(sale.total), 0));
+      const salesCountByDay = currentMonthDays.map(day => selectedSales
+        .filter(sale => calendarDate(saleDate(sale)) === day).length);
+      const previousSalesByDay = previousMonthDays.map(day => selectedSales
+        .filter(sale => calendarDate(saleDate(sale)) === day)
+        .reduce((sum, sale) => sum + safeNumber(sale.total), 0));
+      const movingAverage = salesByDay.map((value, index) => {
+        const window = salesByDay.slice(Math.max(0, index - 2), index + 1);
+        return window.reduce((sum, item) => sum + item, 0) / window.length;
+      });
+      createChart('salesChart', { type:'line', data:{ labels:currentMonthDays.map(d => d.slice(5).replace('-', '/')), datasets:[
+        {label:'Ventas actuales',data:salesByDay,borderColor:SALES_COLOR,backgroundColor:'rgba(37, 99, 235, 0.12)',pointBackgroundColor:SALES_COLOR,pointBorderColor:'#FFFFFF',pointBorderWidth:2,pointRadius:4,fill:true,tension:0.35},
+        {label:'Promedio móvil',data:movingAverage,borderColor:'#F59E0B',backgroundColor:'transparent',pointBackgroundColor:'#F59E0B',pointRadius:3,borderWidth:2,borderDash:[6,4],fill:false,tension:0.35},
+        {label:'Periodo anterior',data:previousSalesByDay,borderColor:'#10B981',backgroundColor:'transparent',pointBackgroundColor:'#10B981',pointRadius:3,borderWidth:2,fill:false,tension:0.35},
+        {label:'Transacciones',data:salesCountByDay,yAxisID:'transactions',borderColor:'#06B6D4',backgroundColor:'transparent',pointBackgroundColor:'#06B6D4',pointRadius:3,borderWidth:2,fill:false,tension:0.35}
+      ]}, options:{...baseOptions, scales:{x:{grid:{display:false}},y:{beginAtZero:true,ticks:{callback:value => money(value, true)}},transactions:{position:'right',beginAtZero:true,grid:{drawOnChartArea:false},ticks:{precision:0}}}} });
+      const comparison = monthToDateSalesComparison(selectedSales, today);
+      const currentTotal = document.getElementById('mainCurrentMonthTotal');
+      if (currentTotal) currentTotal.textContent = money(comparison.currentTotal);
+      const previousTotal = document.getElementById('mainPreviousMonthTotal');
+      if (previousTotal) previousTotal.textContent = money(comparison.previousTotal);
+    };
+    renderMainSalesChart();
+    document.querySelector('[data-main-store-filter]')?.addEventListener('change', event => {
+      renderMainSalesChart(event.target.value);
     });
-    const salesCountByDay = currentMonthDays.map(day => data.sales.filter(sale => calendarDate(saleDate(sale)) === day).length);
-    const previousSalesByDay = previousMonthDays.map(day => data.sales.filter(sale => calendarDate(saleDate(sale)) === day).reduce((sum,sale) => sum + safeNumber(sale.total), 0));
-    const movingAverage = salesByDay.map((value,index) => {
-      const window = salesByDay.slice(Math.max(0,index - 2), index + 1);
-      return window.reduce((sum,item) => sum + item, 0) / window.length;
-    });
-    createChart('salesChart', { type:'line', data:{ labels:currentMonthDays.map(d => d.slice(5).replace('-', '/')), datasets:[
-      {label:'Ventas actuales',data:salesByDay,borderColor:SALES_COLOR,backgroundColor:'rgba(37, 99, 235, 0.12)',pointBackgroundColor:SALES_COLOR,pointBorderColor:'#FFFFFF',pointBorderWidth:2,pointRadius:4,fill:true,tension:0.35},
-      {label:'Promedio móvil',data:movingAverage,borderColor:'#F59E0B',backgroundColor:'transparent',pointBackgroundColor:'#F59E0B',pointRadius:3,borderWidth:2,borderDash:[6,4],fill:false,tension:0.35},
-      {label:'Periodo anterior',data:previousSalesByDay,borderColor:'#10B981',backgroundColor:'transparent',pointBackgroundColor:'#10B981',pointRadius:3,borderWidth:2,fill:false,tension:0.35},
-      {label:'Transacciones',data:salesCountByDay,yAxisID:'transactions',borderColor:'#06B6D4',backgroundColor:'transparent',pointBackgroundColor:'#06B6D4',pointRadius:3,borderWidth:2,fill:false,tension:0.35}
-    ]}, options:{...baseOptions, scales:{x:{grid:{display:false}},y:{beginAtZero:true,ticks:{callback:value => money(value, true)}},transactions:{position:'right',beginAtZero:true,grid:{drawOnChartArea:false},ticks:{precision:0}}}} });
 
     const storeLabels = (data.stores || []).map(s => s.name || s.code || 'Sin local');
-    const allSales = data.sales || [];
     const renderRanking = (period, monthMode = false) => {
       const filtered = monthMode
         ? allSales.filter(sale => calendarDate(saleDate(sale)).startsWith(period))
@@ -413,9 +478,11 @@ function initCharts(data) {
 export function renderDashboard(data) {
   const sales = normalizeSales(data.sales || data.ventas || []);
   const today = calendarDate();
-  const month = today.slice(0, 7);
   const todaySales = sales.filter(sale => calendarDate(saleDate(sale)) === today);
-  const monthSales = sales.filter(sale => calendarDate(saleDate(sale)).startsWith(month));
+  const monthSales = sales.filter(sale => {
+    const date = calendarDate(saleDate(sale));
+    return date.startsWith(today.slice(0, 7)) && date <= today;
+  });
   const salesTotal = monthSales.reduce((sum, sale) => sum + safeNumber(sale.total), 0);
   const todayTotal = todaySales.reduce((sum, sale) => sum + safeNumber(sale.total), 0);
   const balance = (data.credits || []).reduce((sum, item) => sum + safeNumber(item.saldo_pendiente ?? Math.max(0, safeNumber(item.total) - safeNumber(item.initial) - safeNumber(item.paid))), 0);
