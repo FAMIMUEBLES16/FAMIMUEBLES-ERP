@@ -56,6 +56,8 @@ let sharedRefreshInFlight = false;
 let sharedRefreshTimer = null;
 let automaticSharedRefreshEnabled = false;
 let automaticRefreshFailureNotified = false;
+const automaticSharedRefreshIntervalMs = 120000;
+let lastAutomaticSharedRefreshAt = 0;
 let inventoryViewState = { store:'all', query:'', active:'active', status:'all', sort:'name', version:0 };
 let creditViewState = { filter:'all', query:'', page:1, pageSize:20, overdueInstallments:[] };
 let apartadoViewState = { filter:'all', query:'', page:1, pageSize:20 };
@@ -363,7 +365,7 @@ function hydrateSecondaryDomainCollections(state, renderWhenLoaded=true, require
 	const secondary=remoteDomainCollections.filter(collection=>!criticalDomainCollections.has(collection)&&!deferredTalonarios.includes(collection)&&!deferredAttendance.includes(collection));
 	return loadDomainCollections(state,secondary,3000,3,0,refreshExisting).then(results=>{
 		if(requireComplete&&results.some(result=>!result))throw new Error('No se pudieron cargar todas las colecciones compartidas.');
-		if(renderWhenLoaded&&currentRoute()!=='dashboard')render();
+		if(renderWhenLoaded&&!['dashboard','gasolina'].includes(currentRoute()))render();
 		return results;
 	});
 }
@@ -443,6 +445,7 @@ async function refreshSharedState(automatic=false){
 		const productFilters=route==='productos' ? {...productViewState} : null;
 		const normalized=await hydrateState();
 		if(!normalized)return false;
+		const fuelRecordsChanged=automatic&&JSON.stringify(previousState?.fuelRecords||previousState?.gasolina||[])!==JSON.stringify(normalized.fuelRecords||normalized.gasolina||[]);
 		if(automatic){
 			for(const collection of [...remoteDomainCollections,'products','stores','sales','inventory','inventoryByStore']){
 				if(Array.isArray(previousState?.[collection]))normalized[collection]=previousState[collection];
@@ -503,6 +506,7 @@ async function refreshSharedState(automatic=false){
 			productPage=Math.max(1,Number(currentFilters.pageSize ? productPage : 1));
 			refreshProducts();
 		} else {
+			if(automatic&&currentRoute()==='gasolina'&&!fuelRecordsChanged)return true;
 			const viewSnapshot=captureViewState();
 			render();
 			restoreViewState(viewSnapshot);
@@ -522,8 +526,11 @@ async function refreshSharedState(automatic=false){
 }
 async function runAutomaticSharedRefresh(){
 	if(!automaticSharedRefreshEnabled || document.hidden || navigator.onLine===false || document.querySelector('.modal-backdrop') || sharedRefreshInFlight)return;
+	if(currentRoute()==='gasolina')return;
+	if(Date.now()-lastAutomaticSharedRefreshAt<automaticSharedRefreshIntervalMs)return;
 	const activeElement=document.activeElement;
 	if(activeElement?.matches('input,select,textarea'))return;
+	lastAutomaticSharedRefreshAt=Date.now();
 	const refreshed=await refreshSharedState(true);
 	if(!refreshed){
 		if(!automaticRefreshFailureNotified){
@@ -541,7 +548,8 @@ async function runAutomaticSharedRefresh(){
 function startAutomaticSharedRefresh(){
 	if(isStaticDeployment() || sharedRefreshTimer)return;
 	automaticSharedRefreshEnabled=true;
-	sharedRefreshTimer=setInterval(runAutomaticSharedRefresh,30000);
+	lastAutomaticSharedRefreshAt=Date.now();
+	sharedRefreshTimer=setInterval(runAutomaticSharedRefresh,automaticSharedRefreshIntervalMs);
 	document.addEventListener('visibilitychange',()=>{
 		if(!document.hidden)runAutomaticSharedRefresh();
 	});
