@@ -422,6 +422,7 @@ def _initialize_postgres_schema() -> _PostgresConnection:
         database.execute("ALTER TABLE gasolina ADD COLUMN IF NOT EXISTS local TEXT NOT NULL DEFAULT ''")
         database.execute("ALTER TABLE gasolina ADD COLUMN IF NOT EXISTS factura TEXT NOT NULL DEFAULT ''")
         database.execute("ALTER TABLE gasolina ADD COLUMN IF NOT EXISTS kilometraje INTEGER NOT NULL DEFAULT 0")
+        database.execute("ALTER TABLE gasolina ADD COLUMN IF NOT EXISTS estacion TEXT NOT NULL DEFAULT ''")
     if database.execute("SELECT to_regclass('public.empleados')").fetchone()[0]:
         database.execute("""
         INSERT INTO auth_users (id, username, password_hash, role, store_id, active, tenant_id, display_name, telegram_id)
@@ -736,13 +737,13 @@ def fuel_record_values(payload: dict, current: dict | None = None) -> dict:
         store_id = str(payload.get("storeId") or "").strip()
     else:
         store_id = str(current.get("storeId") or current.get("local") or "").strip()
-    store_id = ""
     invoice_number = str(payload.get("invoiceNumber", current.get("invoiceNumber", current.get("factura", ""))) or "").strip()
+    station = str(payload.get("station", current.get("station", current.get("estacion", ""))) or "").strip()
     if not date_value or not driver or not vehicle:
         raise ValueError("La gasolina requiere fecha, conductor y vehiculo")
     if mileage < 0 or quantity < 0 or amount <= 0:
         raise ValueError("Kilometraje y galones no pueden ser negativos; el valor debe ser mayor que cero")
-    return {"date": date_value, "driver": driver, "vehicle": vehicle, "mileage": mileage, "quantity": quantity, "amount": amount, "storeId": store_id, "invoiceNumber": invoice_number}
+    return {"date": date_value, "driver": driver, "vehicle": vehicle, "mileage": mileage, "quantity": quantity, "amount": amount, "storeId": store_id, "invoiceNumber": invoice_number, "station": station}
 
 
 def fuel_record_item(row: object) -> dict:
@@ -759,11 +760,17 @@ def fuel_record_item(row: object) -> dict:
         "quantity": float(row["galones"] or 0),
         "unit": "galones",
         "amount": int(row["valor"] or 0),
-        "storeId": "",
+        "storeId": str(row.get("local") or ""),
         "invoiceNumber": str(row["factura"] or ""),
+        "station": str(row.get("estacion") or ""),
         "paymentStatus": "paid" if row.get("paidAtRegistration") is True or str(row.get("paymentStatus") or "").lower() == "paid" else "pending",
         "paidAtRegistration": bool(row.get("paidAtRegistration") is True or str(row.get("paymentStatus") or "").lower() == "paid"),
     }
+
+
+def should_create_fuel_account_payable(payload: dict) -> bool:
+    value = payload.get("createAccountPayable", True)
+    return value is not False and str(value).strip().lower() not in {"false", "0", "no", ""}
 
 
 def pending_fuel_account_records(item: dict) -> tuple[dict, None]:
@@ -780,7 +787,7 @@ def pending_fuel_account_records(item: dict) -> tuple[dict, None]:
         "sourceId": fuel_id,
         "supplierId": supplier_name,
         "supplierName": supplier_name,
-        "storeId": "",
+        "storeId": str(item.get("storeId") or ""),
         "invoiceNumber": invoice_number,
         "description": f"Gasolina {item.get('vehicle') or ''} · {supplier_name}".strip(),
         "issueDate": str(item["date"])[:10],
@@ -811,7 +818,7 @@ def paid_fuel_account_records(item: dict, method: str, user: dict) -> tuple[dict
         "sourceId": fuel_id,
         "supplierId": supplier_name,
         "supplierName": supplier_name,
-        "storeId": "",
+        "storeId": str(item.get("storeId") or ""),
         "invoiceNumber": invoice_number,
         "description": f"Gasolina {item.get('vehicle') or ''} · {supplier_name}".strip(),
         "issueDate": str(item["date"])[:10],
@@ -3001,29 +3008,28 @@ class AppHandler(SimpleHTTPRequestHandler):
                         self.send_json(200, cached)
                         return
                     row = database.execute(
-                        "INSERT INTO gasolina (fecha, conductor, carro, kilometraje, galones, valor, local, factura) VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id, fecha, conductor, carro, kilometraje, galones, valor, local, factura",
-                        (values["date"], values["driver"], values["vehicle"], values["mileage"], values["quantity"], values["amount"], values["storeId"], values["invoiceNumber"]),
+                        "INSERT INTO gasolina (fecha, conductor, carro, kilometraje, galones, valor, local, factura, estacion) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id, fecha, conductor, carro, kilometraje, galones, valor, local, factura, estacion",
+                        (values["date"], values["driver"], values["vehicle"], values["mileage"], values["quantity"], values["amount"], values["storeId"], values["invoiceNumber"], values["station"]),
                     ).fetchone()
                     item = fuel_record_item(row)
                     response = {"ok": True, "id": item["id"], "item": item}
                     current_user = authenticated_user(self)
                     tenant = tenant_id(self, payload)
-                    if payload.get("paidAtRegistration") is True:
-                        account, payment = paid_fuel_account_records(item, payload.get("paymentMethod"), current_user)
-                        for collection, record in (("accountsPayable", account), ("supplierPayments", payment)):
+                    if should_create_fuel_account_payable(payload):
+                        if payload.get("paidAtRegistration") is True:
+                            account, payment = paid_fuel_account_records(item, payload.get("paymentMethod"), current_user)
+                            records = (("accountsPayable", account), ("supplierPayments", payment))
+                        else:
+                            account, _ = pending_fuel_account_records(item)
+                            records = (("accountsPayable", account),)
+                        for collection, record in records:
                             database.execute(
                                 "INSERT INTO domain_records (tenant_id, collection, id, data_json, version) VALUES (?, ?, ?, ?, 1) ON CONFLICT(tenant_id, collection, id) DO UPDATE SET data_json = excluded.data_json, version = domain_records.version + 1, updated_at = CURRENT_TIMESTAMP",
                                 (tenant, collection, record["id"], json.dumps(record, ensure_ascii=False, separators=(",", ":"))),
                             )
                         response["account"] = account
-                        response["payment"] = payment
-                    else:
-                        account, _ = pending_fuel_account_records(item)
-                        database.execute(
-                            "INSERT INTO domain_records (tenant_id, collection, id, data_json, version) VALUES (?, ?, ?, ?, 1) ON CONFLICT(tenant_id, collection, id) DO UPDATE SET data_json = excluded.data_json, version = domain_records.version + 1, updated_at = CURRENT_TIMESTAMP",
-                            (tenant, "accountsPayable", account["id"], json.dumps(account, ensure_ascii=False, separators=(",", ":"))),
-                        )
-                        response["account"] = account
+                        if payload.get("paidAtRegistration") is True:
+                            response["payment"] = payment
                     complete_idempotency(database, self, payload, path, 201, response)
                     database.execute(
                         "INSERT INTO audit_events (user_id, action, collection, record_id, data_json) VALUES (?, ?, ?, ?, ?)",
@@ -3589,14 +3595,37 @@ class AppHandler(SimpleHTTPRequestHandler):
                     self.send_json(404, {"error": "Registro de gasolina no encontrado"})
                     return
                 accounts = database.execute(
-                    "SELECT id, data_json FROM domain_records WHERE tenant_id = ? AND collection = 'accountsPayable'",
+                    "SELECT collection, id, data_json FROM domain_records WHERE tenant_id = ? AND collection IN ('accountsPayable', 'accounts-payable') FOR UPDATE",
                     (tenant_id(self),),
                 ).fetchall()
-                linked_account = next((item for item in accounts if str(json.loads(item["data_json"] or "{}").get("fuelRecordId") or "") == str(fuel_id)), None)
-                if linked_account:
-                    self.send_json(409, {"error": "No se puede eliminar: este consumo tiene una cuenta por pagar vinculada."})
-                    return
+                linked_accounts = []
+                for account_row in accounts:
+                    account = json.loads(account_row["data_json"] or "{}")
+                    if str(account.get("fuelRecordId") or "") != str(fuel_id):
+                        continue
+                    paid_amount = float(account.get("paidAmount", account.get("paid", 0)) or 0)
+                    payments = database.execute(
+                        "SELECT data_json FROM domain_records WHERE tenant_id = ? AND collection IN ('supplierPayments', 'supplier-payments')",
+                        (tenant_id(self),),
+                    ).fetchall()
+                    has_payments = any(
+                        str(json.loads(payment_row["data_json"] or "{}").get("accountId") or "") == str(account_row["id"])
+                        for payment_row in payments
+                    )
+                    if paid_amount > 0 or has_payments:
+                        self.send_json(409, {"error": "No se puede eliminar la gasolina: la cuenta por pagar vinculada tiene pagos registrados."})
+                        return
+                    linked_accounts.append(account_row)
                 item = fuel_record_item(row)
+                for account_row in linked_accounts:
+                    database.execute(
+                        "DELETE FROM domain_records WHERE tenant_id = ? AND collection = ? AND id = ?",
+                        (tenant_id(self), account_row["collection"], account_row["id"]),
+                    )
+                    database.execute(
+                        "INSERT INTO audit_events (user_id, action, collection, record_id, data_json) VALUES (?, ?, ?, ?, ?)",
+                        (current_user["id"], "DELETE", account_row["collection"], account_row["id"], account_row["data_json"] or "{}"),
+                    )
                 database.execute("DELETE FROM gasolina WHERE id = %s", (fuel_id,))
                 database.execute(
                     "INSERT INTO audit_events (user_id, action, collection, record_id, data_json) VALUES (?, ?, ?, ?, ?)",
@@ -3866,8 +3895,8 @@ class AppHandler(SimpleHTTPRequestHandler):
                     payment_status = str(payload.get("paymentStatus") or payload.get("status") or "").strip().lower()
                     paid_flag = bool(payload.get("paidAtRegistration") is True or payment_status == "paid")
                     row = database.execute(
-                        "UPDATE gasolina SET fecha = %s, conductor = %s, local = %s, factura = %s WHERE id = %s RETURNING id, fecha, conductor, carro, kilometraje, galones, valor, local, factura",
-                        (values["date"], values["driver"], values["storeId"], values["invoiceNumber"], fuel_id),
+                        "UPDATE gasolina SET fecha = %s, conductor = %s, local = %s, factura = %s, estacion = %s WHERE id = %s RETURNING id, fecha, conductor, carro, kilometraje, galones, valor, local, factura, estacion",
+                        (values["date"], values["driver"], values["storeId"], values["invoiceNumber"], values["station"], fuel_id),
                     ).fetchone()
                     item = fuel_record_item(row)
                     if paid_flag:
