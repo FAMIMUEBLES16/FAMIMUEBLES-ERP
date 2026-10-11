@@ -668,9 +668,13 @@ html, body { background: var(--fm-background); color: var(--fm-text); }
 .chart-card-heading { display:flex; align-items:start; justify-content:space-between; gap:12px; }
 .chart-kicker { display:block; color:var(--fm-primary); font-size:9px; font-weight:800; letter-spacing:1.4px; }
 .chart-unit { color:var(--fm-text-muted); font-size:10px; font-weight:800; letter-spacing:1px; }
-.chart-main-total { display:grid; justify-items:end; gap:2px; color:var(--fm-text-muted); font-size:10px; }
+.chart-main-total { display:flex; align-items:stretch; gap:12px; color:var(--fm-text-muted); font-size:10px; }
+.chart-main-total-item { display:grid; align-content:start; justify-items:end; gap:2px; text-align:right; }
+.chart-main-total-item > span { max-width:130px; }
+.chart-main-total-previous { padding-left:12px; border-left:1px solid var(--fm-border); }
 .chart-main-total strong { color:var(--fm-text); font-size:15px; font-weight:700; }
 .chart-main-total small { color:var(--fm-text-muted); font-size:9px; font-weight:700; }
+.chart-main-total .chart-main-total-previous strong { color:var(--fm-text-secondary); font-size:12px; }
 .chart-card h3, .panel h3 { color: var(--fm-text); }
 .chart-card canvas { margin-top: 14px; }
 .dashboard-lower-grid { gap: 14px; margin-bottom: 16px; }

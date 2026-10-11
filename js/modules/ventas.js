@@ -1,4 +1,4 @@
-import { money, page, table, badge } from '../components/tables.js';
+import { money, page, table, badge, recordSummary } from '../components/tables.js?v=20261010-record-summary-v1';
 
 function parseRemoteRow(item = {}) {
   const raw = item?.data_json;
@@ -157,7 +157,7 @@ export function salesTable(data, sales = normalizeSales(data.sales || data.venta
 
 export function salesSummary(sales) {
   const total = sales.reduce((sum, sale) => sum + Number(sale.total || 0), 0);
-  return `<div class="record-summary"><strong class="record-summary-count">${sales.length}</strong><div><h3>Resumen de ventas</h3><p>Valor: ${money(total)}</p></div></div>`;
+  return recordSummary(sales.length, 'Resumen de ventas', total);
 }
 
 export function renderVentas(data) {

@@ -11,7 +11,7 @@ import { navItems, navGroups } from './components/sidebar.js?v=23';
 import { showToast } from './components/toast.js';
 import { table } from './components/tables.js';
 import { renderNotifications } from './components/notifications.js';
-import { renderDashboard } from './modules/dashboard-v3.js?v=20261007101229-ranking-today-v1';
+import { renderDashboard } from './modules/dashboard-v3.js?v=20261010-dashboard-store-filter-v1';
 import { canonicalSellerName, renderVentas, salesTable, salesSummary, normalizeSales, salesMonthKey, saleTimestamp, filterSales, salesPaymentMethods, findMatchingSaleCustomer } from './modules/ventas.js?v=28';
 import { renderFacturacion, cartTotal, productResults, customerResults } from './modules/facturacion.js?v=23';
 import { renderProductos, productTable, productMatches } from './modules/productos.js?v=22';
@@ -19,7 +19,7 @@ import { renderInventario, inventoryContent } from './modules/inventario.js?v=20
 import { renderTraslados, transferModal, transferTable } from './modules/traslados.js?v=20';
 import { inventoryEntry, ensureInventoryEntry } from './utils/inventory.js?v=19';
 import { renderClientes, customerTable } from './modules/clientes.js?v=20';
-import { renderCreditos, creditPendingBalance, filterDuplicateHistoricalCredits, normalizeCredit, paymentsForCredit } from './modules/creditos.js?v=31';
+import { renderCreditos, creditPendingBalance, filterDuplicateHistoricalCredits, normalizeCredit, paymentsForCredit } from './modules/creditos.js?v=20261010-finance-summary-v1';
 import { renderCartera } from './modules/cartera.js?v=25';
 import { renderLocales } from './modules/locales.js?v=19';
 import { renderReportes, renderReportPreview, reportDefinition } from './modules/reportes.js?v=20';
@@ -44,7 +44,7 @@ import { renderProveedores, supplierTable } from './modules/proveedores.js?v=15'
 import { renderCompras, purchaseTable, purchaseSummary } from './modules/compras.js?v=22';
 import { purchaseTotal, createPurchase, orderPurchase, receivePurchase, receiveTalonarioPurchase, cancelPurchase } from './services/purchase-service.js?v=16';
 import { purchaseDetail } from './modules/purchase-detail.js?v=16';
-import { renderCuentasPorPagar, payableTable } from './modules/cuentas-por-pagar.js?v=20261004-payable-supplier-filter-1';
+import { renderCuentasPorPagar, payableTable, payableSummary } from './modules/cuentas-por-pagar.js?v=20261010-payables-summary-v1';
 import { accountsPayableDetail } from './modules/accounts-payable-detail.js?v=14';
 import { calculateBalance, filterAccountsPayable, normalizePayableSuppliers, registerPayment as registerSupplierPayment, updateAccountPayableStatus } from './services/accounts-payable-service.js?v=20261004-payable-supplier-filter-1';
 import { renderOperaciones, advancedModal, nextAdvancedId } from './modules/operaciones.js?v=2';
@@ -1000,7 +1000,7 @@ document.addEventListener('input',event=>{if(event.target.matches('[data-filter=
 document.addEventListener('change',event=>{if(event.target.matches('[data-purchase-supplier],[data-purchase-store],[data-purchase-status]'))filterSharedPurchases();});
 document.addEventListener('input',event=>{if(event.target.matches('[data-filter="payables"]'))filterPayables();});
 document.addEventListener('change',event=>{if(event.target.matches('[data-payable-status],[data-payable-supplier]'))filterPayables();});
-function filterPayables(){const query=$('[data-filter="payables"]')?.value||'',status=$('[data-payable-status]')?.value||'all',supplierId=$('[data-payable-supplier]')?.value||'all';const matches=filterAccountsPayable(store.collection,{query,status,supplierId});if($('#payables-table'))$('#payables-table').innerHTML=payableTable(store.collection,matches);}
+function filterPayables(){const query=$('[data-filter="payables"]')?.value||'',status=$('[data-payable-status]')?.value||'all',supplierId=$('[data-payable-supplier]')?.value||'all';const matches=filterAccountsPayable(store.collection,{query,status,supplierId});if($('[data-payables-summary]'))$('[data-payables-summary]').innerHTML=payableSummary(matches);if($('#payables-table'))$('#payables-table').innerHTML=payableTable(store.collection,matches);}
 function applySalesFilters(){
 	const allSales=normalizeSales(store.collection.sales||store.collection.ventas||[]);
 	const sales=filterSales(allSales,{...salesViewState,stores:store.collection.stores}).sort((left,right)=>{
