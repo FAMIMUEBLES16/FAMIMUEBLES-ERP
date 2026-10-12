@@ -353,6 +353,7 @@ class BackendSafetyTests(unittest.TestCase):
             "amount": "89000",
             "storeId": "LOC-1",
             "invoiceNumber": "FAC-001",
+            "station": "Estacion Central",
         })
 
         self.assertEqual(values, {
@@ -362,8 +363,9 @@ class BackendSafetyTests(unittest.TestCase):
             "mileage": 123,
             "quantity": 4.5,
             "amount": 89000,
-            "storeId": "",
+            "storeId": "LOC-1",
             "invoiceNumber": "FAC-001",
+            "station": "Estacion Central",
         })
         item = server.fuel_record_item({
             "id": 42,
@@ -375,8 +377,11 @@ class BackendSafetyTests(unittest.TestCase):
             "valor": 89000,
             "local": "LOC-1",
             "factura": "FAC-001",
+            "estacion": "Estacion Central",
         })
         self.assertEqual(item["invoiceNumber"], "FAC-001")
+        self.assertEqual(item["storeId"], "LOC-1")
+        self.assertEqual(item["station"], "Estacion Central")
 
     def test_paid_fuel_account_records_marks_paid_state_and_registers_payment(self):
         account, payment = server.paid_fuel_account_records({
@@ -392,7 +397,7 @@ class BackendSafetyTests(unittest.TestCase):
         self.assertEqual(account["status"], "PAGADA")
         self.assertEqual(account["paidAmount"], 125000)
         self.assertEqual(account["balance"], 0)
-        self.assertEqual(account["storeId"], "")
+        self.assertEqual(account["storeId"], "LOC-1")
         self.assertEqual(payment["accountId"], account["id"])
         self.assertEqual(payment["method"], "TARJETA")
         self.assertEqual(payment["reference"], "FAC-042")
@@ -411,8 +416,28 @@ class BackendSafetyTests(unittest.TestCase):
         self.assertEqual(account["status"], "PENDIENTE")
         self.assertEqual(account["paidAmount"], 0)
         self.assertEqual(account["balance"], 98000)
-        self.assertEqual(account["storeId"], "")
+        self.assertEqual(account["storeId"], "LOC-2")
         self.assertIsNone(payment)
+
+    def test_fuel_account_payable_option_defaults_to_enabled_and_can_be_disabled(self):
+        self.assertTrue(server.should_create_fuel_account_payable({}))
+        self.assertTrue(server.should_create_fuel_account_payable({"createAccountPayable": True}))
+        self.assertFalse(server.should_create_fuel_account_payable({"createAccountPayable": False}))
+
+    def test_fuel_record_values_preserve_store_and_station(self):
+        values = server.fuel_record_values({
+            "date": "2026-10-11",
+            "driver": "Ana",
+            "vehicle": "Van",
+            "mileage": 125,
+            "quantity": 5,
+            "amount": 90000,
+            "storeId": "LOC-1",
+            "station": "Estacion Central",
+        })
+
+        self.assertEqual(values["storeId"], "LOC-1")
+        self.assertEqual(values["station"], "Estacion Central")
 
     def test_fuel_record_crud_uses_gasoline_permissions(self):
         self.assertEqual(server.permission_target("/api/parity/gasolina", "POST"), ("Gasolina", "create"))
@@ -486,7 +511,7 @@ class BackendSafetyTests(unittest.TestCase):
         self.assertEqual(handler.response[0], 200)
         self.assertTrue(database.deleted)
 
-    def test_delete_fuel_route_rejects_records_linked_to_payables(self):
+    def test_delete_fuel_route_deletes_unpaid_linked_payable_with_fuel(self):
         class FakeResult:
             def __init__(self, row=None, rows=None):
                 self.row = row
@@ -501,6 +526,7 @@ class BackendSafetyTests(unittest.TestCase):
         class FakeDatabase:
             def __init__(self):
                 self.deleted = False
+                self.deleted_accounts = []
 
             def __enter__(self):
                 return self
@@ -511,8 +537,63 @@ class BackendSafetyTests(unittest.TestCase):
             def execute(self, query, params=()):
                 if "SELECT * FROM gasolina" in query:
                     return FakeResult({"id": 42, "fecha": "2026-09-28", "conductor": "Ana", "carro": "Van", "kilometraje": 123, "galones": 4.5, "valor": 89000, "local": "LOC-1", "factura": "FAC-001"})
-                if "SELECT id, data_json FROM domain_records" in query:
-                    return FakeResult(rows=[{"id": "CXP-GAS-42", "data_json": json.dumps({"fuelRecordId": "42"})}])
+                if "SELECT collection, id, data_json FROM domain_records" in query:
+                    return FakeResult(rows=[{"collection": "accountsPayable", "id": "CXP-GAS-42", "data_json": json.dumps({"fuelRecordId": "42", "paidAmount": 0})}])
+                if "SELECT data_json FROM domain_records" in query:
+                    return FakeResult(rows=[])
+                if "DELETE FROM domain_records" in query:
+                    self.deleted_accounts.append(params[2])
+                if "DELETE FROM gasolina" in query:
+                    self.deleted = True
+                return FakeResult()
+
+        class FakeHandler:
+            path = "/api/parity/gasolina/42"
+            headers = {}
+
+            def send_json(self, status, payload):
+                self.response = (status, payload)
+
+        database = FakeDatabase()
+        handler = FakeHandler()
+        with patch.object(server, "authenticated_user", return_value={"id": "USR-1"}), \
+             patch.object(server, "requested_tenant_allowed", return_value=True), \
+             patch.object(server, "can_access", return_value=True), \
+             patch.object(server, "_postgres_enabled", return_value=True), \
+             patch.object(server, "connection", return_value=database), \
+             patch.object(server, "tenant_id", return_value="tenant-default"):
+            server.AppHandler.do_DELETE(handler)
+
+        self.assertEqual(handler.response[0], 200)
+        self.assertTrue(database.deleted)
+        self.assertEqual(database.deleted_accounts, ["CXP-GAS-42"])
+
+    def test_delete_fuel_route_protects_linked_payable_with_payments(self):
+        class FakeResult:
+            def __init__(self, row=None, rows=None):
+                self.row = row
+                self.rows = rows or []
+
+            def fetchone(self):
+                return self.row
+
+            def fetchall(self):
+                return self.rows
+
+        class FakeDatabase:
+            deleted = False
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def execute(self, query, params=()):
+                if "SELECT * FROM gasolina" in query:
+                    return FakeResult({"id": 42, "fecha": "2026-09-28", "conductor": "Ana", "carro": "Van", "kilometraje": 123, "galones": 4.5, "valor": 89000, "local": "LOC-1", "factura": "FAC-001"})
+                if "SELECT collection, id, data_json FROM domain_records" in query:
+                    return FakeResult(rows=[{"collection": "accountsPayable", "id": "CXP-GAS-42", "data_json": json.dumps({"fuelRecordId": "42", "paidAmount": 1000})}])
                 if "DELETE FROM gasolina" in query:
                     self.deleted = True
                 return FakeResult()

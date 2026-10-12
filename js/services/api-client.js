@@ -1,6 +1,12 @@
 import { API_BASE_URL } from '../config.js?v=20261007101229';
 
 const REQUEST_TIMEOUT_MS = 15000;
+const NETWORK_RETRY_DELAYS_MS = [400, 1000];
+
+function canRetryRequest(path, method) {
+  return ['GET', 'HEAD', 'OPTIONS'].includes(method) ||
+    (method === 'POST' && /\/auth\/login\/?$/.test(String(path).split('?')[0]));
+}
 
 function buildUrl(path) {
   if (/^https?:\/\//i.test(path)) return path;
@@ -47,13 +53,21 @@ export async function apiRequest(path, options = {}) {
   const tenantId = localStorage.getItem('famimuebles-tenant-id') || 'tenant-default';
   headers['X-Tenant-ID'] = String(options.headers?.['X-Tenant-ID'] || tenantId).trim() || 'tenant-default';
   const cacheMode = options.cache || (method === 'GET' ? 'default' : 'no-store');
+  const retryDelays = canRetryRequest(path, method) ? NETWORK_RETRY_DELAYS_MS : [];
   try {
-    const response = await fetch(buildUrl(path), { ...options, headers, cache: cacheMode, signal: controller.signal });
-    return await parseResponse(response);
-  } catch (error) {
-    if (error.name === 'AbortError') throw new ApiError('El servidor FAMIMUEBLES tardo demasiado en responder.', 0, 'TIMEOUT');
-    if (error instanceof ApiError) throw error;
-    throw new ApiError('Servidor FAMIMUEBLES no disponible. Verifica la conexion e intenta nuevamente.', 0, 'NETWORK_ERROR');
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const response = await fetch(buildUrl(path), { ...options, headers, cache: cacheMode, signal: controller.signal });
+        return await parseResponse(response);
+      } catch (error) {
+        if (error.name === 'AbortError') throw new ApiError('El servidor FAMIMUEBLES tardo demasiado en responder.', 0, 'TIMEOUT');
+        if (error instanceof ApiError) throw error;
+        if (attempt >= retryDelays.length) {
+          throw new ApiError('Servidor FAMIMUEBLES no disponible. Verifica la conexion e intenta nuevamente.', 0, 'NETWORK_ERROR');
+        }
+        await new Promise(resolve => setTimeout(resolve, retryDelays[attempt]));
+      }
+    }
   } finally {
     clearTimeout(timeout);
   }

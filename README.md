@@ -6,14 +6,14 @@ Frontend empresarial de demostracion para ventas, facturacion, productos, invent
 
 Requiere Python 3.8 o superior y PostgreSQL 14 o superior. El frontend local usa `http://127.0.0.1:8024`; ejecuta `.venv\Scripts\python.exe server.py` desde esta carpeta. PostgreSQL es el unico backend soportado.
 
-Para registrar el arranque automatico al iniciar sesion en Windows, ejecuta una vez PowerShell como el usuario que usara el ERP:
+Para registrar el arranque automatico al iniciar sesion y al encender Windows, ejecuta una vez PowerShell como el usuario que usara el ERP:
 
 ```powershell
 Set-ExecutionPolicy -Scope Process Bypass
 .\install-erp-autostart.ps1
 ```
 
-La tarea `FAMIMUEBLES ERP Server` reinicia el servidor si PostgreSQL aun no esta listo o si el proceso se detiene. El log queda en `logs\server-autostart.log`.
+La tarea `FAMIMUEBLES ERP Server` reinicia el servidor si PostgreSQL aun no esta listo o si el proceso se detiene; usa ambos disparadores `AtStartup` y `AtLogOn`. El log queda en `logs\server-autostart.log`.
 
 El acceso publico usa `https://crouch-untitled-harness.ngrok-free.dev`. El dominio solo responde cuando ngrok esta instalado, autenticado con tu cuenta y ejecutando `start-erp-ngrok.cmd`; ese tunel publica el backend local en el puerto `8024`.
 

@@ -8,6 +8,9 @@
 .sistecredito-summary > div > strong { font:600 16px 'Space Grotesk'; }
 .sistecredito-summary > div > span { margin-top:4px; color:var(--muted); font-size:14px; }
 .report-generate { min-height:42px; white-space:nowrap; }
+.report-handover-fields { display:grid; grid-template-columns:repeat(2, minmax(180px, 1fr)); gap:10px; margin-top:14px; }
+.report-handover-fields[hidden] { display:none; }
+.report-handover-fields .input-label { min-width:0; margin:0; }
 .report-preview { margin-top:18px; }
 .report-preview .table-wrap { margin-top:0; overflow:auto; }
 .report-preview table { min-width:760px; }
@@ -20,10 +23,12 @@
 .parity-report-result .quick-actions { display:flex; flex-wrap:wrap; gap:6px; margin:0 0 0 auto; }
 @media (max-width: 900px) {
   .parity-filters, .report-filter-row { grid-template-columns:repeat(2, minmax(140px, 1fr)); }
+  .report-handover-fields { grid-template-columns:repeat(2, minmax(140px, 1fr)); }
   .report-generate { width:100%; }
 }
 @media (max-width: 600px) {
   .parity-filters, .report-filter-row { grid-template-columns:1fr; }
+  .report-handover-fields { grid-template-columns:1fr; }
   .parity-report-result .panel-head { align-items:flex-start; flex-direction:column; }
   .parity-report-result .quick-actions { margin:0; }
 }

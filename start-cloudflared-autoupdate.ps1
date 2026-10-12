@@ -18,7 +18,12 @@ if ([string]::IsNullOrWhiteSpace($token)) {
 }
 
 $null = New-Item -ItemType Directory -Path (Split-Path $logPath) -Force
-Remove-Item $logPath, $errorLogPath -Force -ErrorAction SilentlyContinue
+$runStamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+foreach ($existingLog in @($logPath, $errorLogPath)) {
+    if (Test-Path $existingLog) {
+        Move-Item -LiteralPath $existingLog -Destination "$existingLog.$runStamp"
+    }
+}
 $originReady = $false
 for ($attempt = 0; $attempt -lt 60 -and -not $originReady; $attempt++) {
     try {
@@ -33,7 +38,7 @@ if (-not $originReady) {
     throw 'El servidor ERP no respondio en http://127.0.0.1:8024.'
 }
 $process = Start-Process -FilePath $cloudflared -ArgumentList @('tunnel', '--protocol', 'http2', '--url', 'http://127.0.0.1:8024') -WorkingDirectory $root -RedirectStandardOutput $logPath -RedirectStandardError $errorLogPath -WindowStyle Hidden -PassThru
-$pattern = 'https://[a-z0-9-]+\.trycloudflare\.com'
+$pattern = 'https://(?!api\.trycloudflare\.com)[a-z0-9-]+\.trycloudflare\.com'
 $tunnelUrl = $null
 for ($attempt = 0; $attempt -lt 60 -and -not $tunnelUrl; $attempt++) {
     if ($process.HasExited) { break }
@@ -68,23 +73,6 @@ $configText = [IO.File]::ReadAllText($localConfigPath)
 $configText = [regex]::Replace($configText, "const PUBLIC_API_URL = '[^']*';", "const PUBLIC_API_URL = '$tunnelUrl/api';")
 [IO.File]::WriteAllText($localConfigPath, $configText, [Text.UTF8Encoding]::new($false))
 
-$cacheVersion = Get-Date -Format 'yyyyMMddHHmmss'
-$cacheFiles = @(
-    @{ Path = 'index.html'; Text = [IO.File]::ReadAllText((Join-Path $root 'index.html')) },
-    @{ Path = 'service-worker.js'; Text = [IO.File]::ReadAllText((Join-Path $root 'service-worker.js')) },
-    @{ Path = 'js/services/api-client.js'; Text = [IO.File]::ReadAllText((Join-Path $root 'js/services/api-client.js')) },
-    @{ Path = 'js/data/storage.js'; Text = [IO.File]::ReadAllText((Join-Path $root 'js/data/storage.js')) }
-)
-$cacheFiles[0].Text = [regex]::Replace($cacheFiles[0].Text, 'service-worker\.js\?v=\d+', "service-worker.js?v=$cacheVersion")
-$cacheFiles[1].Text = [regex]::Replace($cacheFiles[1].Text, "famimuebles-erp-v\d+", "famimuebles-erp-v$cacheVersion")
-$cacheFiles[1].Text = [regex]::Replace($cacheFiles[1].Text, 'config\.js\?v=\d+', "config.js?v=$cacheVersion")
-$cacheFiles[1].Text = [regex]::Replace($cacheFiles[1].Text, 'api-client\.js\?v=\d+', "api-client.js?v=$cacheVersion")
-$cacheFiles[2].Text = [regex]::Replace($cacheFiles[2].Text, 'config\.js\?v=\d+', "config.js?v=$cacheVersion")
-$cacheFiles[3].Text = [regex]::Replace($cacheFiles[3].Text, 'config\.js\?v=\d+', "config.js?v=$cacheVersion")
-foreach ($file in $cacheFiles) {
-    [IO.File]::WriteAllText((Join-Path $root $file.Path), $file.Text, [Text.UTF8Encoding]::new($false))
-}
-
 function Publish-GitHubFile($path, $text, $message) {
     $apiUrl = "$apiRoot$path"
     $remote = Invoke-RestMethod -Headers $headers -Uri $apiUrl -TimeoutSec 20
@@ -95,8 +83,5 @@ function Publish-GitHubFile($path, $text, $message) {
 
 Publish-GitHubFile 'tunnel-url.json' $document "Actualizar URL del tunel: $tunnelUrl"
 Publish-GitHubFile 'js/config.js' $configText "Actualizar API publica del tunel: $tunnelUrl"
-foreach ($file in $cacheFiles) {
-    Publish-GitHubFile $file.Path $file.Text "Invalidar cache tras actualizar el tunel"
-}
 
 $process.WaitForExit()
