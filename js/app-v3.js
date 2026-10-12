@@ -13,7 +13,7 @@ import { table } from './components/tables.js';
 import { renderNotifications } from './components/notifications.js';
 import { renderDashboard } from './modules/dashboard-v3.js?v=20261010-dashboard-store-filter-v1';
 import { canonicalSellerName, renderVentas, salesTable, salesSummary, normalizeSales, salesMonthKey, saleTimestamp, filterSales, salesPaymentMethods, findMatchingSaleCustomer } from './modules/ventas.js?v=28';
-import { renderFacturacion, cartTotal, productResults, customerResults } from './modules/facturacion.js?v=23';
+import { renderFacturacion, cartTotal, productResults, customerResults } from './modules/facturacion.js?v=24';
 import { renderProductos, productTable, productMatches } from './modules/productos.js?v=22';
 import { renderInventario, inventoryContent } from './modules/inventario.js?v=20';
 import { renderTraslados, transferModal, transferTable } from './modules/traslados.js?v=20';
@@ -1697,6 +1697,18 @@ function openCreditScheduleEditModal(id){
 }
 function openCreditEditModal(id){return openCreditScheduleEditModal(id);}
 boot();
+
+document.addEventListener('click',event=>{
+	const result=event.target.closest('.customer-result[data-customer-id]');
+	if(!result)return;
+	event.stopPropagation();
+	state.customerId=result.dataset.customerId;
+	const selected=store.collection.customers.find(customer=>String(customer.id)===String(state.customerId));
+	const search=$('#customer-search');
+	const results=$('#customer-results');
+	if(search)search.value='';
+	if(selected&&results)results.innerHTML=customerResults([selected],state.customerId);
+},true);
 
 document.addEventListener('click',event=>{const action=event.target.closest('[data-action]')?.dataset.action;if(action==='new-external-payable'){event.preventDefault();event.stopImmediatePropagation();externalPayableModalV2();}if(action==='supplier-payment'){event.preventDefault();event.stopImmediatePropagation();supplierPaymentModal();}},true);
 
