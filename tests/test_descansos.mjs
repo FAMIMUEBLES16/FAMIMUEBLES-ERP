@@ -14,8 +14,12 @@ const html = renderDescansos({
     { id: '789012', nombre: 'Administrador', role: 'ADMINISTRADOR' },
   ],
 });
+const today = new Date();
+const todayDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
 
 assert.match(html, /Vendedores vinculados<\/h3><span class="muted">2 activos<\/span>/);
 assert.match(html, /Vendedor activo/);
 assert.match(html, /Activo por estado/);
 assert.doesNotMatch(html, /Desactivado por estado|Desactivada por flag|Inactivo por flag|No activo por flag|Administrador/);
+assert.match(html, new RegExp(`class="attendance-day today" data-action="attendance-new-absence" data-date="${todayDate}" aria-current="date" aria-label="Hoy, registrar ausencia el ${todayDate}"`));
+assert.match(html, new RegExp(`<span class="attendance-day-number">${today.getDate()}</span><span class="attendance-day-today-label">Hoy</span>`));

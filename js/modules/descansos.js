@@ -146,7 +146,9 @@ function renderCalendar(absences) {
       return `<span class="attendance-event ${illness ? 'illness' : ''}" title="${escapeHtml(name)}">${escapeHtml(name)} · ${illness ? 'Enfermedad' : 'Descanso'}</span>`;
     }).join('');
     const extra = events.length > 3 ? `<span class="muted">+${events.length - 3} mas</span>` : '';
-    cells.push(`<button type="button" class="attendance-day ${outside ? 'outside-month' : ''} ${date === today ? 'today' : ''}" data-action="attendance-new-absence" data-date="${date}" aria-label="Registrar ausencia el ${date}"><span class="attendance-day-number">${day}</span>${eventMarkup}${extra}</button>`);
+    const isToday = date === today;
+    const classes = ['attendance-day', outside && 'outside-month', isToday && 'today'].filter(Boolean).join(' ');
+    cells.push(`<button type="button" class="${classes}" data-action="attendance-new-absence" data-date="${date}"${isToday ? ' aria-current="date"' : ''} aria-label="${isToday ? 'Hoy, ' : ''}registrar ausencia el ${date}"><span class="attendance-day-number">${day}</span>${isToday ? '<span class="attendance-day-today-label">Hoy</span>' : ''}${eventMarkup}${extra}</button>`);
   }
   const headers = weekdays.map(day => `<div class="attendance-weekday">${day}</div>`).join('');
   return `<div class="attendance-calendar-scroll"><div class="attendance-calendar">${headers}${cells.join('')}</div></div>`;
