@@ -7,10 +7,10 @@
 .attendance-day { display:grid;align-content:start;gap:4px;min-height:96px;padding:7px;border:0;border-right:1px solid var(--line);border-bottom:1px solid var(--line);background:var(--surface);color:var(--ink);text-align:left; }
 .attendance-day:hover,.attendance-day:focus-visible { background:#eef6f8;outline:2px solid #3d88a9;outline-offset:-2px; }
 .attendance-day.outside-month { background:#f6f8f9;color:#86939b; }
-.attendance-day.today { background:#e7f4ef;box-shadow:inset 0 0 0 2px #16836b; }
-.attendance-day.today:hover,.attendance-day.today:focus-visible { background:#d9eee6; }
-.attendance-day.today .attendance-day-number { display:inline-flex;align-items:center;justify-content:center;min-width:25px;height:25px;border-radius:50%;background:#0c6b58;color:#fff;font-weight:800; }
-.attendance-day-today-label { width:max-content;padding:2px 5px;border-radius:999px;background:#d1e9df;color:#0c6b58;font-size:9px;font-weight:800;line-height:1.2;text-transform:uppercase; }
+.attendance-day.today { background:#eff6ff;box-shadow:inset 0 0 0 2px #2563eb; }
+.attendance-day.today:hover,.attendance-day.today:focus-visible { background:#dbeafe; }
+.attendance-day.today .attendance-day-number { display:inline-flex;align-items:center;justify-content:center;min-width:25px;height:25px;border-radius:50%;background:#1f5fe7;color:#fff;font-weight:800; }
+.attendance-day-today-label { width:max-content;padding:2px 5px;border-radius:999px;background:#dbeafe;color:#1d4ed8;font-size:9px;font-weight:800;line-height:1.2;text-transform:uppercase; }
 .attendance-day-number { font:600 13px 'Space Grotesk'; }
 .attendance-event { display:block;overflow:hidden;padding:3px 5px;border-left:3px solid #15866c;background:#e4f4ed;color:#176448;font-size:10px;text-overflow:ellipsis;white-space:nowrap; }
 .attendance-event.illness { border-left-color:#b42318;background:#fce9e7;color:#8f2119; }
