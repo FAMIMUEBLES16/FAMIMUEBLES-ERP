@@ -398,7 +398,7 @@ function hydrateSecondaryDomainCollections(state, renderWhenLoaded=true, require
 	const deferredTalonarios=['talonarios','talonarioJustifications'];
 	const deferredAttendance=['workSchedules','staffAbsences'];
 	const secondary=remoteDomainCollections.filter(collection=>!criticalDomainCollections.has(collection)&&!deferredTalonarios.includes(collection)&&!deferredAttendance.includes(collection));
-	return loadDomainCollections(state,secondary,10000,3,0,refreshExisting).then(results=>{
+	return loadDomainCollections(state,secondary,30000,3,0,refreshExisting).then(results=>{
 		if(requireComplete&&results.some(result=>!result))throw new Error('No se pudieron cargar todas las colecciones compartidas.');
 		if(renderWhenLoaded&&!['dashboard','gasolina'].includes(currentRoute()))render();
 		return results;
