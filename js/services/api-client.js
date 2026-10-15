@@ -1,6 +1,6 @@
 import { API_BASE_URL } from '../config.js?v=20261007101229';
 
-const REQUEST_TIMEOUT_MS = 15000;
+const REQUEST_TIMEOUT_MS = 30000;
 const NETWORK_RETRY_DELAYS_MS = [400, 1000];
 
 function canRetryRequest(path, method) {

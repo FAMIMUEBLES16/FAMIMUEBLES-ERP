@@ -1,6 +1,6 @@
 import { createAccountPayable } from '../services/accounts-payable-service.js?v=14';
 import { demoState } from './demo-data.js';
-import { api } from '../services/api-client.js?v=20261012-api-tunnel-recovery-v1';
+import { api } from '../services/api-client.js?v=20261015-large-state-timeout-v1';
 import { API_BASE_URL } from '../config.js?v=20261007101229';
 
 export const TENANT_STORAGE_KEY = 'famimuebles-tenant-id';

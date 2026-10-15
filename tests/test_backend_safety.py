@@ -1,4 +1,5 @@
 import io
+import gzip
 import json
 import unittest
 import zipfile
@@ -10,6 +11,25 @@ from server import _create_shared_sale, _shared_domain_items, canonical_request_
 
 
 class BackendSafetyTests(unittest.TestCase):
+    def test_json_responses_use_gzip_when_accepted_and_payload_is_large(self):
+        payload = {"data": "inventario," * 500}
+
+        body, compressed = server._json_response_body(payload, "br, gzip")
+
+        self.assertTrue(compressed)
+        self.assertEqual(json.loads(gzip.decompress(body)), payload)
+
+    def test_json_responses_respect_gzip_quality_and_small_payloads(self):
+        payload = {"data": "inventario," * 500}
+
+        body, compressed = server._json_response_body(payload, "gzip;q=0")
+        self.assertFalse(compressed)
+        self.assertEqual(json.loads(body), payload)
+
+        body, compressed = server._json_response_body({"ok": True}, "gzip")
+        self.assertFalse(compressed)
+        self.assertEqual(json.loads(body), {"ok": True})
+
     def test_bootstrap_shared_state_skips_remote_collections_and_preserves_local_state(self):
         class FakeResult:
             def fetchone(self):

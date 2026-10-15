@@ -4,6 +4,7 @@ import json
 import os
 import hmac
 import csv
+import gzip
 import hashlib
 import io
 import msvcrt
@@ -150,6 +151,32 @@ def _json_default(value):
     if hasattr(value, "isoformat"):
         return value.isoformat()
     raise TypeError(f"Tipo no serializable: {type(value).__name__}")
+
+
+def _json_response_body(payload: dict, accept_encoding: str) -> tuple[bytes, bool]:
+    body = json.dumps(payload, ensure_ascii=False, default=_json_default).encode("utf-8")
+    accepts_gzip = False
+    for item in accept_encoding.split(","):
+        coding, *parameters = item.split(";")
+        if coding.strip().lower() != "gzip":
+            continue
+        quality = next(
+            (
+                parameter.strip()[2:]
+                for parameter in parameters
+                if parameter.strip().lower().startswith("q=")
+            ),
+            "1",
+        )
+        try:
+            accepts_gzip = float(quality) > 0
+        except ValueError:
+            accepts_gzip = False
+        if accepts_gzip:
+            break
+    if accepts_gzip and len(body) >= 1024:
+        return gzip.compress(body, compresslevel=1, mtime=0), True
+    return body, False
 
 
 def product_category(name: str) -> str:
@@ -2332,11 +2359,15 @@ class AppHandler(SimpleHTTPRequestHandler):
         super().__init__(*args, directory=str(ROOT), **kwargs)
 
     def send_json(self, status: int, payload: dict) -> None:
-        body = json.dumps(payload, ensure_ascii=False, default=_json_default).encode("utf-8")
+        body, compressed = _json_response_body(
+            payload, self.headers.get("Accept-Encoding", "")
+        )
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self._send_cors_headers()
+        if compressed:
+            self.send_header("Content-Encoding", "gzip")
         self.send_header("Cache-Control", "no-store")
         try:
             self.end_headers()
