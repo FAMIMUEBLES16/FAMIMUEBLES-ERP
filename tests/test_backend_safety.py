@@ -10,6 +10,36 @@ from server import _create_shared_sale, _shared_domain_items, canonical_request_
 
 
 class BackendSafetyTests(unittest.TestCase):
+    def test_bootstrap_shared_state_skips_remote_collections_and_preserves_local_state(self):
+        class FakeResult:
+            def fetchone(self):
+                return {"state_json": json.dumps({
+                    "notifications": [{"id": "notice-1"}],
+                    "fuelRecords": [{"id": "fuel-1"}],
+                    "talonarios": [{"id": "stale-talonario"}],
+                    "sales": [{"id": "stale-sale"}],
+                })}
+
+        class FakeDatabase:
+            def execute(self, query, params=()):
+                self.query = query
+                return FakeResult()
+
+        catalog = {
+            "products": [],
+            "stores": [],
+            "sales": [{"id": "fresh-sale"}],
+            "inventory": [],
+        }
+        with patch("server._shared_catalog", return_value=catalog), patch("server._shared_domain_items") as load_domain:
+            state = server._shared_state(FakeDatabase(), bootstrap=True)
+
+        load_domain.assert_not_called()
+        self.assertEqual(state["sales"], [{"id": "fresh-sale"}])
+        self.assertEqual(state["notifications"], [{"id": "notice-1"}])
+        self.assertEqual(state["fuelRecords"], [{"id": "fuel-1"}])
+        self.assertNotIn("talonarios", state)
+
     def test_shared_transfer_moves_inventory_and_records_completed_movement(self):
         class FakeResult:
             def __init__(self, row=None):
@@ -253,6 +283,25 @@ class BackendSafetyTests(unittest.TestCase):
                 "destinationName": "INV CARTAGENITA",
             })
 
+    def test_talonario_accepts_crr_5_5_56_display_name(self):
+        class FakeResult:
+            def fetchall(self):
+                return []
+
+        class FakeDatabase:
+            def execute(self, query, params=()):
+                return FakeResult()
+
+        server.validate_talonario_assignment(FakeDatabase(), "tenant-default", "TAL-CRR556", {
+            "id": "TAL-CRR556",
+            "type": "REMISION",
+            "startNumber": 15701,
+            "endNumber": 15750,
+            "status": "EN_USO",
+            "storeId": "INV CRR 5 5 56",
+            "destinationName": "INV CRR 5 5 56",
+        })
+
     def test_talonario_rejects_duplicate_active_assignment(self):
         class FakeResult:
             def __init__(self, rows=()):
@@ -334,6 +383,40 @@ class BackendSafetyTests(unittest.TestCase):
             "endNumber": 15850,
             "status": "EN_USO",
             "storeId": "INV CRR 5 3 26",
+        })
+
+    def test_talonario_allows_configured_owner_aliases_to_share_a_range(self):
+        class FakeResult:
+            def __init__(self, rows=()):
+                self.rows = rows
+
+            def fetchall(self):
+                return self.rows
+
+        existing = {
+            "id": "TAL-HIST-15651",
+            "type": "REMISION",
+            "startNumber": 15651,
+            "endNumber": 15700,
+            "status": "ENVIADO",
+            "storeId": "Cr 7 #6A-15",
+            "destinationName": "Cr 7 #6A-15",
+        }
+
+        class FakeDatabase:
+            def execute(self, query, params=()):
+                if "SELECT id, data_json" in query:
+                    return FakeResult([("TAL-HIST-15651", json.dumps(existing))])
+                return FakeResult()
+
+        server.validate_talonario_assignment(FakeDatabase(), "tenant-default", "TAL-ACTIVO-15651", {
+            "id": "TAL-ACTIVO-15651",
+            "type": "REMISION",
+            "startNumber": 15651,
+            "endNumber": 15700,
+            "status": "EN_USO",
+            "storeId": "INV CRR 7 6A 15",
+            "destinationName": "INV CRR 7 6A 15",
         })
 
     def test_user_update_preserves_telegram_link_unless_field_is_sent(self):

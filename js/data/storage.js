@@ -120,10 +120,11 @@ export function saveState(state) {
   REMOTE_DOMAIN_COLLECTIONS.forEach(collection => delete snapshot[collection]);
   return api.post('/api/state', { state: snapshot, tenantId: activeTenantId() }, { headers: { 'X-Tenant-ID': activeTenantId() } }).then(() => true);
 }
-export async function hydrateState() {
+export async function hydrateState(bootstrap = false) {
   if (!API_BASE_URL) return null;
   try {
-    const payload = await api.get('/api/state', { headers: { 'X-Tenant-ID': activeTenantId() }, cache: 'no-store' });
+    const endpoint = bootstrap ? '/api/state?bootstrap=1' : '/api/state';
+    const payload = await api.get(endpoint, { headers: { 'X-Tenant-ID': activeTenantId() }, cache: 'no-store' });
     if (!payload?.state || typeof payload.state !== 'object') return null;
     const remoteState = { ...createEmptyState(), ...payload.state, demoMode: false };
     Object.keys(createEmptyState()).forEach(collection => {
@@ -142,10 +143,10 @@ export async function hydrateState() {
   }
 }
 
-export async function hydrateStateWithRetry(attempts = 3) {
+export async function hydrateStateWithRetry(attempts = 3, bootstrap = false) {
   let lastResult = null;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
-    lastResult = await hydrateState();
+    lastResult = await hydrateState(bootstrap);
     if (lastResult) return lastResult;
     if (attempt < attempts - 1) await new Promise(resolve => setTimeout(resolve, 800 * (attempt + 1)));
   }

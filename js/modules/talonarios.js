@@ -6,14 +6,14 @@ const CONFIGURED_RANGES = [
   { local: 'INVCARTAGENITAII', aliases: ['CARTAGENITA II'], type: 'REMISION', start: 15851, end: 15900, current: 15857 },
   { local: 'INVCRR5317', aliases: ['LOCAL ESQUINA'], type: 'REMISION', start: 14051, end: 14100, current: 14100, active: false },
   { local: 'INVCRR5326', aliases: ['CR 5 #3-26', 'CR 5 -3-26'], type: 'REMISION', start: 15801, end: 15850, current: 15821 },
-  { local: 'INVCRR5556', aliases: ['CR 5 - 56', 'CR 5 #5 SUR'], type: 'REMISION', start: 15701, end: 15750, current: 15734 },
+  { local: 'INVCRR5556', aliases: ['INV CRR 5 5 56', 'CR 5 - 56', 'CR 5 #5 SUR'], type: 'REMISION', start: 15701, end: 15750, current: 15734 },
   { local: 'INVCRR76A15', aliases: ['CR 7 #6A-15'], type: 'REMISION', start: 15651, end: 15700 },
   { local: 'INVMANABLANCA', aliases: ['MANABLANCA', 'LOCAL MANABLANCA'], type: 'REMISION', start: 15751, end: 15800, current: 15791 },
   { local: 'INVCARTAGENITA', aliases: ['CARTAGENITA'], type: 'RECIBO', start: 5551, end: 5600 },
   { local: 'INVCARTAGENITAII', aliases: ['CARTAGENITA II'], type: 'RECIBO', start: 5751, end: 5800 },
   { local: 'INVCRR5317', aliases: [], type: 'RECIBO', start: 5101, end: 5150 },
   { local: 'INVCRR5326', aliases: ['CR 5 #3-26', 'CR 5 -3-26'], type: 'RECIBO', start: 5651, end: 5700 },
-  { local: 'INVCRR5556', aliases: ['CR 5 - 56', 'CR 5 #5 SUR'], type: 'RECIBO', start: 5501, end: 5550 },
+  { local: 'INVCRR5556', aliases: ['INV CRR 5 5 56', 'CR 5 - 56', 'CR 5 #5 SUR'], type: 'RECIBO', start: 5501, end: 5550 },
   { local: 'INVMANABLANCA', aliases: ['MANABLANCA', 'LOCAL MANABLANCA'], type: 'RECIBO', start: 5701, end: 5750 }
 ];
 const CONFIGURED_LOCAL_LABELS = {
@@ -79,22 +79,16 @@ function activeRangeWinner(items = []) {
 }
 function isCurrentActiveRange(item, items = []) {
   const sameGroup = items.filter(candidate => localGroupKey(candidate) === localGroupKey(item));
-  const configuredCurrent = sameGroup.find(candidate => isConfiguredCurrent(candidate));
-  if (configuredCurrent) {
-    return Number(item.startNumber) === Number(configuredCurrent.startNumber) && Number(item.endNumber) === Number(configuredCurrent.endNumber);
-  }
   const current = activeRangeWinner(sameGroup);
-  if (!current) return isConfiguredCurrent(item);
+  if (!current) return isConfiguredCurrent(item) && String(item.status || '').toUpperCase() === 'EN_USO';
   return Number(item.startNumber) === Number(current.startNumber) && Number(item.endNumber) === Number(current.endNumber);
 }
-export function normalizeActiveTalonarios(items = []) {
+export function normalizeActiveTalonarios(items = [], sales = []) {
   if (!Array.isArray(items)) return [];
   const groups = new Map();
   for (const item of items) {
-    const type = String(item?.type || 'REMISION').toUpperCase();
-    const local = localGroupKey(item);
-    if (!local) continue;
-    const key = `${local}:${type}`;
+    const key = localGroupKey(item);
+    if (!key) continue;
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(item);
   }
@@ -102,15 +96,38 @@ export function normalizeActiveTalonarios(items = []) {
     const status = String(item.status || '').toUpperCase();
     const current = Number(item.currentNumber ?? item.startNumber ?? 0);
     const start = Number(item.startNumber || 0);
+    const end = Number(item.endNumber || start);
     const isCentral = isCentralStore(item);
     const configured = configuredRangeFor(item);
     if (configured && !isCentral && !isConfiguredLocal(item, configured)) {
       item.storeId = CONFIGURED_LOCAL_LABELS[configured.local] || configured.local;
       item.destinationName = CONFIGURED_LOCAL_LABELS[configured.local] || configured.local;
     }
+    const documents = !isCentral && !item.historical && !item.historicalDate
+      ? talonarioSalesDocuments(item, sales)
+      : [];
+    if (documents.length) {
+      item.currentNumber = Math.max(current, ...documents);
+      if (item.currentNumber >= end) item.status = 'TERMINADO';
+      else item.status = 'EN_USO';
+    }
     if (configured && isConfiguredCurrent(item)) {
-      if (configured.current !== undefined) item.currentNumber = Number(configured.current);
-      item.status = configured.active === false ? 'TERMINADO' : 'EN_USO';
+      if (!documents.length && configured.current !== undefined && current < Number(configured.current)) {
+        item.currentNumber = Number(configured.current);
+      }
+      const newerRangeInUse = (groups.get(localGroupKey(item)) || []).some(candidate =>
+        candidate !== item
+        && !isCentralStore(candidate)
+        && !candidate.historical
+        && !candidate.historicalDate
+        && Number(candidate.startNumber) > start
+        && talonarioSalesDocuments(candidate, sales).length > 0
+      );
+      item.status = configured.active === false
+        || Number(item.currentNumber ?? start - 1) >= end
+        || newerRangeInUse
+        ? 'TERMINADO'
+        : 'EN_USO';
       continue;
     }
     if (isCentral && ['TERMINADO', 'ENVIADO', 'EN_USO'].includes(status) && !hasActualSendEvidence(item)) {
@@ -136,7 +153,12 @@ export function normalizeActiveTalonarios(items = []) {
     if (isExactCurrent(item)) {
       item.status = configured?.active === false ? 'TERMINADO' : 'EN_USO';
     } else if (configured && Number(item.startNumber) > configured.start && hasActualSendEvidence(item)) {
-      item.status = 'ENVIADO';
+      if (documents.length) {
+        item.currentNumber = Math.max(Number(item.currentNumber ?? start - 1), ...documents);
+        item.status = Number(item.currentNumber) >= end ? 'TERMINADO' : 'EN_USO';
+      } else {
+        item.status = 'ENVIADO';
+      }
     } else if (status === 'ENVIADO' && hasActualSendEvidence(item)) {
       continue;
     } else if (status === 'TERMINADO') {
@@ -156,7 +178,15 @@ export function normalizeActiveTalonarios(items = []) {
         }
         if (isCentralStore(item) || status === 'ALMACENADO' || isConfiguredCurrent(item)) continue;
         if (Number(item.startNumber) < configured.start && status === 'EN_USO') item.status = 'TERMINADO';
-        if (Number(item.startNumber) > configured.start && status === 'EN_USO') item.status = hasActualSendEvidence(item) ? 'ENVIADO' : 'TERMINADO';
+        if (Number(item.startNumber) > configured.start && status === 'EN_USO') {
+          const documents = talonarioSalesDocuments(item, sales);
+          if (documents.length) {
+            item.currentNumber = Math.max(Number(item.currentNumber ?? Number(item.startNumber) - 1), ...documents);
+            item.status = Number(item.currentNumber) >= Number(item.endNumber) ? 'TERMINADO' : 'EN_USO';
+          } else {
+            item.status = hasActualSendEvidence(item) ? 'ENVIADO' : 'TERMINADO';
+          }
+        }
       }
       continue;
     }

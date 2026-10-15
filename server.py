@@ -108,6 +108,13 @@ DOMAIN_COLLECTIONS = {
     "workSchedules", "staffAbsences", "entries", "exits", "sistecredito", "auditLog", "inventoryMovements", "installments",
     "payments", "movementEdits", "paymentMethods",
 }
+BOOTSTRAP_REMOTE_COLLECTIONS = frozenset({
+    "customers", "suppliers", "purchases", "credits", "expenses", "accountsPayable",
+    "supplierPayments", "customerAccounts", "returns", "supplierReturns", "stockCounts",
+    "reservations", "warranties", "damagedStock", "cashSessions", "cashMovements",
+    "bankAccounts", "quotes", "orders", "deliveries", "creditNotes", "transfers",
+    "talonarios", "talonarioJustifications", "workSchedules", "staffAbsences",
+})
 DEFAULT_TENANT = "tenant-default"
 PUBLISHABLE_FILES = ("index.html", "css/", "js/", "service-worker.js", "server.py", "report_pdf.py", "tunnel-url.json")
 
@@ -622,14 +629,14 @@ TALONARIO_CONFIGURED_OWNERS = {
     ("REMISION", 15851, 15900): ("INV CARTAGENITA II", {"INVCARTAGENITAII", "CARTAGENITAII"}),
     ("REMISION", 14051, 14100): ("INV CRR 5 3 17", {"INVCRR5317", "LOCALESQUINA"}),
     ("REMISION", 15801, 15850): ("INV CRR 5 3 26", {"INVCRR5326", "CR5326"}),
-    ("REMISION", 15701, 15750): ("INV CRR 5 5 56", {"INVCRR5556", "CR556", "CR55SUR"}),
+    ("REMISION", 15701, 15750): ("INV CRR 5 5 56", {"INVCRR5556", "INVCRR556", "CR556", "CR55SUR"}),
     ("REMISION", 15651, 15700): ("INV CRR 7 6A 15", {"INVCRR76A15", "CR76A15"}),
     ("REMISION", 15751, 15800): ("INV MANABLANCA", {"INVMANABLANCA", "MANABLANCA", "LOCALMANABLANCA"}),
     ("RECIBO", 5551, 5600): ("INV CARTAGENITA", {"INVCARTAGENITA", "CARTAGENITA"}),
     ("RECIBO", 5751, 5800): ("INV CARTAGENITA II", {"INVCARTAGENITAII", "CARTAGENITAII"}),
     ("RECIBO", 5101, 5150): ("INV CRR 5 3 17", {"INVCRR5317"}),
     ("RECIBO", 5651, 5700): ("INV CRR 5 3 26", {"INVCRR5326", "CR5326"}),
-    ("RECIBO", 5501, 5550): ("INV CRR 5 5 56", {"INVCRR5556", "CR556", "CR55SUR"}),
+    ("RECIBO", 5501, 5550): ("INV CRR 5 5 56", {"INVCRR5556", "INVCRR556", "CR556", "CR55SUR"}),
     ("RECIBO", 5701, 5750): ("INV MANABLANCA", {"INVMANABLANCA", "MANABLANCA", "LOCALMANABLANCA"}),
 }
 
@@ -641,11 +648,26 @@ def talonario_local_key(value: object) -> str:
 def talonario_assignment_local_key(item: dict | None) -> str:
     if not isinstance(item, dict):
         return ""
+    local_key = ""
     for key in ("destinationStoreId", "destinationName", "storeId", "localId", "local", "sentFrom"):
         value = item.get(key)
         if value is not None and str(value).strip():
-            return talonario_local_key(value)
-    return ""
+            local_key = talonario_local_key(value)
+            break
+    if not local_key:
+        return ""
+    try:
+        range_key = (
+            str(item.get("type") or "REMISION").upper(),
+            int(str(item.get("startNumber") or "")),
+            int(str(item.get("endNumber") or "")),
+        )
+    except (TypeError, ValueError):
+        return local_key
+    configured_owner = TALONARIO_CONFIGURED_OWNERS.get(range_key)
+    if configured_owner and local_key in configured_owner[1]:
+        return talonario_local_key(configured_owner[0])
+    return local_key
 
 
 def validate_talonario_assignment(database, tenant: str, identifier: str, item: dict) -> None:
@@ -1851,13 +1873,25 @@ def _shared_domain_items(database: _PostgresConnection, collection: str) -> list
         return canonical_customers if collection == "customers" else []
 
 
-def _shared_state(database: _PostgresConnection) -> dict:
+def _shared_state(database: _PostgresConnection, bootstrap: bool = False) -> dict:
     catalog = _shared_catalog(database)
     state = {
         **catalog,
         "inventoryByStore": catalog["inventory"],
         "demoMode": False,
     }
+    if bootstrap:
+        stored_state = database.execute(
+            "SELECT state_json FROM tenant_states WHERE tenant_id = %s",
+            (DEFAULT_TENANT,),
+        ).fetchone()
+        if stored_state:
+            saved = json.loads(stored_state["state_json"])
+            if isinstance(saved, dict):
+                for collection, items in saved.items():
+                    if collection not in BOOTSTRAP_REMOTE_COLLECTIONS and collection not in state and collection != "demoMode":
+                        state[collection] = items
+        return state
     for collection in DOMAIN_COLLECTIONS | {"users", "roles", "expenses", "fuelRecords", "entries", "exits", "sistecredito", "auditLog", "inventoryMovements", "transfers", "installments", "payments", "movementEdits", "customers", "paymentMethods"}:
         items = _shared_domain_items(database, collection)
         if items is not None:
@@ -2475,8 +2509,9 @@ class AppHandler(SimpleHTTPRequestHandler):
             return
         if path == "/api/state":
             if _postgres_enabled():
+                bootstrap = (parse_qs(parsed_url.query).get("bootstrap") or [""])[0] == "1"
                 with connection() as database:
-                    state = _shared_state(database)
+                    state = _shared_state(database, bootstrap=bootstrap)
                 self.send_json(200, {"state": state, "updatedAt": None})
                 return
             with connection() as database:

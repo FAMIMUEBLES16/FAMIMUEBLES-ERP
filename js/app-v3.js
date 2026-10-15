@@ -4,7 +4,7 @@ function showTransferDetail(transferId){const transfer=transferRecord(transferId
 function editTransfer(transferId){const transfer=transferRecord(transferId);if(!transfer)return showToast('No se encontro el traslado.','error');$('#modal-root').innerHTML=`<div class="modal-backdrop"><form class="modal" id="transfer-edit-form"><button type="button" class="modal-close">×</button><p class="eyebrow">INVENTARIO</p><h2>Editar traslado</h2><textarea class="field" name="data" rows="12" required>${JSON.stringify(transfer,null,2)}</textarea><button class="primary wide">Guardar cambios</button></form></div>`;$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';$('#transfer-edit-form').onsubmit=async event=>{event.preventDefault();try{const updated=JSON.parse(new FormData(event.target).get('data'));if(String(updated.id)!==String(transfer.id))throw new Error('El ID no puede cambiarse.');await persistDomainRecord('transfers',updated);store.collection.transfers=[...(store.collection.transfers||[]).filter(item=>String(item.id)!==String(updated.id)),updated];$('#modal-root').innerHTML='';render();showToast('Traslado actualizado correctamente.');}catch(error){showToast(error.message,'error');}};}
 async function deleteTransferRemote(transferId){if(!window.confirm('¿Eliminar este traslado?'))return;try{await persistCatalogRecord(`/api/domain/transfers/${encodeURIComponent(transferId)}`,{},'DELETE');store.collection.transfers=(store.collection.transfers||[]).filter(item=>String(item.id)!==String(transferId));$('#modal-root').innerHTML='';render();showToast('Traslado eliminado correctamente.');}catch(error){showToast(error.message,'error');}}
 import { store } from './data/store.js?v=20';
-import { hydrateState, hydrateStateWithRetry, hydrateCatalog, saveState, authHeaders, activeTenantId, isStaticDeployment } from './data/storage.js?v=28';
+import { hydrateState, hydrateStateWithRetry, hydrateCatalog, saveState, authHeaders, activeTenantId, isStaticDeployment } from './data/storage.js?v=29';
 import { generateId } from './utils/ids.js';
 import { currentRoute, startRouter } from './router.js?v=18';
 import { navItems, navGroups } from './components/sidebar.js?v=23';
@@ -29,7 +29,7 @@ import { renderGasolina } from './modules/gasolina.js?v=20261011-fuel-user-delet
 import { mergeUserSources, renderUsuarios } from './modules/usuarios.js?v=24';
 import { renderDescansos } from './modules/descansos.js?v=10';
 import { renderAuditoria, resetAuditFilters, setAuditFilters } from './modules/auditoria.js?v=27';
-import { renderTalonarios, talonarioModal, setTalonarioFilters, currentTalonarioNumber, normalizeActiveTalonarios, availableCentralTalonarios, nextAvailableCentralTalonario, configuredTalonarioOwnerLabel, configuredTalonarioOwnerMatches } from './modules/talonarios.js?v=23';
+import { renderTalonarios, talonarioModal, setTalonarioFilters, currentTalonarioNumber, normalizeActiveTalonarios, availableCentralTalonarios, nextAvailableCentralTalonario, configuredTalonarioOwnerLabel, configuredTalonarioOwnerMatches, talonarioSalesDocuments } from './modules/talonarios.js?v=24';
 import { historicalTalonarios, historicalRecibos, storedTalonarios } from './modules/talonarios-historial.js?v=1';
 import { renderApartados } from './modules/apartados.js?v=20';
 import { createApartado, decreaseSaleInventory, runTransaction, addMovement } from './modules/finanzas.js?v=18';
@@ -120,18 +120,23 @@ function applyUserPermissions(){const mapping=actionPermissionMap;
 	document.querySelectorAll('[data-action]').forEach(element=>{const target=mapping[element.dataset.action];if(target)element.hidden=!canPerform(target[0],target[1]);});}
 function scheduleInitialDomainHydration(){
 	if(isStaticDeployment()||initialDomainHydrationStarted)return;
-	if(currentRoute()==='gasolina'){
+	const route=currentRoute();
+	if(route==='gasolina'){
 		if(initialDomainHydrationTimer)clearTimeout(initialDomainHydrationTimer);
 		initialDomainHydrationTimer=null;
 		return;
 	}
-	if(initialDomainHydrationTimer)return;
+	const delay=route==='talonarios'?0:3000;
+	if(initialDomainHydrationTimer){
+		if(delay!==0)return;
+		clearTimeout(initialDomainHydrationTimer);
+	}
 	initialDomainHydrationTimer=setTimeout(()=>{
 		initialDomainHydrationTimer=null;
 		if(currentRoute()==='gasolina')return;
 		initialDomainHydrationStarted=true;
 		hydrateDomainCollections(store.state).catch(error=>console.warn('No se pudieron cargar los datos adicionales:',error.message));
-	},3000);
+	},delay);
 }
 function renderNav(){ const visible=navItems.filter(item=>allowedRoute(item.id)); const quick=['dashboard','inventario','facturacion'].map(id=>visible.find(item=>item.id===id)).filter(Boolean); const activeRoute=currentRoute(); const stored=JSON.parse(localStorage.getItem('famimuebles-nav-groups')||'{}'); const grouped=navGroups.map(group=>{const children=group.items.map(id=>visible.find(item=>item.id===id)).filter(Boolean);if(!children.length)return '';const hasStored=Object.prototype.hasOwnProperty.call(stored,group.id);const open=hasStored?stored[group.id]:children.some(item=>item.id===activeRoute);return `<section class="nav-group ${open?'is-open':''}" data-nav-group-section="${group.id}"><button class="nav-group-toggle" type="button" data-nav-group="${group.id}" aria-expanded="${open}"><span><span class="nav-icon">${group.icon}</span>${group.label}</span><span class="nav-chevron">⌄</span></button><div class="nav-group-items">${children.map(item=>`<a class="nav-item ${activeRoute===item.id?'active':''}" href="#${item.id}"><span class="nav-icon">${item.icon}</span><span>${item.label}</span></a>`).join('')}</div></section>`;}).join(''); $('#main-nav').innerHTML=quick.map(item=>`<a class="nav-item nav-quick ${activeRoute===item.id?'active':''}" href="#${item.id}"><span class="nav-icon">${item.icon}</span><span>${item.label}</span></a>`).join('')+grouped; const mobileItems=visible.filter(item=>['dashboard','inventario','facturacion','ventas'].includes(item.id)); $('#bottom-nav').innerHTML=mobileItems.map(item=>`<a class="${activeRoute===item.id?'active':''}" href="#${item.id}"><span>${item.icon}</span><span>${item.label}</span></a>`).join('')+'<button type="button" class="mobile-nav-menu" aria-label="Abrir menu"><span aria-hidden="true"><i></i><i></i><i></i></span><span>Mas</span></button>'; }
 document.addEventListener('click',event=>{const toggle=event.target.closest('[data-nav-group]');if(!toggle)return;event.preventDefault();event.stopImmediatePropagation();const section=toggle.closest('[data-nav-group-section]');const groupId=toggle.dataset.navGroup;const open=!section.classList.contains('is-open');const stored=JSON.parse(localStorage.getItem('famimuebles-nav-groups')||'{}');document.querySelectorAll('[data-nav-group-section]').forEach(item=>{const same=item===section;item.classList.toggle('is-open',same&&open);item.querySelector('[data-nav-group]')?.setAttribute('aria-expanded',String(same&&open));const id=item.dataset.navGroupSection;if(id)stored[id]=same&&open;});stored[groupId]=open;localStorage.setItem('famimuebles-nav-groups',JSON.stringify(stored));},true);
@@ -209,14 +214,24 @@ async function persistDomainRecord(collection, record){
 		return persistCatalogRecord(path,retry);
 	}
 }
+async function persistTalonarioNormalizationChanges(previous, items){
+	const changed=items.filter(item=>{
+		const before=previous.get(String(item.id));
+		return before&&(before.status!==item.status||before.currentNumber!==item.currentNumber);
+	});
+	const results=await Promise.allSettled(changed.map(item=>persistDomainRecord('talonarios',item)));
+	results.forEach(result=>{
+		if(result.status==='rejected')console.warn('No se pudo guardar el estado actualizado de un talonario:',result.reason?.message||result.reason);
+	});
+}
 async function seedHistoricalTalonarios(state){
 	if(!Array.isArray(state.talonarios))state.talonarios=[];
-	state.talonarios = normalizeActiveTalonarios(state.talonarios);
+	state.talonarios = normalizeActiveTalonarios(state.talonarios,state.sales||[]);
 	const existing=new Set(state.talonarios.map(item=>String(item.id)));
 	const missing=[...historicalTalonarios,...historicalRecibos,...storedTalonarios].filter(item=>!existing.has(item.id));
 	if(!missing.length)return;
 	state.talonarios.push(...missing.map(item => ({ ...item, status: String(item.status || '').toUpperCase() === 'TERMINADO' && !item.sentAt && String(item.storeId || item.destinationName || '').toUpperCase() === 'INV CRR 5 3 26' ? 'ALMACENADO' : item.status })));
-	state.talonarios = normalizeActiveTalonarios(state.talonarios);
+	state.talonarios = normalizeActiveTalonarios(state.talonarios,state.sales||[]);
 	for(const item of missing){
 		try{await persistDomainRecord('talonarios', { ...item, status: String(item.status || '').toUpperCase() === 'TERMINADO' && !item.sentAt && (String(item.storeId || item.destinationName || '').toUpperCase() === 'INV CRR 5 3 26' || String(item.storeId || item.destinationName || '').toUpperCase() === 'INV CRR 5 3 26') ? 'ALMACENADO' : item.status });}catch(error){console.warn('No se pudo guardar el historial de talonarios:',error.message);}
 	}
@@ -394,7 +409,21 @@ async function hydrateDomainCollections(state, loadSecondary=true, allowSideEffe
  const deferredAttendance=['workSchedules','staffAbsences'];
  const critical=remoteDomainCollections.filter(collection=>criticalDomainCollections.has(collection)&&!deferredTalonarios.includes(collection));
  const payableCollections=['suppliers','accountsPayable'].filter(collection=>critical.includes(collection));
- const payableResults=await loadDomainCollections(state,payableCollections,10000,2,1,refreshExisting);
+ const remainingCritical=critical.filter(collection=>!payableCollections.includes(collection));
+ const talonarioResults=await loadDomainCollections(state,deferredTalonarios,15000,2,1,refreshExisting);
+ const [payableResults,remainingResults]=await Promise.all([
+  loadDomainCollections(state,payableCollections,10000,2,1,refreshExisting),
+  loadDomainCollections(state,[...remainingCritical,...deferredAttendance],5000,3,0,refreshExisting)
+ ]);
+ const loadResults=[remainingResults,talonarioResults];
+	const talonariosBeforeNormalization=new Map((state.talonarios||[]).map(item=>[String(item.id),{status:item.status,currentNumber:item.currentNumber}]));
+	if(talonarioResults[0]){
+		state.talonarios=normalizeActiveTalonarios(state.talonarios||[],state.sales||[]);
+		if(allowSideEffects&&currentRoute()==='talonarios'){
+			store.state=state;
+			render();
+		}
+	}
  if(requireComplete&&payableResults.some(result=>!result))throw new Error('No se pudieron cargar todas las cuentas por pagar.');
  const normalizedPayables=normalizePayableSuppliers(state);
  if(allowSideEffects&&normalizedPayables.length){
@@ -402,22 +431,15 @@ async function hydrateDomainCollections(state, loadSecondary=true, allowSideEffe
   Promise.allSettled(normalizedPayables.map(account=>persistDomainRecord('accountsPayable',account))).then(results=>results.filter(result=>result.status==='rejected').forEach(result=>console.warn('No se pudo normalizar el proveedor de una cuenta por pagar:',result.reason?.message||result.reason)));
  }
  if(loadSecondary&&['dashboard','cuentas-por-pagar'].includes(currentRoute()))render();
- const remainingCritical=critical.filter(collection=>!payableCollections.includes(collection));
- const loadResults=await Promise.all([
-  loadDomainCollections(state,[...remainingCritical,...deferredAttendance],5000,3,0,refreshExisting),
-  loadDomainCollections(state,deferredTalonarios,5000,2,0,refreshExisting)
- ]);
  if(requireComplete&&loadResults.flat().some(result=>!result))throw new Error('No se pudieron cargar todas las colecciones compartidas.');
- const talonarioResults=loadResults[1];
-	if(talonarioResults[0]){
-		state.talonarios=normalizeActiveTalonarios(state.talonarios||[]);
-	}
 	if(talonarioResults[0]&&allowSideEffects){
-		store.collection.talonarios=normalizeActiveTalonarios(store.collection.talonarios||[]);
+		store.collection.talonarios=normalizeActiveTalonarios(store.collection.talonarios||[],store.collection.sales||[]);
 		Promise.resolve().then(async()=>{
 			await seedHistoricalTalonarios(state);
 			await seedConfiguredTalonariosActivos();
-			store.collection.talonarios=normalizeActiveTalonarios(store.collection.talonarios||[]);
+			store.collection.talonarios=normalizeActiveTalonarios(store.collection.talonarios||[],store.collection.sales||[]);
+			store.save();
+			await persistTalonarioNormalizationChanges(talonariosBeforeNormalization,store.collection.talonarios);
 			await refreshTalonarioSalesAlerts();
 			if(currentRoute()==='talonarios')render();
 		}).catch(error=>console.warn('No se pudieron preparar los talonarios:',error.message));
@@ -457,21 +479,22 @@ async function refreshSharedState(automatic=false){
 	let replacedState=false;
 	try{
 		const route=currentRoute();
+		const bootstrap=route==='talonarios';
 		const inventoryVersion=inventoryViewState.version;
 		const inventoryFilters=route==='inventario' ? {...inventoryViewState} : null;
 		const salesVersion=salesViewState.version;
 		const salesFilters=route==='ventas' ? {...salesViewState} : null;
 		const productVersion=productViewState.version;
 		const productFilters=route==='productos' ? {...productViewState} : null;
-		const normalized=await hydrateState();
+		const normalized=await hydrateState(bootstrap);
 		if(!normalized)return false;
 		const fuelRecordsChanged=automatic&&JSON.stringify(previousState?.fuelRecords||previousState?.gasolina||[])!==JSON.stringify(normalized.fuelRecords||normalized.gasolina||[]);
 		if(automatic){
-			for(const collection of [...remoteDomainCollections,'products','stores','sales','inventory','inventoryByStore']){
+			for(const collection of [...remoteDomainCollections,...(bootstrap?[]:['products','stores','sales','inventory','inventoryByStore'])]){
 				if(Array.isArray(previousState?.[collection]))normalized[collection]=previousState[collection];
 			}
 			try{
-				await hydrateCatalog(normalized,false,true);
+				await hydrateCatalog(normalized,bootstrap,true);
 			}catch(error){
 				console.warn('No se pudo actualizar el catalogo compartido; se conservaron los datos anteriores:',error.message);
 			}
@@ -484,7 +507,7 @@ async function refreshSharedState(automatic=false){
 		}else{
 			store.state=normalized;
 			replacedState=true;
-			await hydrateCatalog(store.state);
+			await hydrateCatalog(store.state,bootstrap);
 			await hydrateDomainCollections(store.state);
 			repairTalonario15301().catch(error=>console.warn('No se pudo corregir el talonario 15301-15350:',error.message));
 			refreshTalonarioSalesAlerts().then(()=>{if(currentRoute()==='talonarios')render();}).catch(error=>console.warn('No se pudieron actualizar las alertas de talonarios:',error.message));
@@ -1512,24 +1535,44 @@ async function boot() {
 		return;
 	}
 	const authToken = localStorage.getItem('famimuebles-auth-token');
-	let auth;
-	try {
-		auth = await api.get('/api/auth/status', { cache: 'no-store' });
-		if (!authToken) { authScreen(auth.configured, auth.telegramLoginConfigured ? auth.telegramBotUsername : ''); return; }
-	} catch (error) {
-		authScreen(true, '', error.message);
+	if(!authToken){
+		try{
+			const auth=await api.get('/api/auth/status',{cache:'no-store'});
+			authScreen(auth.configured,auth.telegramLoginConfigured?auth.telegramBotUsername:'');
+		}catch(error){
+			authScreen(true,'',error.message);
+		}
 		return;
 	}
 	const permissionsPromise=hydrateCurrentUserPermissions();
-	const normalized = await hydrateStateWithRetry(3);
+	const bootstrap = currentRoute() === 'talonarios';
+	let routerStarted=false;
+	if(bootstrap&&store.collection.talonarios?.length){
+		initialDomainHydrationStarted=true;
+		appHydrating=false;
+		store.collection.demoMode=false;
+		state.storeId=resolveActiveStore();
+		startRouter(renderApp);
+		routerStarted=true;
+		syncActiveStoreSelector();
+		render();
+		showToast('Mostrando los datos guardados mientras se actualizan los talonarios.');
+	}
+	const normalized = await hydrateStateWithRetry(3, bootstrap);
 	if (!normalized) {
 		appHydrating = false;
+		if(routerStarted){
+			initialDomainHydrationStarted=false;
+			scheduleInitialDomainHydration();
+			showToast('No fue posible actualizar los datos del servidor; se conservan los datos guardados.','error');
+			return;
+		}
 		if (appContent) appContent.innerHTML = '<section class="panel app-loading"><strong>No se pudo cargar la informacion.</strong><span>El servidor tardo demasiado en responder.</span><button class="primary" type="button" onclick="location.reload()">Reintentar</button></section>';
 		return;
 	}
 	store.state = normalized;
 	store.collection.demoMode = false;
-	await hydrateCatalog(store.state,true);
+	await hydrateCatalog(store.state,bootstrap);
 	hydrateUsers(store.state).then(() => {
 		if (currentRoute() === 'usuarios') render();
 	}).catch(error => console.warn('No se pudieron actualizar los usuarios:', error.message));
@@ -1537,10 +1580,11 @@ async function boot() {
 	store.save();
 	state.storeId = resolveActiveStore();
 	appHydrating = false;
-	startRouter(renderApp);
+	if(!routerStarted)startRouter(renderApp);
 	loadTenants();
 	syncActiveStoreSelector();
 	syncCustomerBalances();
+	initialDomainHydrationStarted=false;
 	render();
 	startAutomaticSharedRefresh();
 }
@@ -1951,26 +1995,39 @@ const configuredTalonariosActivos=[
 const talonarioNameKey=value=>String(value||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^A-Z0-9]/gi,'').toUpperCase();
 async function seedConfiguredTalonariosActivos(){
 	if(!Array.isArray(store.collection.talonarios))store.collection.talonarios=[];
+	const sales=store.collection.sales||[];
 	for(const config of configuredTalonariosActivos){
 		const localKeys=[config.local,...(config.aliases||[])].map(talonarioNameKey);
 		const local=store.collection.stores.find(item=>localKeys.includes(talonarioNameKey(item.id))||localKeys.includes(talonarioNameKey(item.name)));
 		const storeId=local?.id||config.local;
 		const matches=store.collection.talonarios.filter(entry=>String(entry.type).toUpperCase()===config.type&&Number(entry.startNumber)===config.startNumber&&Number(entry.endNumber)===config.endNumber);
-		let item=matches.find(entry=>localKeys.includes(talonarioNameKey(entry.storeId))||localKeys.includes(talonarioNameKey(entry.destinationName))||talonarioNameKey(entry.storeId)===talonarioNameKey(storeId));
-		if(!item)item=matches.find(entry=>talonarioNameKey(entry.storeId)==='INVCRR5326'&&String(entry.status||'').toUpperCase()==='ALMACENADO'&&!entry.destinationStoreId);
+		let item=matches.find(entry=>!entry.historical&&!entry.historicalDate&&(localKeys.includes(talonarioNameKey(entry.storeId))||localKeys.includes(talonarioNameKey(entry.destinationName))||talonarioNameKey(entry.storeId)===talonarioNameKey(storeId)));
+		if(!item)item=matches.find(entry=>!entry.historical&&!entry.historicalDate&&talonarioNameKey(entry.storeId)==='INVCRR5326'&&String(entry.status||'').toUpperCase()==='ALMACENADO'&&!entry.destinationStoreId);
+		const newerRangeInUse=store.collection.talonarios.some(entry=>
+			String(entry.type).toUpperCase()===config.type
+			&&Number(entry.startNumber)>config.startNumber
+			&&[entry.storeId,entry.destinationName].some(value=>localKeys.includes(talonarioNameKey(value)))
+			&&!entry.historical
+			&&!entry.historicalDate
+			&&talonarioSalesDocuments(entry,sales).length>0
+		);
+		if(!item&&newerRangeInUse)continue;
 		let shouldPersist=false;
+		let isNew=false;
 		if(!item){
 			item={id:`TAL-ACTIVO-${config.type}-${config.startNumber}-${talonarioNameKey(config.local)}`,type:config.type,startNumber:config.startNumber,endNumber:config.endNumber,currentNumber:config.currentNumber??config.startNumber-1,storeId,destinationName:local?.name||config.local,status:config.active===false?'TERMINADO':'EN_USO',sentFrom:'INV CRR 5 3 26',historical:false};
 			store.collection.talonarios.push(item);
 			shouldPersist=true;
+			isNew=true;
 		}else{
 			const destinationName=local?.name||config.local;
-			const nextCurrent=config.currentNumber===undefined?Number(item.currentNumber??config.startNumber-1):Number(config.currentNumber);
-			const nextStatus=config.active===false||nextCurrent>=Number(item.endNumber||item.startNumber)?'TERMINADO':'EN_USO';
+			const documents=talonarioSalesDocuments(item,sales);
+			const nextCurrent=Math.max(Number(item.currentNumber??config.startNumber-1),Number(config.currentNumber??config.startNumber-1),...documents);
+			const nextStatus=config.active===false||newerRangeInUse||nextCurrent>=Number(item.endNumber||item.startNumber)?'TERMINADO':'EN_USO';
 			shouldPersist=String(item.storeId)!==String(storeId)||String(item.destinationName)!==String(destinationName)||String(item.status||'').toUpperCase()!==nextStatus||Number(item.currentNumber)!==nextCurrent;
 			item.storeId=storeId;item.destinationName=destinationName;item.currentNumber=nextCurrent;item.status=nextStatus;
 		}
-		if(shouldPersist)try{await persistDomainRecord('talonarios',item);}catch(error){console.warn('No se pudo preparar talonario activo:',error.message);}
+		if(shouldPersist&&isNew)try{await persistDomainRecord('talonarios',item);}catch(error){console.warn('No se pudo preparar talonario activo:',error.message);}
 	}
 	const replacedActiveRanges=[[15301,15350,'INV CRR 5 3 26'],[15601,15650,'INV CRR 5 5 56']];
 	for(const [startNumber,endNumber,localName] of replacedActiveRanges){

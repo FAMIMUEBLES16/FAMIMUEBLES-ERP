@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { availableCentralTalonarios, configuredTalonarioOwnerLabel, configuredTalonarioOwnerMatches, currentTalonarioNumber, deduplicateTalonarioHistory, missingTalonarioNumbers, missingTalonarioNumbersForLocal, nextAvailableCentralTalonario, normalizeActiveTalonarios, talonarioModal, talonarioSalesDocuments } from '../js/modules/talonarios.js';
+import { availableCentralTalonarios, configuredTalonarioOwnerLabel, configuredTalonarioOwnerMatches, currentTalonarioNumber, deduplicateTalonarioHistory, missingTalonarioNumbers, missingTalonarioNumbersForLocal, nextAvailableCentralTalonario, normalizeActiveTalonarios, renderTalonarios, talonarioModal, talonarioSalesDocuments } from '../js/modules/talonarios.js';
 
 assert.equal(configuredTalonarioOwnerLabel('REMISION', 15801, 15850), 'INV CRR 5 3 26');
 assert.equal(configuredTalonarioOwnerMatches('REMISION', 15801, 15850, ['INV CRR 5 3 26']), true);
@@ -281,6 +281,75 @@ assert.equal(currentTalonarioNumber(reportedTalonarios.find((item) => item.id ==
 assert.equal(reportedTalonarios.find((item) => item.id === 'CRR76A15-CURRENT')?.status, 'EN_USO');
 assert.equal(currentTalonarioNumber(reportedTalonarios.find((item) => item.id === 'MANABLANCA-CURRENT')), 15791);
 assert.equal(reportedTalonarios.find((item) => item.id === 'CRR5326-RECEIPT')?.status, 'EN_USO');
+
+const cartagenitaRotation = [
+  { id: 'CARTAGENITA-EXHAUSTED', type: 'REMISION', startNumber: 15451, endNumber: 15500, currentNumber: 15496, storeId: 'INV CARTAGENITA', destinationName: 'INV CARTAGENITA', status: 'EN_USO' },
+  { id: 'CARTAGENITA-IN-USE', type: 'REMISION', startNumber: 15901, endNumber: 15950, currentNumber: 15900, storeId: 'INV CARTAGENITA', destinationName: 'INV CARTAGENITA', sentFrom: 'INV CRR 5 3 26', sentAt: '2026-10-08T18:52:17Z', status: 'ENVIADO' },
+];
+const cartagenitaSales = [
+  { id: 930, invoiceNumber: '15500', documentType: 'REMISION', storeId: 'INV CARTAGENITA' },
+  { id: 931, invoiceNumber: '15903', documentType: 'REMISION', storeId: 'INV CARTAGENITA' },
+];
+normalizeActiveTalonarios(cartagenitaRotation, cartagenitaSales);
+assert.equal(cartagenitaRotation[0].status, 'TERMINADO', 'an exhausted previous range should no longer remain active');
+assert.equal(cartagenitaRotation[0].currentNumber, 15500, 'the previous range should retain its final used consecutive');
+assert.equal(cartagenitaRotation[1].status, 'EN_USO', 'a sent range with matching sales should be activated');
+assert.equal(cartagenitaRotation[1].currentNumber, 15903, 'the active range should advance to its latest matching sale');
+assert.match(
+  renderTalonarios({ stores: [], talonarios: cartagenitaRotation, sales: cartagenitaSales }),
+  /15901 - 15950<\/td><td>15903<\/td><td><strong>47<\/strong>/,
+  'the summary should display the range used by the latest sale and its remaining documents'
+);
+
+const previousCartagenitaRange = {
+  id: 'CARTAGENITA-PREVIOUS',
+  type: 'REMISION',
+  startNumber: 15451,
+  endNumber: 15500,
+  currentNumber: 15496,
+  storeId: 'INV CARTAGENITA',
+  destinationName: 'INV CARTAGENITA',
+  status: 'EN_USO',
+};
+const laterCartagenitaRange = {
+  id: 'CARTAGENITA-LATER',
+  type: 'REMISION',
+  startNumber: 15901,
+  endNumber: 15950,
+  currentNumber: 15900,
+  storeId: 'INV CARTAGENITA',
+  destinationName: 'INV CARTAGENITA',
+  sentFrom: 'INV CRR 5 3 26',
+  sentAt: '2026-10-08T18:52:17Z',
+  status: 'ENVIADO',
+};
+normalizeActiveTalonarios([previousCartagenitaRange, laterCartagenitaRange], [
+  { invoiceNumber: '15903', documentType: 'REMISION', storeId: 'INV CARTAGENITA' },
+]);
+assert.equal(previousCartagenitaRange.status, 'TERMINADO', 'Cartagenita should retire its previous range when a later range is in use');
+assert.equal(laterCartagenitaRange.status, 'EN_USO', 'Cartagenita should activate the later range used by a sale');
+
+const configuredLocalRotations = [
+  ['INV CARTAGENITA II', 15851, 16301],
+  ['INV CRR 5 3 17', 14051, 14551],
+  ['INV CRR 5 5 56', 15701, 16201],
+  ['INV CRR 7 6A 15', 15651, 16151],
+  ['INV MANABLANCA', 15751, 16251],
+];
+for (const [local, previousStart, activeStart] of configuredLocalRotations) {
+  const previousEnd = previousStart + 49;
+  const activeEnd = activeStart + 49;
+  const talonarios = [
+    { id: `${local}-PREVIOUS`, type: 'REMISION', startNumber: previousStart, endNumber: previousEnd, currentNumber: previousEnd - 1, storeId: local, destinationName: local, status: 'EN_USO' },
+    { id: `${local}-ACTIVE`, type: 'REMISION', startNumber: activeStart, endNumber: activeEnd, currentNumber: activeStart - 1, storeId: local, destinationName: local, sentFrom: 'INV CRR 5 3 26', sentAt: '2026-10-08T18:52:17Z', status: 'ENVIADO' },
+  ];
+  normalizeActiveTalonarios(talonarios, [
+    { invoiceNumber: String(activeStart + 2), documentType: 'REMISION', storeId: local },
+  ]);
+  assert.equal(talonarios[0].status, 'TERMINADO', `${local} should retire its previous range when a later range is in use`);
+  assert.equal(talonarios[1].status, 'EN_USO', `${local} should activate its sent range after a sale is registered`);
+  assert.equal(talonarios[1].currentNumber, activeStart + 2, `${local} should track the latest sale in its active range`);
+}
 
 const newerAvailableModalCase = {
   stores: [{ id: 'INV CRR 5 3 26', name: 'INV CRR 5 3 26' }],
