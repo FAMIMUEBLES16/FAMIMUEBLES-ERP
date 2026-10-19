@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { creditPendingBalance, filterDuplicateHistoricalCredits, normalizeCredit, paymentsForCredit, renderCreditos } from '../js/modules/creditos.js';
+import { creditPendingBalance, filterDuplicateHistoricalCredits, filterInternalCredits, normalizeCredit, paymentsForCredit, renderCreditos } from '../js/modules/creditos.js';
 
 const credit = {
   id: 27,
@@ -91,6 +91,31 @@ assert.deepEqual(
   ['30'],
   'the stale historical snapshot linked to the active PostgreSQL credit should not be shown separately',
 );
+const sistecreditoSale = {
+  id: '953',
+  paymentMethod: 'Sistecrédito',
+};
+const internalCredit = { id: 36, venta_id: '953', cliente: 'NUBIA OROZCO', saldo_pendiente: 1650000 };
+const sistecreditoCredit = { id: 37, metodo_pago: 'SISTECREDITO', cliente: 'Otro cliente', saldo_pendiente: 100000 };
+assert.deepEqual(
+  filterInternalCredits([internalCredit, sistecreditoCredit], [sistecreditoSale]).map(item => item.id),
+  [],
+  'credits linked to a Sistecrédito sale and credits marked directly with that method must be excluded',
+);
+assert.deepEqual(
+  filterInternalCredits([internalCredit], [{ ...sistecreditoSale, id: 'another-sale' }]).map(item => item.id),
+  [36],
+  'a credit must remain visible if its linked sale does not use Sistecrédito',
+);
+const sistecreditoCartera = renderCreditos({
+  credits: [internalCredit, { id: 38, venta_id: 'another-sale', cliente: 'Cliente interno', saldo_pendiente: 50000 }],
+  sales: [sistecreditoSale, { id: 'another-sale', paymentMethod: 'Credito interno FAMIMUEBLES' }],
+  payments: [],
+  installments: [],
+});
+assert.doesNotMatch(sistecreditoCartera, /NUBIA OROZCO/);
+assert.match(sistecreditoCartera, /Cliente interno/);
+assert.match(sistecreditoCartera, /Mostrando 1-1 de 1/);
 assert.equal(creditPendingBalance({
   total: 1000000,
   initial: 360000,

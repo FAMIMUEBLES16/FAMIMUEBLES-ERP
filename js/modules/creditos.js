@@ -28,6 +28,42 @@ export function filterDuplicateHistoricalCredits(credits = []) {
   ));
 }
 
+const saleReferenceFields = [
+  'saleId', 'sale_id', 'venta_id', 'ventaId', 'sourceId', 'source_id',
+  'invoiceId', 'invoice_id', 'invoiceNumber', 'invoice_number', 'factura', 'numero_factura',
+];
+const saleIdentifierFields = [
+  'id', 'saleId', 'sale_id', 'venta_id', 'ventaId', 'movement_id', 'movimiento_id',
+  'invoiceId', 'invoice_id', 'invoiceNumber', 'invoice_number', 'factura', 'numero_factura',
+];
+const financingMethodFields = [
+  'paymentMethod', 'payment_method', 'metodo_pago', 'metodoPago', 'forma_pago', 'formaPago',
+  'method', 'payment', 'medio_pago', 'medioPago', 'financialEntity', 'financial_entity',
+  'entidad_financiera', 'entidadFinanciera', 'financiador', 'financiera', 'provider',
+  'tipo', 'tipo_credito', 'tipoCredito', 'creditType', 'credit_type',
+  'financingType', 'financing_type', 'entidad', 'entity', 'institucion', 'institution',
+];
+
+function isSistecredito(value) {
+  return /siste[\s._-]*credito/.test(normalizeSearch(value));
+}
+
+export function filterInternalCredits(credits = [], sales = []) {
+  return credits.filter(credit => {
+    if (financingMethodFields.some(field => isSistecredito(credit[field]))) return false;
+
+    const references = new Set(saleReferenceFields
+      .map(field => String(credit[field] ?? '').trim())
+      .filter(Boolean));
+    if (!references.size) return true;
+
+    const sale = sales.find(candidate => saleIdentifierFields.some(field =>
+      references.has(String(candidate[field] ?? '').trim()),
+    ));
+    return !sale || !financingMethodFields.some(field => isSistecredito(sale[field]));
+  });
+}
+
 function linkedHistoricalCredit(credit, allCredits) {
   const historicalId = [credit.factura, credit.invoice_number, credit.invoiceNumber]
     .map(value => String(value || ''))
@@ -157,7 +193,7 @@ function renderPagination(kind, currentPage, pageSize, totalItems) {
 
 export function renderCreditos(data) {
   const sourceCredits = data.credits || [];
-  const credits = filterDuplicateHistoricalCredits(sourceCredits)
+  const credits = filterInternalCredits(filterDuplicateHistoricalCredits(sourceCredits), data.sales || [])
     .map(item => normalizeCredit(item, data.sales || [], data.payments || [], sourceCredits));
   const totalPending = credits.reduce((sum, item) => sum + item.pending, 0);
   const filter = String(data.creditFilter || 'all');
@@ -183,7 +219,12 @@ export function renderCreditos(data) {
   const visibleCredits = filteredCredits.slice((currentPage - 1) * pageSize, currentPage * pageSize);
   const filterOptions = `<label class="input-label">Estado del crédito<select class="field" data-credit-filter><option value="all" ${filter === 'all' ? 'selected' : ''}>Todos</option><option value="pending" ${filter === 'pending' ? 'selected' : ''}>Pendientes</option><option value="paid" ${filter === 'paid' ? 'selected' : ''}>Pagados</option><option value="overdue" ${filter === 'overdue' ? 'selected' : ''}>En mora</option></select></label>`;
   const search = `<label class="input-label">Buscar crédito<input class="field" type="search" data-credit-search value="${escapeAttribute(data.creditQuery || '')}" placeholder="Nombre, ID o factura" autocomplete="off"></label>`;
-  const rows = visibleCredits.map(item => `<tr><td><strong>${item.id}</strong></td><td>${item.customer}</td><td>${item.saleId || '-'}</td><td>${item.date || '-'}</td><td>${money(item.total)}</td><td>${money(item.initial)}</td><td>${money(item.paid)}</td><td><strong>${money(item.pending)}</strong></td><td>${badge(isPaid(item) ? 'PAGADO' : isOverdue(item) ? 'EN MORA' : item.status)}</td><td><button class="table-action" data-action="view-credit" data-credit-id="${item.id}">Ver</button></td><td><button class="table-action" data-action="edit-credit" data-credit-id="${item.id}">Editar</button></td><td>${item.pending > 0 ? `<button class="table-action" data-action="credit-payment" data-credit-id="${item.id}">Registrar abono</button>` : '<span class="muted">—</span>'}</td></tr>`);
+  const rows = visibleCredits.map(item => {
+    const saleReference = item.saleId || [
+      item.invoiceNumber, item.invoice_number, item.factura, item.numero_factura,
+    ].map(value => String(value || '')).find(value => value && !value.startsWith('HIST-CR-')) || '-';
+    return `<tr><td><strong>${item.id}</strong></td><td>${item.customer}</td><td>${saleReference}</td><td>${item.date || '-'}</td><td>${money(item.total)}</td><td>${money(item.initial)}</td><td>${money(item.paid)}</td><td><strong>${money(item.pending)}</strong></td><td>${badge(isPaid(item) ? 'PAGADO' : isOverdue(item) ? 'EN MORA' : item.status)}</td><td><button class="table-action" data-action="view-credit" data-credit-id="${item.id}">Ver</button></td><td><button class="table-action" data-action="edit-credit" data-credit-id="${item.id}">Editar</button></td><td>${item.pending > 0 ? `<button class="table-action" data-action="credit-payment" data-credit-id="${item.id}">Registrar abono</button>` : '<span class="muted">—</span>'}</td></tr>`;
+  });
   const list = rows.length
     ? table(['Credito','Cliente','Venta','Fecha','Valor','Inicial','Pagado','Saldo pendiente','Estado','Consulta','Administrar','Registrar abono'], rows)
     : '<p class="muted">No hay créditos que coincidan con la búsqueda y los filtros.</p>';

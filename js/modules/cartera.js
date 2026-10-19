@@ -1,4 +1,4 @@
-import { renderCreditos } from './creditos.js?v=20261010-finance-summary-v1';
+import { renderCreditos } from './creditos.js?v=20261019-exclude-sistecredito-v1';
 
 export function renderCartera(data) {
   return renderCreditos(data);

@@ -19,7 +19,7 @@ import { renderInventario, inventoryContent } from './modules/inventario.js?v=20
 import { renderTraslados, transferModal, transferTable } from './modules/traslados.js?v=20';
 import { inventoryEntry, ensureInventoryEntry } from './utils/inventory.js?v=19';
 import { renderClientes, customerTable } from './modules/clientes.js?v=20';
-import { renderCreditos, creditPendingBalance, filterDuplicateHistoricalCredits, normalizeCredit, paymentsForCredit } from './modules/creditos.js?v=20261010-finance-summary-v1';
+import { renderCreditos, creditPendingBalance, filterDuplicateHistoricalCredits, filterInternalCredits, normalizeCredit, paymentsForCredit } from './modules/creditos.js?v=20261019-exclude-sistecredito-v1';
 import { renderCartera } from './modules/cartera.js?v=25';
 import { renderLocales } from './modules/locales.js?v=19';
 import { renderReportes, renderReportPreview, renderInventoryHandoverDocument, reportDefinition } from './modules/reportes.js?v=21';
@@ -67,7 +67,7 @@ let salesViewState = { query:'', store:'all', month:`${new Date().getFullYear()}
 let productViewState = { query:'', store:'all', active:'active', version:0 };
 function syncCustomerBalances(){
 	const allCredits=store.collection.credits||[], sales=store.collection.sales||[];
-	const credits=filterDuplicateHistoricalCredits(allCredits);
+	const credits=filterInternalCredits(filterDuplicateHistoricalCredits(allCredits),sales);
 	const normalizedCredits=new Map(credits.map(credit=>[
 		String(credit.id),
 		normalizeCredit(credit,sales,store.collection.payments||[],allCredits),
