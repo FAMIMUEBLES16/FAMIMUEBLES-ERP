@@ -21,15 +21,15 @@ const html = renderAuditoria({
   movementEdits: [{ fecha: '2026-10-05', movimiento_id: 31, tipo_movimiento: 'VENTA', campo: 'cantidad', valor_anterior: '1', valor_nuevo: '2', motivo: 'Corrección autorizada', administrador: '12345' }],
 });
 
-assert.match(html, /Historial de Sistecrédito/);
+assert.match(html, /Filtros de Sistecrédito/);
 assert.match(html, /150\.000/);
 assert.match(html, /Crédito 8/);
 assert.match(html, /Apartado 4/);
 assert.match(html, /bitácora de Telegram/);
-assert.match(html, /Telegram · 12345/);
+assert.match(html, /Telegram · ID 12345/);
 assert.match(html, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
 assert.doesNotMatch(html, /<script>alert\(1\)<\/script>/);
-assert.match(html, /Ediciones de movimientos desde Telegram/);
+assert.match(html, /Filtros de ediciones de movimientos desde Telegram/);
 assert.match(html, /Corrección autorizada/);
 
 const state = {

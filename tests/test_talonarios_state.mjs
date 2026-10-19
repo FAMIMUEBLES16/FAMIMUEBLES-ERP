@@ -217,8 +217,8 @@ assert.equal(
 );
 assert.equal(
   normalized.find((item) => item.id === 'RECEIPT-5651')?.status,
-  'EN_USO',
-  'the configured receipt range should remain active'
+    'TERMINADO',
+    'the configured receipt range should be terminated once its final number is used'
 );
 assert.equal(
   normalized.find((item) => item.id === 'SENT-15751')?.status,
@@ -261,7 +261,7 @@ const reportedTalonarios = [
 ];
 
 normalizeActiveTalonarios(reportedTalonarios);
-const wrongLocalRange = { id: 'WRONG-CARTAGENITA-15801', type: 'REMISION', startNumber: 15801, endNumber: 15850, currentNumber: 15822, consecutiveBaseline: 15801, storeId: 'INV CARTAGENITA', destinationName: 'INV CARTAGENITA', sentFrom: 'INV CRR 5 3 26', sentAt: '2026-10-08T18:32:22Z', status: 'ENVIADO' };
+const wrongLocalRange = { id: 'WRONG-CARTAGENITA-15801', type: 'REMISION', startNumber: 15801, endNumber: 15850, currentNumber: 15821, consecutiveBaseline: 15801, storeId: 'INV CARTAGENITA', destinationName: 'INV CARTAGENITA', sentFrom: 'INV CRR 5 3 26', sentAt: '2026-10-08T18:32:22Z', status: 'ENVIADO' };
 normalizeActiveTalonarios([wrongLocalRange]);
 assert.equal(wrongLocalRange.storeId, 'INV CRR 5 3 26');
 assert.equal(wrongLocalRange.destinationName, 'INV CRR 5 3 26');
@@ -280,7 +280,7 @@ assert.equal(currentTalonarioNumber(reportedTalonarios.find((item) => item.id ==
 assert.equal(currentTalonarioNumber(reportedTalonarios.find((item) => item.id === 'CRR5556-CURRENT')), 15734);
 assert.equal(reportedTalonarios.find((item) => item.id === 'CRR76A15-CURRENT')?.status, 'EN_USO');
 assert.equal(currentTalonarioNumber(reportedTalonarios.find((item) => item.id === 'MANABLANCA-CURRENT')), 15791);
-assert.equal(reportedTalonarios.find((item) => item.id === 'CRR5326-RECEIPT')?.status, 'EN_USO');
+assert.equal(reportedTalonarios.find((item) => item.id === 'CRR5326-RECEIPT')?.status, 'TERMINADO');
 
 const cartagenitaRotation = [
   { id: 'CARTAGENITA-EXHAUSTED', type: 'REMISION', startNumber: 15451, endNumber: 15500, currentNumber: 15496, storeId: 'INV CARTAGENITA', destinationName: 'INV CARTAGENITA', status: 'EN_USO' },

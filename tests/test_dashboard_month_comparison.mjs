@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { monthToDateSalesComparison } from '../js/modules/dashboard-v3.js';
+import { monthToDateSalesComparison, renderDashboard } from '../js/modules/dashboard-v3.js';
 
 const octoberComparison = monthToDateSalesComparison([
   { date: '2026-10-01', total: 2000000 },
@@ -24,8 +24,18 @@ const marchComparison = monthToDateSalesComparison([
 ], '2026-03-31');
 
 assert.deepEqual(marchComparison, {
-  currentTotal: 100,
+  currentTotal: 400,
   previousTotal: 200,
   previousPeriodStart: '2026-02-01',
   previousPeriodEnd: '2026-02-28',
 });
+
+globalThis.window = {};
+const dashboard = renderDashboard({
+  sales: [{ id: 'sale-1', date: '2026-10-01', total: 20620000, paymentMethod: 'Sistecrédito' }],
+  sistecredito: [{ date: '2026-10-02', amount: 3727169 }],
+  sistecreditoAdjustments: [],
+  sistecreditoSaleAmounts: [],
+});
+assert.match(dashboard, /Saldo pendiente a hoy/);
+assert.match(dashboard, /85\.697\.228/);

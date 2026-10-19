@@ -7,10 +7,61 @@ from decimal import Decimal
 from unittest.mock import patch
 
 import server
-from server import _create_shared_sale, _shared_domain_items, canonical_request_hash, password_hash, password_matches, specialized_xlsx
+from server import _create_shared_credit_record, _create_shared_sale, _sistecredito_sale_amount_record, _shared_domain_items, canonical_request_hash, password_hash, password_matches, specialized_xlsx
 
 
 class BackendSafetyTests(unittest.TestCase):
+    def test_sistecredito_sale_amount_is_validated_and_bound_to_sale(self):
+        direct_record = _sistecredito_sale_amount_record(
+            {"paymentMethod": "Sistecrédito", "sistecreditoAmount": 250000},
+            "sale-direct",
+            "2026-10-19",
+            250000,
+        )
+        self.assertEqual(direct_record["amount"], 250000)
+        self.assertIsNone(_sistecredito_sale_amount_record(
+            {"paymentMethod": "Sistecrédito"},
+            "sale-legacy",
+            "2026-10-19",
+            250000,
+        ))
+        record = _sistecredito_sale_amount_record(
+            {
+                "paymentMethod": "Mixto (Sistecrédito + Efectivo)",
+                "sistecreditoAmount": 150000,
+                "otherPaymentMethod": "Efectivo",
+            },
+            "sale-1",
+            "2026-10-19",
+            250000,
+        )
+        self.assertEqual(record, {
+            "id": "sale-1",
+            "type": "sale_payment",
+            "saleId": "sale-1",
+            "date": "2026-10-19",
+            "amount": 150000,
+            "otherPaymentMethod": "Efectivo",
+        })
+        with self.assertRaisesRegex(ValueError, "otro medio"):
+            _sistecredito_sale_amount_record(
+                {"paymentMethod": "Mixto (Sistecrédito + Efectivo)", "sistecreditoAmount": 250000, "otherPaymentMethod": "Efectivo"},
+                "sale-2",
+                "2026-10-19",
+                250000,
+            )
+
+    def test_sistecredito_sales_are_not_created_as_internal_credit_accounts(self):
+        self.assertIsNone(_create_shared_credit_record(
+            None,
+            {"paymentMethod": "Mixto (Sistecrédito + Efectivo)"},
+            1,
+            {},
+            "Local",
+            "FAC-1",
+            100000,
+        ))
+
     def test_json_responses_use_gzip_when_accepted_and_payload_is_large(self):
         payload = {"data": "inventario," * 500}
 
