@@ -11,9 +11,9 @@ import { navItems, navGroups } from './components/sidebar.js?v=23';
 import { showToast } from './components/toast.js';
 import { table } from './components/tables.js';
 import { renderNotifications } from './components/notifications.js';
-import { renderDashboard } from './modules/dashboard-v3.js?v=20261010-dashboard-store-filter-v1';
+import { renderDashboard } from './modules/dashboard-v3.js?v=20261019-sistecredito-card-v1';
 import { canonicalSellerName, renderVentas, salesTable, salesSummary, normalizeSales, salesMonthKey, saleTimestamp, filterSales, salesSellers, findMatchingSaleCustomer } from './modules/ventas.js?v=20261019-sales-user-filter-v1';
-import { renderFacturacion, cartTotal, productResults, customerResults } from './modules/facturacion.js?v=26';
+import { renderFacturacion, cartTotal, productResults, customerResults } from './modules/facturacion.js?v=20261019-sistecredito-server-guard-v1';
 import { renderProductos, productTable, productMatches } from './modules/productos.js?v=22';
 import { renderInventario, inventoryContent } from './modules/inventario.js?v=20';
 import { renderTraslados, transferModal, transferTable } from './modules/traslados.js?v=20';
@@ -27,11 +27,11 @@ import { renderConfiguracion } from './modules/configuracion.js?v=18';
 import { renderGastos } from './modules/gastos.js?v=19';
 import { renderGasolina } from './modules/gasolina.js?v=20261011-fuel-user-delete-v1';
 import { mergeUserSources, renderUsuarios } from './modules/usuarios.js?v=24';
-import { renderDescansos } from './modules/descansos.js?v=10';
+import { renderDescansos } from './modules/descansos.js?v=20261015-dom-guard-v1';
 import { renderAuditoria, resetAuditFilters, setAuditFilters } from './modules/auditoria.js?v=27';
 import { renderTalonarios, talonarioModal, setTalonarioFilters, currentTalonarioNumber, normalizeActiveTalonarios, availableCentralTalonarios, nextAvailableCentralTalonario, configuredTalonarioOwnerLabel, configuredTalonarioOwnerMatches, talonarioSalesDocuments } from './modules/talonarios.js?v=24';
 import { historicalTalonarios, historicalRecibos, storedTalonarios } from './modules/talonarios-historial.js?v=1';
-import { renderApartados } from './modules/apartados.js?v=20';
+import { renderApartados } from './modules/apartados.js?v=20261015-finance-identifiers-v1';
 import { createApartado, decreaseSaleInventory, runTransaction, addMovement } from './modules/finanzas.js?v=18';
 import { formatCurrency as money } from './utils/currency.js?v=18';
 
@@ -48,10 +48,12 @@ import { renderCuentasPorPagar, payableTable, payableSummary } from './modules/c
 import { accountsPayableDetail } from './modules/accounts-payable-detail.js?v=20261019-preserve-supplier-history-v1';
 import { accountPayableSupplierKey, calculateBalance, filterAccountsPayable, normalizePayableSuppliers, registerPayment as registerSupplierPayment, updateAccountPayableStatus } from './services/accounts-payable-service.js?v=20261019-preserve-supplier-history-v1';
 import { renderOperaciones, advancedModal, nextAdvancedId } from './modules/operaciones.js?v=2';
-import { renderParidad, payrollModal, payrollConfigModal, countModal, sistecreditoModal, formatParityResult, sistecreditoSummary, sistecreditoTable } from './modules/paridad.js?v=4';
+import { renderParidad, payrollModal, payrollConfigModal, countModal, sistecreditoModal, sistecreditoDepositModal, sistecreditoOpeningModal, formatParityResult, sistecreditoSummary, sistecreditoTable } from './modules/paridad.js?v=20261019-credinet-reconciliation-v1';
 import { api } from './services/api-client.js?v=20261015-large-state-timeout-v1';
 
-const state = { cart:[], payment:'Efectivo', customerId:'CLI-00001', storeId:store.collection.stores[0]?.id || '', transport:0, transportDestination:'', transportNote:'' };
+const state = { cart:[], payment:'Efectivo', customerId:'CLI-00001', storeId:store.collection.stores[0]?.id || '', transport:0, transportDestination:'', transportNote:'', sistecreditoMixedAmount:0, mixedOtherMethod:'Efectivo' };
+let sistecreditoLedgerEnabled = false;
+let sistecreditoLedgerStatus = 'unavailable';
 let sharedRefreshInFlight = false;
 let sharedRefreshTimer = null;
 let automaticSharedRefreshEnabled = false;
@@ -104,11 +106,12 @@ const actionPermissionMap = {
 	'justify-talonario-number':['Talonarios','edit'],
 	'view-expense':['Gastos','view'],'edit-expense':['Gastos','edit'],'delete-expense':['Gastos','delete'],'new-expense':['Gastos','create'],
 	'adjust-inventory':['Inventario','edit'],'delete-inventory':['Inventario','delete'],'report':['Reportes','view'],
-	'parity-count':['Inventario','edit'],'parity-sistecredito':['Creditos','create']
+	'parity-count':['Inventario','edit'],'parity-sistecredito':['Creditos','create'],
+	'sistecredito-deposit':['Creditos','create'],'sistecredito-opening':['Creditos','create']
 };
 const $ = selector => document.querySelector(selector);
 const isLocalApp = ['localhost','127.0.0.1','::1'].includes(window.location.hostname);
-const views = { dashboard:()=>renderDashboard(store.collection), ventas:()=>renderVentas(store.collection), facturacion:()=>renderFacturacion(store.collection,state.cart,state.payment,state.customerId,state.transport,state.transportDestination,state.transportNote,state.storeId), productos:()=>renderProductos(store.collection), inventario:()=>renderInventario(store.collection,state.storeId), traslados:()=>renderTraslados(store.collection), proveedores:()=>renderProveedores(store.collection), compras:()=>renderCompras(store.collection), 'cuentas-por-pagar':()=>renderCuentasPorPagar(store.collection), clientes:()=>renderClientes(store.collection), creditos:()=>renderCreditos({...store.collection,installments:[...(store.collection.installments||[]),...creditViewState.overdueInstallments],creditFilter:creditViewState.filter,creditQuery:creditViewState.query,creditPage:creditViewState.page,creditPageSize:creditViewState.pageSize}), cartera:()=>renderCartera({...store.collection,installments:[...(store.collection.installments||[]),...creditViewState.overdueInstallments],creditFilter:creditViewState.filter,creditQuery:creditViewState.query,creditPage:creditViewState.page,creditPageSize:creditViewState.pageSize}), apartados:()=>renderApartados({...store.collection,apartadoFilter:apartadoViewState.filter,apartadoQuery:apartadoViewState.query,apartadoPage:apartadoViewState.page,apartadoPageSize:apartadoViewState.pageSize}), locales:()=>renderLocales(store.collection), descansos:()=>renderDescansos(store.collection), operaciones:()=>renderOperaciones(store.collection), paridad:()=>renderParidad(store.collection), gastos:()=>renderGastos(store.collection), gasolina:()=>renderGasolina(store.collection,canPerform('Gasolina','delete')), auditoria:()=>renderAuditoria(store.collection), usuarios:()=>renderUsuarios(store.collection), talonarios:()=>renderTalonarios(store.collection), reportes:()=>renderReportes(store.collection), configuracion:renderConfiguracion };
+const views = { dashboard:()=>renderDashboard({...store.collection,sistecreditoOpeningDefault:activeTenantId()==='tenant-default'}), ventas:()=>renderVentas(store.collection), facturacion:()=>renderFacturacion(store.collection,state.cart,state.payment,state.customerId,state.transport,state.transportDestination,state.transportNote,state.storeId,state.sistecreditoMixedAmount,state.mixedOtherMethod,sistecreditoLedgerEnabled), productos:()=>renderProductos(store.collection), inventario:()=>renderInventario(store.collection,state.storeId), traslados:()=>renderTraslados(store.collection), proveedores:()=>renderProveedores(store.collection), compras:()=>renderCompras(store.collection), 'cuentas-por-pagar':()=>renderCuentasPorPagar(store.collection), clientes:()=>renderClientes(store.collection), creditos:()=>renderCreditos({...store.collection,installments:[...(store.collection.installments||[]),...creditViewState.overdueInstallments],creditFilter:creditViewState.filter,creditQuery:creditViewState.query,creditPage:creditViewState.page,creditPageSize:creditViewState.pageSize}), cartera:()=>renderCartera({...store.collection,installments:[...(store.collection.installments||[]),...creditViewState.overdueInstallments],creditFilter:creditViewState.filter,creditQuery:creditViewState.query,creditPage:creditViewState.page,creditPageSize:creditViewState.pageSize}), apartados:()=>renderApartados({...store.collection,apartadoFilter:apartadoViewState.filter,apartadoQuery:apartadoViewState.query,apartadoPage:apartadoViewState.page,apartadoPageSize:apartadoViewState.pageSize}), locales:()=>renderLocales(store.collection), descansos:()=>renderDescansos(store.collection), operaciones:()=>renderOperaciones(store.collection), paridad:()=>renderParidad({...store.collection,sistecreditoOpeningDefault:activeTenantId()==='tenant-default',sistecreditoLedgerEnabled,sistecreditoLedgerStatus}), gastos:()=>renderGastos(store.collection), gasolina:()=>renderGasolina(store.collection,canPerform('Gasolina','delete')), auditoria:()=>renderAuditoria(store.collection), usuarios:()=>renderUsuarios(store.collection), talonarios:()=>renderTalonarios(store.collection), reportes:()=>renderReportes(store.collection), configuracion:renderConfiguracion };
 function activeStoreKey(){ return `famimuebles-active-store-${activeTenantId() || 'default'}`; }
 function resolveActiveStore(){ const stores=store.collection.stores||[]; const saved=localStorage.getItem(activeStoreKey()); return stores.some(item=>String(item.id)===String(saved)) ? String(saved) : (stores[0]?.id || ''); }
 function syncActiveStoreSelector(){ const selector=$('#active-store-selector'); if(!selector)return; const stores=store.collection.stores||[]; selector.innerHTML=stores.length ? stores.map(item=>`<option value="${item.id}">${item.name}</option>`).join('') : '<option value="">Sin locales registrados</option>'; selector.disabled=!stores.length; selector.value=state.storeId; }
@@ -200,7 +203,7 @@ function refreshProducts(){ const query=$('[data-filter="products"]')?.value||''
 function clearProductFilters(){ const defaults={'[data-filter="products"]':'','[data-product-store]':'all','[data-product-active]':'active'};Object.entries(defaults).forEach(([selector,value])=>{const element=$(selector);if(element)element.value=value;});productPage=1;refreshProducts();}
 function modal(title, fields, onSubmit){ $('#modal-root').innerHTML=`<div class="modal-backdrop"><form class="modal" id="data-modal"><button type="button" class="modal-close">×</button><p class="eyebrow">FAMIMUEBLES ERP</p><h2>${title}</h2>${fields.map(field=>`<label class="input-label">${field.label}<input class="field" name="${field.name}" type="${field.type||'text'}" value="${field.value||''}" ${field.required===false?'':'required'}></label>`).join('')}<button class="primary wide">Guardar</button></form></div>`; $('.modal-close').onclick=()=>$('#modal-root').innerHTML=''; $('#data-modal').onsubmit=async event=>{event.preventDefault();const button=event.target.querySelector('button.primary');button.disabled=true;try{await onSubmit(Object.fromEntries(new FormData(event.target)));}catch(error){showToast(error.message,'error');}finally{button.disabled=false;}}; }
 async function persistCatalogRecord(path, record, method='POST', stableRequestId=''){ const requestId=method==='POST'?(stableRequestId||(globalThis.crypto?.randomUUID?crypto.randomUUID():`${path}-${Date.now()}-${Math.random()}`)):''; const options={headers:{'X-Tenant-ID':activeTenantId(),...(requestId?{'Idempotency-Key':requestId}: {})}}; const body={...record,...(requestId?{requestId}:{}),tenantId:activeTenantId()}; try { return method==='PUT' ? await api.put(path,body,options) : method==='DELETE' ? await api.delete(path,body,options) : await api.post(path,body,options); } catch(error) { if(error.status===401){localStorage.removeItem('famimuebles-auth-token');localStorage.removeItem('famimuebles-user');throw new Error('La sesion expiro. Inicia sesion nuevamente para guardar cambios.');} throw error; } }
-const remoteDomainCollections=['customers','suppliers','purchases','credits','expenses','accountsPayable','supplierPayments','customerAccounts','returns','supplierReturns','stockCounts','reservations','warranties','damagedStock','cashSessions','cashMovements','bankAccounts','quotes','orders','deliveries','creditNotes','transfers','talonarios','talonarioJustifications','workSchedules','staffAbsences'];
+const remoteDomainCollections=['customers','suppliers','purchases','credits','expenses','accountsPayable','supplierPayments','customerAccounts','returns','supplierReturns','stockCounts','reservations','warranties','damagedStock','cashSessions','cashMovements','bankAccounts','quotes','orders','deliveries','creditNotes','transfers','talonarios','talonarioJustifications','workSchedules','staffAbsences','sistecreditoAdjustments','sistecreditoSaleAmounts'];
 async function persistDomainRecord(collection, record){
 	const path=`/api/domain/${encodeURIComponent(collection)}`;
 	const payload={...record,tenantId:activeTenantId()};
@@ -365,8 +368,9 @@ async function refreshTalonarioSalesAlerts(){
 	}
 	store.save();
 }
-const criticalDomainCollections = new Set(['customers','suppliers','purchases','accountsPayable','supplierPayments','talonarios','talonarioJustifications','credits','expenses','transfers']);
+const criticalDomainCollections = new Set(['customers','suppliers','purchases','accountsPayable','supplierPayments','talonarios','talonarioJustifications','credits','expenses','transfers','sistecreditoAdjustments','sistecreditoSaleAmounts']);
 async function loadDomainCollection(state, collection, timeout=5000, retries=0, refreshExisting=false){
+	if(['sistecreditoAdjustments','sistecreditoSaleAmounts'].includes(collection)&&!sistecreditoLedgerEnabled)return true;
 	if(!refreshExisting&&collection!=='transfers'&&Array.isArray(state[collection])&&state[collection].length)return true;
 	for(let attempt=0;attempt<=retries;attempt++){
 		try {
@@ -1040,6 +1044,12 @@ async function finishSale(){
 	if(!state.customerId)return showToast('Selecciona un cliente.','error');
 	try {
     const selectedCustomer = store.collection.customers.find(customer => String(customer.id) === String(state.customerId));
+		const saleTotal = cartTotal(state.cart, state.transport);
+		const mixedAmount = Number(state.sistecreditoMixedAmount || 0);
+	if(state.payment==='Mixto'&&!sistecreditoLedgerEnabled)throw new Error('El servidor aún no está actualizado para registrar pagos mixtos Sistecrédito. Actualiza y reinicia el servidor ERP antes de usar esta opción.');
+	if(state.payment==='Mixto'&&(!Number.isSafeInteger(mixedAmount)||mixedAmount<=0||mixedAmount>=saleTotal))throw new Error('Ingresa un valor Sistecrédito válido y deja un saldo positivo para el otro medio de pago.');
+		const sistecreditoAmount = state.payment==='Sistecrédito' ? saleTotal : state.payment==='Mixto' ? mixedAmount : null;
+		const salePaymentMethod = state.payment==='Mixto' ? `Mixto (Sistecrédito + ${state.mixedOtherMethod})` : state.payment;
 		const salePayload = {
 			id: generateId('VEN', store.collection.sales),
 			requestId: globalThis.crypto?.randomUUID ? crypto.randomUUID() : `sale-${Date.now()}-${Math.random()}`,
@@ -1049,7 +1059,9 @@ async function finishSale(){
 	invoiceNumber: $('[data-physical-invoice]')?.value.trim() || '',
 	documentType: $('[data-document-type]')?.value || 'REMISION',
 	date: $('[data-sale-date]')?.value || localDateValue(),
-	paymentMethod: state.payment,
+	paymentMethod: salePaymentMethod,
+	sistecreditoAmount,
+	otherPaymentMethod: state.payment==='Mixto' ? state.mixedOtherMethod : '',
       items: state.cart.map(item => ({
         productId: item.id,
         quantity: Number(item.quantity || 0),
@@ -1064,11 +1076,17 @@ async function finishSale(){
 	creditInstallments: Number($('[data-credit-installments]')?.value || 6),
       tenantId: activeTenantId()
     };
-		await api.post('/api/catalog/sale', salePayload, { headers: { 'X-Tenant-ID': activeTenantId(), 'Idempotency-Key': salePayload.requestId } });
+		const createdSale = await api.post('/api/catalog/sale', salePayload, { headers: { 'X-Tenant-ID': activeTenantId(), 'Idempotency-Key': salePayload.requestId } });
+		if(sistecreditoAmount!==null){
+			const amountRecord={id:String(createdSale.id),saleId:String(createdSale.id),type:'sale_payment',date:salePayload.date,amount:sistecreditoAmount,otherPaymentMethod:salePayload.otherPaymentMethod};
+			store.collection.sistecreditoSaleAmounts=[...(store.collection.sistecreditoSaleAmounts||[]).filter(item=>String(item.saleId||item.id)!==String(createdSale.id)),amountRecord];
+		}
 		await registerTalonarioSale(salePayload);
     state.cart = [];
 	state.customerId = '';
 	state.payment = 'Efectivo';
+	state.sistecreditoMixedAmount = 0;
+	state.mixedOtherMethod = 'Efectivo';
 	state.transport = 0;
 	state.transportDestination = '';
 	state.transportNote = '';
@@ -1089,6 +1107,17 @@ function transferField(name){return document.querySelector(`.transfer-modal [dat
 document.addEventListener('click',event=>{const action=event.target.closest('[data-action]')?.dataset.action;if(action==='new-sale')location.hash='#facturacion';else if(action==='new-store')openStoreModal();else if(action==='edit-store')openStoreModal(event.target.closest('[data-store-id]')?.dataset.storeId);else if(action==='local-detail')showStoreDetail(event.target.closest('[data-store-id]')?.dataset.storeId);else if(action==='local-inventory'){const storeId=event.target.closest('[data-store-id]')?.dataset.storeId;if(storeId){state.storeId=storeId;location.hash='#inventario';render();}}else if(action==='local-transfer'){const storeId=event.target.closest('[data-store-id]')?.dataset.storeId;if(storeId){state.storeId=storeId;openTransfer();}}else if(action==='adjust-inventory')openAdjustment(event.target.closest('[data-product-id]')?.dataset.productId,event.target.closest('[data-store-id]')?.dataset.storeId);else if(action==='new-product')openProductEditor();else if(action==='edit-product'){const product=store.collection.products.find(item=>item.id===event.target.closest('[data-product-id]')?.dataset.productId);openProductEditor(product?.id);}else if(action==='toggle-product'){const product=store.collection.products.find(item=>item.id===event.target.closest('[data-product-id]')?.dataset.productId);if(product){setProductActive(store.collection,product.id,product.active===false);store.save();render();}}else if(action==='new-supplier')openSupplierModal();else if(action==='edit-supplier')openSupplierModal(event.target.closest('[data-supplier-id]')?.dataset.supplierId);else if(action==='new-customer')openCustomerModal();else if(action==='edit-customer')openCustomerModal(event.target.closest('[data-customer-id]')?.dataset.customerId);else if(action==='toggle-supplier'){const supplier=store.collection.suppliers.find(item=>item.id===event.target.closest('[data-supplier-id]')?.dataset.supplierId);if(supplier){supplier.active=supplier.active===false;store.save();render();}}else if(action==='product-detail'){const id=event.target.closest('[data-product-id]')?.dataset.productId;$('#modal-root').innerHTML=productDetail(store.collection,id);$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';}else if(action==='import-products')openImportModal();else if(action==='preview-import')previewImport();else if(action==='confirm-import')confirmImport();else if(['new-credit','new-expense','new-fuel','new-user'].includes(action))openModal(action.replace('new-',''));else if(action==='finish-sale')finishSaleLegacy();else if(action==='cancel-invoice'){state.cart=[];render();}else if(action==='add-product')addProduct(event.target.closest('[data-product-id]')?.dataset.productId);else if(action==='new-transfer')openTransfer();else if(action==='payment')showToast('Registra abonos desde el modulo de cartera.','info');if(event.target.dataset.productId&&!action)addProduct(event.target.dataset.productId);if(event.target.dataset.customerId){state.customerId=event.target.dataset.customerId;render();}if(event.target.dataset.payment){state.payment=event.target.dataset.payment;render();}if(event.target.closest('[data-transfer-add]'))addTransferItem();});
 document.addEventListener('click',event=>{if(event.target.dataset.remove){state.cart=state.cart.filter(item=>String(item.id)!==event.target.dataset.remove);render();}if(event.target.dataset.increase){const item=state.cart.find(entry=>entry.id===event.target.dataset.increase);const row=item&&inventoryEntry(store.collection,item.id,state.storeId);if(item&&row)item.quantity=Math.min(row.quantity,item.quantity+1);render();}if(event.target.dataset.decrease){const item=state.cart.find(entry=>entry.id===event.target.dataset.decrease);if(item)item.quantity=Math.max(1,item.quantity-1);render();}});
 document.addEventListener('input',event=>{if(event.target.id==='billing-product'){const available=document.querySelector('[data-billing-available]')?.checked!==false;$('#product-results').innerHTML=productResults(store.collection.products,state.storeId,store.collection,event.target.value,available);}if(event.target.id==='customer-search')$('#customer-results').innerHTML=customerResults(store.collection.customers.filter(item=>`${item.name} ${item.document} ${item.phone} ${item.id}`.toLowerCase().includes(event.target.value.toLowerCase())),state.customerId);if(event.target.matches('[data-filter="products"]'))updateProductViewState();if(event.target.dataset.quantity){const item=state.cart.find(entry=>String(entry.id)===event.target.dataset.quantity);const row=item&&inventoryEntry(store.collection,item.id,state.storeId);const requested=Number(event.target.value)||0;if(item&&row){item.quantity=Math.max(1,requested);item.quantityInvalid=requested>row.quantity;if(item.quantityInvalid)showToast('Stock insuficiente en este local.','error');render();}}if(event.target.dataset.price){const item=state.cart.find(entry=>String(entry.id)===event.target.dataset.price);if(item)item.priceVenta=Math.max(item.minimumPrice,Number(event.target.value)||0);}});
+document.addEventListener('input',event=>{
+	if(!event.target.matches('[data-sistecredito-mixed-amount]'))return;
+	state.sistecreditoMixedAmount=Number(event.target.value);
+	const total=cartTotal(state.cart,state.transport);
+	const remaining=Math.max(0,total-(Number.isFinite(state.sistecreditoMixedAmount)?state.sistecreditoMixedAmount:0));
+	const preview=event.target.closest('.credit-flow')?.querySelector('[data-mixed-other-amount]');
+	if(preview)preview.textContent=money(remaining);
+});
+document.addEventListener('change',event=>{
+	if(event.target.matches('[data-mixed-other-method]'))state.mixedOtherMethod=event.target.value;
+});
 document.addEventListener('input',event=>{
 	const input=event.target.closest('#customer-search,#billing-product');
 	if(!input)return;
@@ -1420,6 +1449,9 @@ document.addEventListener('click', async event=>{
 	if(action==='parity-payroll-config'){$('#modal-root').innerHTML=payrollConfigModal();$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';}
 	if(action==='parity-count'){$('#modal-root').innerHTML=countModal(store.collection);$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';}
 	if(action==='parity-sistecredito'){$('#modal-root').innerHTML=sistecreditoModal(store.collection);$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';}
+	if(['sistecredito-deposit','sistecredito-opening'].includes(action)&&!sistecreditoLedgerEnabled){showToast(sistecreditoLedgerStatus==='unsupported'?'Actualiza y reinicia el servidor ERP para habilitar esta función.':'No se pudo verificar el soporte del servidor; por seguridad no se guardó ningún cambio.','error');return;}
+	if(action==='sistecredito-deposit'){$('#modal-root').innerHTML=sistecreditoDepositModal();$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';}
+	if(action==='sistecredito-opening'){$('#modal-root').innerHTML=sistecreditoOpeningModal({...store.collection,sistecreditoOpeningDefault:activeTenantId()==='tenant-default'});$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';}
 	if(action==='parity-report'){
 		try { const report=event.target.closest('[data-report]')?.dataset.report||''; const params=new URLSearchParams(); [['local','parity-local'],['vendedor','parity-vendedor'],['metodo_pago','parity-method']].forEach(([key,id])=>{const value=document.getElementById(id)?.value;if(value)params.set(key,value);}); const query=params.toString(); const payload=await api.get(`/api/parity/report/${encodeURIComponent(report)}${query?`?${query}`:''}`,{headers:{'X-Tenant-ID':activeTenantId()}}); $('#modal-root').innerHTML=`<div class="modal-backdrop"><section class="modal"><button type="button" class="modal-close">x</button><p class="eyebrow">REPORTE ESPECIALIZADO</p><h2>${payload.report}</h2><div class="quick-actions"><button class="outline" data-action="parity-download" data-report="${report}" data-format="csv">CSV</button><button class="outline" data-action="parity-download" data-report="${report}" data-format="xlsx">XLSX</button><button class="outline" data-action="parity-download" data-report="${report}" data-format="pdf">PDF</button></div>${formatParityResult(payload)}</section></div>`;$('.modal-close').onclick=()=>$('#modal-root').innerHTML=''; } catch(error) { showToast(error.message,'error'); }
 	}
@@ -1461,6 +1493,39 @@ document.addEventListener('submit',async event=>{
 	if(form.id==='parity-sistecredito-form'){
 		event.preventDefault();
 		try { const values=Object.fromEntries(new FormData(form)); if (!window.confirm('Se registrará esta operación de Sistecrédito y se modificarán los datos del día. ¿Deseas continuar?')) return; const payload=await parityPost('/api/parity/sistecredito',{vendedor:values.vendedor,local:values.local,amount:Number(values.amount)}); form.querySelector('[data-parity-result]').innerHTML=`<p class="muted">Operación registrada: ${payload.id}.</p>`; showToast('Sistecrédito registrado.'); } catch(error) { showToast(error.message,'error'); }
+	}
+	if(form.id==='sistecredito-deposit-form'){
+		event.preventDefault();
+		try {
+			if(!sistecreditoLedgerEnabled)throw new Error('El servidor no admite todavía guardar consignaciones Sistecrédito. Actualiza y reinicia el servidor ERP.');
+			const values=Object.fromEntries(new FormData(form));
+			const amount=Number(values.amount);
+			if(!values.date||!Number.isSafeInteger(amount)||amount<=0)throw new Error('Ingresa una fecha y un valor de consignación válido.');
+			if(!window.confirm(`Se registrará la consignación de ${money(amount)} y se descontará del saldo pendiente. ¿Deseas continuar?`))return;
+			const uniqueId=globalThis.crypto?.randomUUID?crypto.randomUUID():`${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
+			const record={id:`SCD-${uniqueId}`,type:'deposit',date:values.date,salesPeriod:String(values.salesPeriod||'').trim(),amount,reference:String(values.reference||'').trim(),note:String(values.note||'').trim(),createdAt:new Date().toISOString(),createdBy:JSON.parse(localStorage.getItem('famimuebles-user')||'{}').username||'usuario'};
+			await persistDomainRecord('sistecreditoAdjustments',record);
+			store.collection.sistecreditoAdjustments=[...(store.collection.sistecreditoAdjustments||[]),record];
+			$('#modal-root').innerHTML='';
+			render();
+			showToast('Consignación de Sistecrédito registrada.');
+		} catch(error) { showToast(error.message,'error'); }
+	}
+	if(form.id==='sistecredito-opening-form'){
+		event.preventDefault();
+		try {
+			if(!sistecreditoLedgerEnabled)throw new Error('El servidor no admite todavía guardar el saldo inicial Sistecrédito. Actualiza y reinicia el servidor ERP.');
+			const values=Object.fromEntries(new FormData(form));
+			const amount=Number(values.amount);
+			if(!values.date||!Number.isSafeInteger(amount)||amount<0)throw new Error('Ingresa una fecha y un saldo de apertura válido.');
+			if(!window.confirm(`El saldo inicial quedará en ${money(amount)} al ${values.date}. ¿Deseas continuar?`))return;
+			const record={id:'sistecredito-opening-balance',type:'opening_balance',date:values.date,amount,updatedAt:new Date().toISOString()};
+			await persistDomainRecord('sistecreditoAdjustments',record);
+			store.collection.sistecreditoAdjustments=[...(store.collection.sistecreditoAdjustments||[]).filter(item=>item?.type!=='opening_balance'),record];
+			$('#modal-root').innerHTML='';
+			render();
+			showToast('Saldo inicial de Sistecrédito guardado.');
+		} catch(error) { showToast(error.message,'error'); }
 	}
 	if(form.id==='parity-payroll-config-form'){
 		event.preventDefault();
@@ -1547,6 +1612,14 @@ async function boot() {
 			authScreen(true,'',error.message);
 		}
 		return;
+	}
+	try {
+		const health=await api.get('/api/health',{cache:'no-store',timeout:3000});
+		sistecreditoLedgerEnabled=health.features?.sistecreditoLedger===true;
+		sistecreditoLedgerStatus=sistecreditoLedgerEnabled?'supported':'unsupported';
+	} catch(error) {
+		sistecreditoLedgerStatus='unavailable';
+		console.warn('No se pudo verificar el soporte de cartera Sistecrédito:',error.message);
 	}
 	const permissionsPromise=hydrateCurrentUserPermissions();
 	const bootstrap = currentRoute() === 'talonarios';

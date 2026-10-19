@@ -1,4 +1,4 @@
-import { API_BASE_URL } from '../config.js?v=20261007101229';
+import { API_BASE_URL } from '../config.js?v=20261015-runtime-config-v1';
 
 const REQUEST_TIMEOUT_MS = 30000;
 const NETWORK_RETRY_DELAYS_MS = [400, 1000];

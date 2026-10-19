@@ -2,6 +2,7 @@ import { money, page } from '../components/tables.js';
 import { icons } from '../components/sidebar.js';
 import { calendarDate, formatDate, shiftCalendarDate } from '../utils/dates.js';
 import { canonicalSellerName, filterSales, normalizeSales } from './ventas.js';
+import { calculateSistecreditoLedger, SISTECREDITO_DEFAULT_OPENING_BALANCE } from './sistecredito-ledger.js';
 
 const CHART_COLORS = [
   '#2563EB', '#10B981', '#F59E0B', '#EF4444',
@@ -489,10 +490,14 @@ export function renderDashboard(data) {
   const activeCredits = (data.credits || []).filter(item => safeNumber(item.saldo_pendiente ?? Math.max(0, safeNumber(item.total) - safeNumber(item.initial) - safeNumber(item.paid))) > 0);
   const pendingPayables = (data.accountsPayable || []).filter(account => safeNumber(account.totalAmount ?? account.total) - safeNumber(account.paidAmount ?? account.paid) > 0);
   const payableBalance = pendingPayables.reduce((sum, account) => sum + Math.max(0, safeNumber(account.totalAmount ?? account.total) - safeNumber(account.paidAmount ?? account.paid)), 0);
+  const sistecreditoLedger = calculateSistecreditoLedger({
+    sales,
+    receipts: data.sistecredito || [],
+    adjustments: data.sistecreditoAdjustments || [],
+    saleAmounts: data.sistecreditoSaleAmounts || [],
+    openingBalance: data.sistecreditoOpeningDefault === false ? 0 : SISTECREDITO_DEFAULT_OPENING_BALANCE,
+  });
   const inventory = data.inventoryByStore || [];
-  const low = inventory.filter(row => safeNumber(row.quantity) > 0 && safeNumber(row.quantity) <= safeNumber(row.minimumStock ?? row.minimum)).length;
-  const empty = inventory.filter(row => safeNumber(row.quantity) === 0).length;
-  const alerts = low + empty;
   const chartsHtml = generateCharts({ ...data, sales });
   initCharts({...data, sales});
   return page('RESUMEN GENERAL','Dashboard','<button class="primary" data-action="new-sale">＋ Nueva venta</button>',`<p class="date-line">${formatDate()} · Resumen operativo de FAMIMUEBLES</p>
@@ -502,7 +507,7 @@ export function renderDashboard(data) {
       <div class="metric"><span class="metric-icon metric-icon-purple">${icons.wallet}</span><span>Cartera total</span><strong>${money(balance)}</strong><em>${activeCredits.length} créditos activos</em></div>
       <div class="metric"><span class="metric-icon metric-icon-cyan">${icons.box}</span><span>Inventario total</span><strong>${inventory.reduce((sum, row) => sum + safeNumber(row.quantity), 0).toLocaleString('es-CO')}</strong><em>${(data.products || []).length} productos</em></div>
       <div class="metric"><span class="metric-icon metric-icon-orange">${icons.wallet}</span><span>Cuentas por pagar</span><strong>${money(payableBalance)}</strong><em>${pendingPayables.length} cuentas pendientes</em></div>
-      <div class="metric metric-alert"><span class="metric-icon metric-icon-danger">${icons.settings}</span><span>Alertas</span><strong>${alerts}</strong><em>${empty} agotados · ${low} stock bajo</em></div>
+      <div class="metric metric-alert"><span class="metric-icon metric-icon-danger">${icons.wallet}</span><span>Saldo pendiente a hoy</span><strong>${money(sistecreditoLedger.balance)}</strong><em>Cartera Sistecrédito</em></div>
     </div>
     ${chartsHtml}
   `);

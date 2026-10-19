@@ -1,8 +1,10 @@
 import { page, table, badge, money } from '../components/tables.js';
+import { calculateSistecreditoLedger, SISTECREDITO_DEFAULT_OPENING_BALANCE, SISTECREDITO_DEFAULT_OPENING_DATE } from './sistecredito-ledger.js?v=20261019-credinet-reconciliation-v1';
 
 const value = (item, ...keys) => keys.map(key => item?.[key]).find(item => item !== undefined && item !== null && item !== '') ?? '';
 const dateValue = item => String(value(item, 'fecha', 'date', 'createdAt', 'created_at')).slice(0, 10);
 const photoValue = item => value(item, 'foto', 'photo', 'imagen', 'image', 'captura', 'screenshot', 'comprobante', 'evidencia', 'foto_url', 'photo_url', 'comprobante_file_id');
+const escapeHtml = input => String(input ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
 
 function filteredSistecreditoRows(data = {}, filters = {}) {
   return (Array.isArray(data.sistecredito) ? data.sistecredito : [])
@@ -36,6 +38,71 @@ export function sistecreditoTable(data = {}, filters = {}) {
   return table(['Fecha', 'Vendedor', 'Local', 'Valor', 'Método de pago', 'Acciones'], body);
 }
 
+export function sistecreditoAccounting(data = {}) {
+  const ledger = calculateSistecreditoLedger({
+    sales: data.sales || data.ventas || [],
+    receipts: data.sistecredito || [],
+    adjustments: data.sistecreditoAdjustments || [],
+    saleAmounts: data.sistecreditoSaleAmounts || [],
+    openingBalance: data.sistecreditoOpeningDefault === false ? 0 : SISTECREDITO_DEFAULT_OPENING_BALANCE,
+  });
+  const monthlyDeposits = new Map();
+  (data.sistecreditoAdjustments || [])
+    .filter(item => item?.type === 'deposit')
+    .forEach(item => {
+      const month = String(value(item, 'date', 'fecha')).slice(0, 7) || 'Sin fecha';
+      const current = monthlyDeposits.get(month) || { amount: 0, count: 0 };
+      current.amount += Number(value(item, 'amount', 'valor') || 0);
+      current.count += 1;
+      monthlyDeposits.set(month, current);
+    });
+  const depositRows = [...monthlyDeposits.entries()]
+    .sort(([left], [right]) => right.localeCompare(left))
+    .map(([month, item]) => `<tr><td>${month}</td><td>${item.count}</td><td><strong>${money(item.amount)}</strong></td></tr>`)
+    .join('') || '<tr><td colspan="3" class="muted">Aún no hay consignaciones registradas.</td></tr>';
+  const depositDetails = (data.sistecreditoAdjustments || [])
+    .filter(item => item?.type === 'deposit')
+    .sort((left, right) => String(value(right, 'date', 'fecha')).localeCompare(String(value(left, 'date', 'fecha'))))
+    .map(item => `<tr><td>${escapeHtml(value(item, 'date', 'fecha') || '-')}</td><td>${escapeHtml(item.salesPeriod || '-')}</td><td>${escapeHtml(item.reference || '-')}</td><td>${escapeHtml(item.note || '-')}</td><td><strong>${money(Number(value(item, 'amount', 'valor') || 0))}</strong></td></tr>`)
+    .join('') || '<tr><td colspan="4" class="muted">No hay detalles de consignaciones.</td></tr>';
+  const reconciliationRows = ledger.reconciliations
+    .map(item => `<tr><td>${escapeHtml(`${item.periodStart} a ${item.periodEnd}`)}</td><td>${escapeHtml(item.source || 'Credinet')}</td><td>${Number(item.sourceSalesCount || 0)}</td><td><strong>${money(Number(item.sourceSalesTotal || 0))}</strong></td><td>${Number(item.sourceReceiptsCount || 0)}</td><td><strong>${money(Number(item.sourceReceiptsTotal || 0))}</strong></td></tr>`)
+    .join('');
+  const openingRecord = (data.sistecreditoAdjustments || []).find(item => item?.type === 'opening_balance');
+  const openingDate = openingRecord?.date || openingRecord?.fecha || SISTECREDITO_DEFAULT_OPENING_DATE;
+  const ledgerEnabled = data.sistecreditoLedgerEnabled === true;
+  const ledgerStatusMessage = ledgerEnabled ? '' : data.sistecreditoLedgerStatus === 'unsupported'
+    ? 'El servidor ERP activo aún no admite guardar consignaciones ni pagos mixtos de Sistecrédito. Actualiza y reinicia el servidor para habilitar estas funciones.'
+    : 'No se pudo verificar que el servidor ERP admita estas funciones; por seguridad, el registro de consignaciones y pagos mixtos está deshabilitado.';
+  const adjustment = (amount, label) => `<div><span>${label}</span><strong>${money(amount)}</strong></div>`;
+  return `<section class="panel sistecredito-ledger" aria-label="Saldo pendiente de Sistecrédito">
+    <div class="panel-head"><div><p class="eyebrow">CARTERA SISTECREDITO</p><h3>Sistecrédito nos debe</h3><span class="muted">Saldo calculado desde el cierre del ${openingDate}. Comisión aplicada: 1% sobre ventas desde el corte.</span></div>
+      <div class="quick-actions"><button type="button" class="outline" data-action="sistecredito-opening"${ledgerEnabled ? '' : ' disabled'}>Configurar saldo inicial</button><button type="button" class="primary" data-action="sistecredito-deposit"${ledgerEnabled ? '' : ' disabled'}>Registrar consignación</button></div>
+    </div>
+    ${ledgerStatusMessage ? `<p class="danger-text">${ledgerStatusMessage}</p>` : ''}
+    <div class="sistecredito-ledger-balance"><span>Saldo pendiente a hoy</span><strong>${money(ledger.balance)}</strong></div>
+    <div class="sistecredito-ledger-breakdown">
+      ${adjustment(ledger.openingBalance, 'Saldo de cierre inicial')}
+      ${ledger.reconciliations.length ? adjustment(ledger.rawGrossSales, 'Ventas registradas en ERP') : ''}
+      ${ledger.reconciliations.length ? adjustment(ledger.salesAdjustment, 'Ajuste de ventas según Credinet') : ''}
+      ${adjustment(ledger.grossSales, ledger.reconciliations.length ? 'Ventas conciliadas con Credinet' : 'Ventas Sistecrédito')}
+      ${ledger.reconciliations.length ? adjustment(-ledger.rawCommission, 'Comisión calculada sobre ERP (1%)') : ''}
+      ${ledger.reconciliations.length ? adjustment(-ledger.commissionAdjustment, 'Ajuste de comisión según Credinet') : ''}
+      ${adjustment(-ledger.commission, 'Descuento de comisión (1%)')}
+      ${ledger.reconciliations.length ? adjustment(-ledger.rawReceipts, 'Recaudos registrados en ERP') : ''}
+      ${ledger.reconciliations.length ? adjustment(-ledger.receiptsAdjustment, 'Ajuste de recaudos según Credinet') : ''}
+      ${adjustment(-ledger.receipts, ledger.reconciliations.length ? 'Recaudos conciliados con Credinet' : 'Cuotas/recaudos recibidos')}
+      ${adjustment(-ledger.deposits, 'Consignaciones recibidas')}
+    </div>
+    ${ledger.unallocatedMixedSales ? `<p class="danger-text">Hay ${ledger.unallocatedMixedSales} venta(s) mixta(s) con Sistecrédito sin valor desglosado; no se sumaron para evitar inflar el saldo.</p>` : ''}
+    ${reconciliationRows ? `<h4>Conciliación con Credinet</h4>${table(['Período', 'Fuente', 'Ventas', 'Total ventas', 'Recaudos', 'Total recaudos'], reconciliationRows)}` : ''}
+    <h4>Consignaciones registradas por mes</h4>
+    ${table(['Mes', 'Consignaciones', 'Total consignado'], depositRows)}
+    <h4>Detalle de consignaciones</h4>
+    ${table(['Fecha de consignación', 'Mes de ventas pagado', 'Referencia', 'Nota', 'Valor'], depositDetails)}
+  </section>`;
+}
+
 export function renderParidad(data = {}) {
   const stores = (data.stores || []).map(item => `<option value="${item.name || item.id}">${item.name || item.id}</option>`).join('');
   const sistecredito = Array.isArray(data.sistecredito) ? data.sistecredito : [];
@@ -43,6 +110,7 @@ export function renderParidad(data = {}) {
   const methods = [...new Set(sistecredito.map(item => value(item, 'metodo_pago', 'method', 'paymentMethod')).filter(Boolean))].sort((left, right) => left.localeCompare(right, 'es')).map(method => `<option value="${method}">${method}</option>`).join('');
   return page('SISTECREDITO', 'Sistecredito', '', `
     <div id="sistecredito-summary">${sistecreditoSummary(data)}</div>
+    <div id="sistecredito-accounting">${sistecreditoAccounting(data)}</div>
     <section class="panel"><div class="filter-row parity-filters"><label class="input-label">Desde<input class="field" id="parity-from" type="date"></label><label class="input-label">Hasta<input class="field" id="parity-to" type="date"></label><label class="input-label">Local<select class="field" id="parity-local"><option value="">Todos</option>${stores}</select></label><label class="input-label">Vendedor<select class="field" id="parity-vendedor"><option value="">Todos</option>${sellers}</select></label><label class="input-label">Método de pago<select class="field" id="parity-method"><option value="">Todos</option>${methods}</select></label></div><div id="sistecredito-table">${sistecreditoTable(data)}</div></section>`);
 }
 
@@ -69,6 +137,20 @@ export function sistecreditoModal(data = {}) {
   const sellers = sellerOptions(data.users || [], data.sales || []);
   const methods = ['Efectivo', 'Transferencia', 'Tarjeta', 'Sistecrédito', 'Crédito interno FAMIMUEBLES', 'Apartado'].map(method => `<option value="${method}">${method}</option>`).join('');
   return `<div class="modal-backdrop"><form class="modal" id="parity-sistecredito-form"><button type="button" class="modal-close">×</button><p class="eyebrow">SISTECREDITO</p><h2>Registrar operación</h2><label class="input-label">Vendedor<select class="field" name="vendedor" required><option value="">Selecciona un vendedor</option>${sellers}</select></label><label class="input-label">Local<select class="field" name="local">${stores}</select></label><label class="input-label">Método de pago<select class="field" name="metodo_pago" required>${methods}</select></label><label class="input-label">Valor<input class="field" name="amount" type="number" min="1" required></label><button class="primary wide">Guardar operación y aplicar cambios</button><div data-parity-result></div></form></div>`;
+}
+
+export function sistecreditoDepositModal() {
+  const today = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+  return `<div class="modal-backdrop"><form class="modal" id="sistecredito-deposit-form"><button type="button" class="modal-close">×</button><p class="eyebrow">SISTECREDITO</p><h2>Registrar consignación recibida</h2><label class="input-label">Fecha en que consignó<input class="field" name="date" type="date" value="${today}" required></label><label class="input-label">Mes de ventas que está pagando<input class="field" name="salesPeriod" type="month"></label><label class="input-label">Valor consignado<input class="field" name="amount" type="number" min="1" step="1" required></label><label class="input-label">Referencia bancaria<input class="field" name="reference" maxlength="120"></label><label class="input-label">Nota<input class="field" name="note" maxlength="240"></label><p class="muted">La consignación reducirá el saldo que Sistecrédito nos debe. Puedes indicar el mes de ventas pagado (normalmente de hace tres meses).</p><button class="primary wide">Guardar consignación</button><div data-parity-result></div></form></div>`;
+}
+
+export function sistecreditoOpeningModal(data = {}) {
+  const record = (data.sistecreditoAdjustments || []).find(item => item?.type === 'opening_balance');
+  const date = record?.date || record?.fecha || SISTECREDITO_DEFAULT_OPENING_DATE;
+  const amountValue = value(record || {}, 'amount', 'valor');
+  const defaultAmount = data.sistecreditoOpeningDefault === false ? 0 : SISTECREDITO_DEFAULT_OPENING_BALANCE;
+  const amount = Number(amountValue === '' ? defaultAmount : amountValue);
+  return `<div class="modal-backdrop"><form class="modal" id="sistecredito-opening-form"><button type="button" class="modal-close">×</button><p class="eyebrow">SISTECREDITO</p><h2>Configurar saldo de apertura</h2><label class="input-label">Saldo pendiente al cierre<input class="field" name="amount" type="number" min="0" step="1" value="${amount}" required></label><label class="input-label">Fecha de corte<input class="field" name="date" type="date" value="${date}" required></label><p class="muted">Usa el saldo conciliado de cierre. Las ventas, cuotas y consignaciones anteriores al corte no se vuelven a sumar.</p><button class="primary wide">Guardar saldo inicial</button><div data-parity-result></div></form></div>`;
 }
 
 function sellerOptions(users = [], sales = []) {

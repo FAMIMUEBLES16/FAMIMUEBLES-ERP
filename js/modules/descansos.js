@@ -398,7 +398,7 @@ async function saveSchedule(event) {
   }
 }
 
-document.addEventListener('click', async event => {
+if (typeof document !== 'undefined') document.addEventListener('click', async event => {
   const button = event.target.closest('[data-action]');
   if (!button) return;
   const data = store.collection;

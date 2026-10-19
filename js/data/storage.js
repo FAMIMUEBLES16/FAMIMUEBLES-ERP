@@ -1,10 +1,10 @@
 import { createAccountPayable } from '../services/accounts-payable-service.js?v=14';
 import { demoState } from './demo-data.js';
 import { api } from '../services/api-client.js?v=20261015-large-state-timeout-v1';
-import { API_BASE_URL } from '../config.js?v=20261007101229';
+import { API_BASE_URL } from '../config.js?v=20261015-runtime-config-v1';
 
 export const TENANT_STORAGE_KEY = 'famimuebles-tenant-id';
-const REMOTE_DOMAIN_COLLECTIONS = ['customers','suppliers','purchases','credits','expenses','accountsPayable','supplierPayments','customerAccounts','returns','supplierReturns','stockCounts','reservations','warranties','damagedStock','cashSessions','cashMovements','bankAccounts','quotes','orders','deliveries','creditNotes','transfers','talonarios','talonarioJustifications','workSchedules','staffAbsences'];
+const REMOTE_DOMAIN_COLLECTIONS = ['customers','suppliers','purchases','credits','expenses','accountsPayable','supplierPayments','customerAccounts','returns','supplierReturns','stockCounts','reservations','warranties','damagedStock','cashSessions','cashMovements','bankAccounts','quotes','orders','deliveries','creditNotes','transfers','talonarios','talonarioJustifications','workSchedules','staffAbsences','sistecreditoAdjustments','sistecreditoSaleAmounts'];
 export function activeTenantId() { return localStorage.getItem(TENANT_STORAGE_KEY) || 'tenant-default'; }
 export function authHeaders() { const token = localStorage.getItem('famimuebles-auth-token'); return token ? { Authorization: `Bearer ${token}` } : {}; }
 export function isStaticDeployment() { return !API_BASE_URL && window.location.hostname.endsWith('.github.io'); }
@@ -19,6 +19,8 @@ function createEmptyState() {
     payments: [],
     apartados: [],
     sistecredito: [],
+    sistecreditoAdjustments: [],
+    sistecreditoSaleAmounts: [],
     movementEdits: [],
     stores: [],
     inventory: [],
@@ -83,6 +85,8 @@ function normalizeState(state) {
   base.fuelRecords = Array.isArray(base.fuelRecords) ? base.fuelRecords : [];
   base.auditLog = Array.isArray(base.auditLog) ? base.auditLog : [];
   base.sistecredito = Array.isArray(base.sistecredito) ? base.sistecredito : [];
+  base.sistecreditoAdjustments = Array.isArray(base.sistecreditoAdjustments) ? base.sistecreditoAdjustments : [];
+  base.sistecreditoSaleAmounts = Array.isArray(base.sistecreditoSaleAmounts) ? base.sistecreditoSaleAmounts : [];
   base.movementEdits = Array.isArray(base.movementEdits) ? base.movementEdits : [];
   base.inventoryMovements = Array.isArray(base.inventoryMovements) ? base.inventoryMovements : [];
   base.suppliers = Array.isArray(base.suppliers) ? base.suppliers : [];

@@ -107,7 +107,7 @@ DOMAIN_COLLECTIONS = {
     "damaged-stock", "damagedStock", "cash-sessions", "cashSessions", "cash-movements", "cashMovements", "bank-accounts", "bankAccounts",
     "quotes", "orders", "deliveries", "transfers", "credit-notes", "creditNotes", "company-settings", "companySettings", "talonarios", "talonarioJustifications",
     "workSchedules", "staffAbsences", "entries", "exits", "sistecredito", "auditLog", "inventoryMovements", "installments",
-    "payments", "movementEdits", "paymentMethods",
+    "payments", "movementEdits", "paymentMethods", "sistecreditoAdjustments", "sistecreditoSaleAmounts",
 }
 BOOTSTRAP_REMOTE_COLLECTIONS = frozenset({
     "customers", "suppliers", "purchases", "credits", "expenses", "accountsPayable",
@@ -1078,6 +1078,8 @@ def can_access(handler: "AppHandler", path: str, method: str = "GET") -> bool:
             "cashmovements",
             "bank-accounts",
             "bankaccounts",
+            "sistecreditoAdjustments".lower(),
+            "sistecreditoSaleAmounts".lower(),
         }
         inventory = {
             "returns",
@@ -1950,6 +1952,8 @@ def _ensure_app_modules_available() -> None:
 
 def _create_shared_credit_record(database: _PostgresConnection, payload: dict, movement_id: int, user: dict, store_id: str, invoice_number: str, total_amount: int) -> dict | None:
     payment_method = str(payload.get("paymentMethod", "") or "").strip().lower()
+    if "siste" in payment_method:
+        return None
     if "credito" not in payment_method and "crédito" not in payment_method and "credit" not in payment_method:
         return None
 
@@ -2038,6 +2042,37 @@ def resolve_shared_sale_customer(database, payload: dict, current_name: str, cur
     return str(customer["nombre"]) if customer else customer_id
 
 
+def _sistecredito_sale_amount_record(payload: dict, sale_id: str, sale_date: str, total: int) -> dict | None:
+    payment_method = str(payload.get("paymentMethod") or "").strip().lower()
+    mixed_payment = "mixt" in payment_method
+    if "siste" not in payment_method and not mixed_payment:
+        return None
+    if mixed_payment and "siste" not in payment_method:
+        raise ValueError("El pago mixto debe incluir Sistecrédito")
+    raw_amount = payload.get("sistecreditoAmount")
+    if not mixed_payment and raw_amount in (None, ""):
+        return None
+    try:
+        amount = float(raw_amount)
+    except (TypeError, ValueError):
+        raise ValueError("Indica el valor pagado con Sistecrédito") from None
+    if not __import__("math").isfinite(amount) or amount <= 0 or amount > total:
+        raise ValueError("El valor de Sistecrédito debe ser mayor que cero y no superar el total de la venta")
+    if mixed_payment and amount >= total:
+        raise ValueError("En un pago mixto debe quedar un valor positivo para el otro medio de pago")
+    other_method = str(payload.get("otherPaymentMethod") or "").strip()
+    if mixed_payment and other_method not in {"Efectivo", "Transferencia", "Tarjeta"}:
+        raise ValueError("Selecciona un medio de pago válido para el valor restante")
+    return {
+        "id": sale_id,
+        "type": "sale_payment",
+        "saleId": sale_id,
+        "date": sale_date,
+        "amount": int(round(amount)),
+        "otherPaymentMethod": other_method if mixed_payment else "",
+    }
+
+
 def _create_shared_sale(database: _PostgresConnection, payload: dict, user: dict, handler: "AppHandler") -> dict:
     """Registra una venta del ERP como movimiento del esquema del bot."""
     _, cached = claim_idempotency(database, handler, payload, "/api/catalog/sale")
@@ -2067,6 +2102,11 @@ def _create_shared_sale(database: _PostgresConnection, payload: dict, user: dict
         total += quantity * price
         normalized.append((code, product["nombre_producto"], quantity, price))
         requested_by_code[code] = requested_by_code.get(code, 0) + quantity
+    transport = float(payload.get("transport", 0) or 0)
+    if transport < 0 or not __import__("math").isfinite(transport):
+        raise ValueError("El transporte no es valido")
+    total += int(round(transport))
+    sistecredito_amount_record = _sistecredito_sale_amount_record(payload, sale_id, sale_date, total)
     for code, requested_quantity in requested_by_code.items():
         stock = database.execute(
             "SELECT cantidad FROM inventarios WHERE local = %s AND codigo = %s FOR UPDATE",
@@ -2083,6 +2123,18 @@ def _create_shared_sale(database: _PostgresConnection, payload: dict, user: dict
     if movement_id is None:
         raise RuntimeError("No se pudo crear el movimiento de venta")
     movement_id = movement_id[0]
+    if sistecredito_amount_record:
+        sistecredito_amount_record["id"] = str(movement_id)
+        sistecredito_amount_record["saleId"] = str(movement_id)
+        database.execute(
+            "INSERT INTO domain_records (tenant_id, collection, id, data_json, version) VALUES (?, ?, ?, ?, 1) ON CONFLICT(tenant_id, collection, id) DO UPDATE SET data_json = excluded.data_json, version = domain_records.version + 1, updated_at = CURRENT_TIMESTAMP",
+            (
+                tenant_id(handler, payload),
+                "sistecreditoSaleAmounts",
+                str(movement_id),
+                json.dumps(sistecredito_amount_record, ensure_ascii=False, separators=(",", ":")),
+            ),
+        )
     for code, description, quantity, price in normalized:
         database.execute("UPDATE inventarios SET cantidad = cantidad - %s, actualizado = CURRENT_TIMESTAMP WHERE local = %s AND codigo = %s", (quantity, store_id, code))
         database.execute("INSERT INTO movimiento_productos (movimiento_id, codigo, descripcion, cantidad, precio_unitario, precio_total, entrada, salida) VALUES (%s, %s, %s, %s, %s, %s, 0, %s)", (movement_id, code, description, quantity, price, quantity * price, quantity))
@@ -2408,7 +2460,12 @@ class AppHandler(SimpleHTTPRequestHandler):
         parsed_url = urlparse(self.path)
         path = parsed_url.path
         if path == "/api/health":
-            self.send_json(200, {"ok": True, "database": "postgresql", "backend": DB_BACKEND})
+            self.send_json(200, {
+                "ok": True,
+                "database": "postgresql",
+                "backend": DB_BACKEND,
+                "features": {"sistecreditoLedger": True},
+            })
             return
         if path == "/api/auth/status":
             with connection() as database:
@@ -3364,7 +3421,7 @@ class AppHandler(SimpleHTTPRequestHandler):
                         database.execute("UPDATE inventory SET quantity = quantity - ?, updated_at = CURRENT_TIMESTAMP WHERE tenant_id = ? AND product_id = ? AND store_id = ?", (quantity, current_tenant, product_id, store_id))
                         database.execute("INSERT INTO inventory_movements (id, tenant_id, product_id, store_id, movement_type, quantity, reference_id, user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", (f"{sale_id}-{product_id}", current_tenant, product_id, store_id, "VENTA", -quantity, sale_id, authenticated_user(self)["id"]))
                     payment_method = str(payload.get("paymentMethod", "")).lower()
-                    if "credito" in payment_method or "crédito" in payment_method:
+                    if "siste" not in payment_method and ("credito" in payment_method or "crédito" in payment_method):
                         credit_id = f"CR-{sale_id}"
                         credit_initial = float(payload.get("creditInitial", 0) or 0)
                         credit_installments = int(payload.get("creditInstallments", 6) or 6)
