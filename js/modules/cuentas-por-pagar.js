@@ -1,7 +1,7 @@
 import { money, page, table, badge, recordSummary } from '../components/tables.js?v=20261010-record-summary-v1';
-import { calculateBalance, resolveAccountPayableSupplier, updateAccountPayableStatus } from '../services/accounts-payable-service.js?v=20261004-payable-supplier-filter-1';
+import { accountPayableSupplierKey, accountPayableSupplierName, calculateBalance, resolveAccountPayableSupplier, updateAccountPayableStatus } from '../services/accounts-payable-service.js?v=20261019-preserve-supplier-history-v1';
 
-export function payableTable(state, accounts) { return table(['Cuenta','Proveedor','Factura','Vencimiento','Total','Pagado','Saldo','Estado','Local','Acciones'],accounts.map(account=>{const supplier=resolveAccountPayableSupplier(state,account);updateAccountPayableStatus(state,account);return `<tr><td><strong>${account.id}</strong></td><td>${supplier?.name || account.supplierName || account.supplierId}</td><td>${account.invoiceNumber}</td><td>${String(account.dueDate||'').slice(0,10)}</td><td>${money(account.totalAmount)}</td><td>${money(account.paidAmount)}</td><td>${money(calculateBalance(account))}</td><td>${badge(account.status)}</td><td>${state.stores.find(item=>item.id===account.storeId)?.name || account.storeId || 'Sin local'}</td><td><button class="table-action" data-action="payable-detail" data-payable-id="${account.id}">Ver</button>${calculateBalance(account)>0&&account.status!=='ANULADA'?`<button class="table-action" data-action="payable-payment" data-payable-id="${account.id}">Pagar</button>`:''}</td></tr>`;})); }
+export function payableTable(state, accounts) { return table(['Cuenta','Proveedor','Factura','Vencimiento','Total','Pagado','Saldo','Estado','Local','Acciones'],accounts.map(account=>{updateAccountPayableStatus(state,account);return `<tr><td><strong>${account.id}</strong></td><td>${accountPayableSupplierName(state,account)}</td><td>${account.invoiceNumber}</td><td>${String(account.dueDate||'').slice(0,10)}</td><td>${money(account.totalAmount)}</td><td>${money(account.paidAmount)}</td><td>${money(calculateBalance(account))}</td><td>${badge(account.status)}</td><td>${state.stores.find(item=>item.id===account.storeId)?.name || account.storeId || 'Sin local'}</td><td><button class="table-action" data-action="payable-detail" data-payable-id="${account.id}">Ver</button>${calculateBalance(account)>0&&account.status!=='ANULADA'?`<button class="table-action" data-action="payable-payment" data-payable-id="${account.id}">Pagar</button>`:''}</td></tr>`;})); }
 export function payableSummary(accounts) {
   const balance = accounts.reduce((sum, account) => sum + calculateBalance(account), 0);
   return recordSummary(accounts.length, 'Resumen de cuentas por pagar', balance, 'Saldo pendiente');
@@ -20,10 +20,10 @@ export function renderCuentasPorPagar(state) {
   const suppliersById = new Map();
   accounts.forEach(account => {
     const supplier = resolveAccountPayableSupplier(state, account);
-    const id = String(supplier?.id ?? account.supplierId ?? '');
+    const id = accountPayableSupplierKey(state, account);
     if (!id) return;
     const current = suppliersById.get(id);
-    suppliersById.set(id, { id, name: supplier?.name || account.supplierName || id, ...(current || {}) });
+    suppliersById.set(id, { id, name: accountPayableSupplierName(state, account), ...(current || {}) });
   });
   const suppliers = [...suppliersById.values()].sort((left, right) => left.name.localeCompare(right.name, 'es'));
   const supplierOptions = suppliers.map(supplier => `<option value="${supplier.id}">${supplier.name}</option>`).join('');

@@ -1,5 +1,6 @@
 import { money, page, table, badge } from '../components/tables.js';
 import { purchaseTotal } from '../services/purchase-service.js';
+import { accountPayableSupplierName } from '../services/accounts-payable-service.js?v=20261019-preserve-supplier-history-v1';
 
 function parseRemoteRow(item = {}) {
   const raw = item?.data_json;
@@ -31,7 +32,7 @@ function normalizePurchases(items = []) {
     const sharedEntry = Boolean(row.estado || row.local || row.supplier_name || String(row.observacion || '').toUpperCase().includes('ENTRADA'));
     const total = Number(row.total ?? row.valor ?? row.monto ?? row.amount ?? row.valor_total ?? row.total_venta ?? 0);
     const createdAt = row.createdAt ?? row.fecha ?? row.created_at ?? row.fecha_venta ?? '';
-    const supplierName = row.supplierName ?? row.proveedor ?? row.empleado ?? row.usuario ?? row.vendedor ?? row.supplier ?? 'Proveedor';
+    const supplierName = row.supplierName ?? row.supplier_name ?? row.proveedor ?? row.supplier ?? row.empleado ?? row.usuario ?? row.vendedor ?? 'Proveedor';
     const storeId = row.storeId ?? row.local_id ?? row.local ?? row.local_destino ?? row.local_origen ?? '';
     const status = row.status ?? row.estado ?? 'RECIBIDA';
     const normalizedStatus = String(status).toUpperCase() === 'COMPLETADO' && String(row.observacion || '').toUpperCase().includes('ENTRADA') ? 'RECIBIDA' : status;
@@ -53,7 +54,16 @@ export function purchaseTable(state, items) {
   const isAdmin = String(JSON.parse(localStorage.getItem('famimuebles-user') || '{}').role || '').toUpperCase() === 'ADMINISTRADOR';
   const records = normalizePurchases(items);
   return table(['Compra','Fecha','Proveedor','Destino','Total','Estado','Acciones'], records.map(purchase => {
+    const payable = (state.accountsPayable || []).find(account =>
+      String(account.purchaseId || '') === String(purchase.id)
+    );
     const supplier = suppliers.find(item => item.id === purchase.supplierId) ?? { name: purchase.supplierName || purchase.supplierId || 'Proveedor' };
+    const supplierName = purchase.supplierName && purchase.supplierName !== 'Proveedor'
+      ? purchase.supplierName
+      : supplier.name;
+    const displaySupplierName = payable
+      ? accountPayableSupplierName(state, payable)
+      : supplierName;
     const dateText = purchase.createdAt ? String(purchase.createdAt).slice(0, 10) : 'Sin fecha';
     const destination = lookupStoreName(state.stores || [], purchase);
     const totalValue = Number(purchase.total ?? purchaseTotal(state, purchase) ?? 0);
@@ -63,7 +73,7 @@ export function purchaseTable(state, items) {
         ? `<button class="table-action" data-action="order-purchase" data-purchase-id="${purchase.id}">Ordenar</button>`
         : `<button class="table-action" data-action="receive-purchase" data-purchase-id="${purchase.id}">Recibir</button>`
       : '';
-    return `<tr><td><strong>${purchase.id}</strong></td><td>${dateText}</td><td>${supplier.name}</td><td>${destination}</td><td>${money(totalValue)}</td><td>${badge(currentStatus)}</td><td><button class="table-action" data-action="purchase-detail" data-purchase-id="${purchase.id}">Ver</button>${workflow}${isAdmin ? `<button class="table-action" data-action="edit-purchase" data-purchase-id="${purchase.id}">Editar</button><button class="table-action danger-text" data-action="delete-purchase" data-purchase-id="${purchase.id}">Eliminar</button>` : ''}</td></tr>`;
+    return `<tr><td><strong>${purchase.id}</strong></td><td>${dateText}</td><td>${displaySupplierName}</td><td>${destination}</td><td>${money(totalValue)}</td><td>${badge(currentStatus)}</td><td><button class="table-action" data-action="purchase-detail" data-purchase-id="${purchase.id}">Ver</button>${workflow}${isAdmin ? `<button class="table-action" data-action="edit-purchase" data-purchase-id="${purchase.id}">Editar</button><button class="table-action danger-text" data-action="delete-purchase" data-purchase-id="${purchase.id}">Eliminar</button>` : ''}</td></tr>`;
   }));
 }
 

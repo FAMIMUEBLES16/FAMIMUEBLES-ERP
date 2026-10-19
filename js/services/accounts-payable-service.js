@@ -7,30 +7,106 @@ export function calculateBalance(account) { return Math.max(0, Number(account.to
 function normalizeSupplierReference(value) {
   return String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]/g, '');
 }
+function supplierReferenceName(value) {
+  const name = String(value || '').trim();
+  return normalizeSupplierReference(name) === 'proveedor' ? '' : name;
+}
+function accountPurchases(state, account) {
+  const purchases = Array.isArray(state.purchases) ? state.purchases : [];
+  const purchaseId = String(account.purchaseId || '').trim();
+  if (purchaseId) {
+    const matches = purchases.filter(purchase => String(purchase.id || '').trim() === purchaseId);
+    if (matches.length === 1) return matches;
+  }
+
+  const invoice = normalizeSupplierReference(account.invoiceNumber);
+  if (!invoice) return [];
+  const matches = purchases.filter(purchase => [
+    purchase.supplierInvoice,
+    purchase.supplier_invoice,
+    purchase.invoiceNumber,
+    purchase.invoice_number,
+    purchase.factura,
+    purchase.numero_factura,
+  ].some(value => normalizeSupplierReference(value) === invoice));
+  return matches.length === 1 ? matches : [];
+}
+function supplierNameForReference(state, account) {
+  const purchase = accountPurchases(state, account)[0];
+  return supplierReferenceName(
+    purchase?.supplierName
+    || purchase?.supplier_name
+    || purchase?.proveedor
+    || purchase?.supplier
+    || account.supplierName
+  );
+}
+function accountSupplierKey(state, account, supplier = resolveAccountPayableSupplier(state, account)) {
+  if (supplier) return String(supplier.id);
+  const name = supplierNameForReference(state, account);
+  return name ? `legacy:${normalizeSupplierReference(name)}` : String(account.supplierId || '');
+}
+function findUniqueSupplier(suppliers, predicate) {
+  const matches = suppliers.filter(predicate);
+  return matches.length === 1 ? matches[0] : null;
+}
 export function resolveAccountPayableSupplier(state, account) {
   const suppliers = Array.isArray(state.suppliers) ? state.suppliers : [];
-  const supplierId = String(account.supplierId || '').trim();
-  const byId = suppliers.find(supplier => String(supplier.id || '').trim() === supplierId);
+  const purchase = accountPurchases(state, account)[0];
+  const documentReferences = [
+    purchase?.supplierDocument, purchase?.supplierNit, purchase?.supplierNIT, purchase?.nit,
+    account.supplierDocument, account.supplierNit, account.supplierNIT, account.nit,
+  ]
+    .map(normalizeSupplierReference).filter(Boolean);
+  if (documentReferences.length) {
+    const byDocument = findUniqueSupplier(suppliers, supplier => {
+      const supplierDocuments = [supplier.document, supplier.nit, supplier.NIT, supplier.rut]
+        .map(normalizeSupplierReference).filter(Boolean);
+      return supplierDocuments.some(document => documentReferences.includes(document));
+    });
+    if (byDocument) return byDocument;
+  }
+
+  const purchaseName = supplierReferenceName(
+    purchase?.supplierName || purchase?.supplier_name || purchase?.proveedor || purchase?.supplier
+  );
+  const accountName = supplierReferenceName(account.supplierName);
+  const expectedName = purchaseName || accountName;
+  if (expectedName) {
+    const normalizedName = normalizeSupplierReference(expectedName);
+    const byName = findUniqueSupplier(
+      suppliers,
+      supplier => normalizeSupplierReference(supplier.name) === normalizedName
+    );
+    if (byName) return byName;
+  }
+
+  const supplierIds = [
+    purchase?.supplierId, purchase?.supplier_id, purchase?.proveedor_id, account.supplierId,
+  ].map(value => String(value || '').trim()).filter(Boolean);
+  const byId = findUniqueSupplier(
+    suppliers,
+    supplier => supplierIds.includes(String(supplier.id || '').trim())
+  );
+  if (byId && expectedName
+    && normalizeSupplierReference(byId.name) !== normalizeSupplierReference(expectedName)) {
+    return null;
+  }
   if (byId) return byId;
 
-  const references = [account.supplierDocument, account.supplierNit, account.supplierNIT, account.nit]
+  const nameReferences = [accountName, account.supplierId]
     .map(normalizeSupplierReference).filter(Boolean);
-  if (supplierId) references.push(normalizeSupplierReference(supplierId));
-  const documentMatches = suppliers.filter(supplier => {
-    const documents = [supplier.document, supplier.nit, supplier.NIT, supplier.rut]
-      .map(normalizeSupplierReference).filter(Boolean);
-    return documents.some(document => references.includes(document));
-  });
-  if (documentMatches.length === 1) return documentMatches[0];
-  if (documentMatches.length > 1) return null;
-
-  const nameReferences = [account.supplierName, account.supplierId]
-    .map(normalizeSupplierReference).filter(Boolean);
-  const nameMatches = suppliers.filter(supplier => {
+  return findUniqueSupplier(suppliers, supplier => {
     const name = normalizeSupplierReference(supplier.name);
     return name && nameReferences.includes(name);
   });
-  return nameMatches.length === 1 ? nameMatches[0] : null;
+}
+export function accountPayableSupplierKey(state, account) {
+  return accountSupplierKey(state, account);
+}
+export function accountPayableSupplierName(state, account) {
+  const supplier = resolveAccountPayableSupplier(state, account);
+  return supplier?.name || supplierNameForReference(state, account) || account.supplierId || '';
 }
 export function normalizePayableSuppliers(state) {
   const changed = [];
@@ -49,13 +125,14 @@ export function filterAccountsPayable(state, { query = '', status = 'all', suppl
   return (state.accountsPayable || []).filter(account => {
     updateAccountPayableStatus(state, account);
     const supplier = resolveAccountPayableSupplier(state, account);
-    const supplierKey = String(supplier?.id ?? account.supplierId ?? '');
+    const supplierKey = accountSupplierKey(state, account, supplier);
+    const supplierName = accountPayableSupplierName(state, account);
     const searchable = normalizeSupplierReference([
       account.id,
       account.invoiceNumber,
       account.supplierName,
       account.supplierId,
-      supplier?.name,
+      supplierName,
       supplier?.document,
       supplier?.nit,
     ].join(' '));
