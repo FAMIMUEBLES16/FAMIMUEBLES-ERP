@@ -1,10 +1,15 @@
 import assert from 'node:assert/strict';
-import { filterSales, findMatchingSaleCustomer, salesPaymentMethods } from '../js/modules/ventas.js';
+import { filterSales, findMatchingSaleCustomer, salesSellers } from '../js/modules/ventas.js';
 
 const sales = [
-  { id: 'SEP-1', date: '2026-09-15', storeId: 'Local Norte', paymentMethod: 'Efectivo', status: 'Completada' },
-  { id: 'AGO-1', date: '2026-08-15', storeId: 'Local Norte', paymentMethod: 'Transferencia', status: 'Completada' },
-  { id: 'SEP-2', date: '2026-09-18', storeId: 'Local Sur', paymentMethod: 'Sistecrédito', status: 'Anulada' },
+  { id: 'SEP-1', date: '2026-09-15', storeId: 'Local Norte', paymentMethod: 'Efectivo', seller: 'USR-1', status: 'Completada' },
+  { id: 'AGO-1', date: '2026-08-15', storeId: 'Local Norte', paymentMethod: 'Transferencia', seller: 'luis', status: 'Completada' },
+  { id: 'SEP-2', date: '2026-09-18', storeId: 'Local Sur', paymentMethod: 'Sistecrédito', usuario_id: 'USR-2', status: 'Anulada' },
+];
+const users = [
+  { id: 'USR-1', username: 'ana', name: 'Ana García' },
+  { id: 'USR-2', username: 'luis', name: 'Luis' },
+  { id: 'USR-3', username: 'martha', name: 'Martha' },
 ];
 
 assert.deepEqual(
@@ -20,21 +25,31 @@ assert.deepEqual(
 );
 
 assert.deepEqual(
-  filterSales(sales, { payment: 'Transferencia' }).map(sale => sale.id),
-  ['AGO-1'],
-  'payment method filter should return only sales paid with the selected method'
+  filterSales(sales, { seller: 'seller:ana garcia', users }).map(sale => sale.id),
+  ['SEP-1'],
+  'user filter should resolve a sale seller stored as a user ID'
 );
 
 assert.deepEqual(
-  filterSales(sales, { payment: 'sistecredito' }).map(sale => sale.id),
-  ['SEP-2'],
-  'payment method filter should match regardless of accents and not filter by sale status'
+  filterSales(sales, { seller: 'seller:luis', users }).map(sale => sale.id),
+  ['AGO-1', 'SEP-2'],
+  'user filter should resolve username and legacy user ID references independent of status'
 );
 
 assert.deepEqual(
-  salesPaymentMethods(sales),
-  ['Efectivo', 'Sistecrédito', 'Transferencia'],
-  'payment method options should be built from available sales'
+  salesSellers(sales, users),
+  [
+    { value: 'seller:ana garcia', name: 'Ana García' },
+    { value: 'seller:luis', name: 'Luis' },
+    { value: 'seller:martha', name: 'Martha' },
+  ],
+  'user options should use registered names, include users without matching sales, and be sorted'
+);
+
+assert.deepEqual(
+  salesSellers([{ id: 'LEGACY-1', seller: 'Carlos Ramírez' }]),
+  [{ value: 'seller:carlos ramirez', name: 'Carlos Ramírez' }],
+  'seller values without a current user record should remain available as filter options'
 );
 
 const customers = [

@@ -12,7 +12,7 @@ import { showToast } from './components/toast.js';
 import { table } from './components/tables.js';
 import { renderNotifications } from './components/notifications.js';
 import { renderDashboard } from './modules/dashboard-v3.js?v=20261010-dashboard-store-filter-v1';
-import { canonicalSellerName, renderVentas, salesTable, salesSummary, normalizeSales, salesMonthKey, saleTimestamp, filterSales, salesPaymentMethods, findMatchingSaleCustomer } from './modules/ventas.js?v=28';
+import { canonicalSellerName, renderVentas, salesTable, salesSummary, normalizeSales, salesMonthKey, saleTimestamp, filterSales, salesSellers, findMatchingSaleCustomer } from './modules/ventas.js?v=20261019-sales-user-filter-v1';
 import { renderFacturacion, cartTotal, productResults, customerResults } from './modules/facturacion.js?v=26';
 import { renderProductos, productTable, productMatches } from './modules/productos.js?v=22';
 import { renderInventario, inventoryContent } from './modules/inventario.js?v=20';
@@ -63,7 +63,7 @@ let lastAutomaticSharedRefreshAt = 0;
 let inventoryViewState = { store:'all', query:'', active:'active', status:'all', sort:'name', version:0 };
 let creditViewState = { filter:'all', query:'', page:1, pageSize:20, overdueInstallments:[] };
 let apartadoViewState = { filter:'all', query:'', page:1, pageSize:20 };
-let salesViewState = { query:'', store:'all', month:`${new Date().getFullYear()}-${String(new Date().getMonth()+1).padStart(2,'0')}`, payment:'all', version:0 };
+let salesViewState = { query:'', store:'all', month:`${new Date().getFullYear()}-${String(new Date().getMonth()+1).padStart(2,'0')}`, seller:'all', version:0 };
 let productViewState = { query:'', store:'all', active:'active', version:0 };
 function syncCustomerBalances(){
 	const allCredits=store.collection.credits||[], sales=store.collection.sales||[];
@@ -1113,11 +1113,11 @@ document.addEventListener('change',event=>{if(event.target.matches('#active-stor
 document.addEventListener('change',event=>{if(event.target.matches('[data-talonario-filter]')){setTalonarioFilters({[event.target.dataset.talonarioFilter]:event.target.value});render();}});
 document.addEventListener('input',event=>{if(event.target.matches('[data-talonario-filter="query"]')){setTalonarioFilters({query:event.target.value});render();}});
 function updateSalesViewState(){
-	salesViewState={query:$('[data-filter="sales"]')?.value.trim()||'',store:$('[data-sales-store]')?.value||'all',month:$('[data-sales-month]')?.value||'',payment:$('[data-sales-payment]')?.value||'all',version:salesViewState.version+1};
+	salesViewState={query:$('[data-filter="sales"]')?.value.trim()||'',store:$('[data-sales-store]')?.value||'all',month:$('[data-sales-month]')?.value||'',seller:$('[data-sales-seller]')?.value||'all',version:salesViewState.version+1};
 	applySalesFilters();
 }
 document.addEventListener('input',event=>{if(event.target.matches('[data-filter="sales"]'))updateSalesViewState();});
-document.addEventListener('change',event=>{if(event.target.matches('[data-sales-store],[data-sales-month],[data-sales-payment]'))updateSalesViewState();});
+document.addEventListener('change',event=>{if(event.target.matches('[data-sales-store],[data-sales-month],[data-sales-seller]'))updateSalesViewState();});
 function updateProductViewState(){productViewState={query:$('[data-filter="products"]')?.value||'',store:$('[data-product-store]')?.value||'all',active:$('[data-product-active]')?.value||'all',version:productViewState.version+1};productPage=1;refreshProducts();}
 document.addEventListener('input',event=>{if(event.target.matches('[data-filter="purchases"]'))filterPurchases();});
 document.addEventListener('change',event=>{if(event.target.matches('[data-purchase-supplier],[data-purchase-store],[data-purchase-status]'))filterPurchases();});
@@ -1141,17 +1141,19 @@ document.addEventListener('change',event=>{if(event.target.matches('[data-purcha
 document.addEventListener('input',event=>{if(event.target.matches('[data-filter="payables"]'))filterPayables();});
 document.addEventListener('change',event=>{if(event.target.matches('[data-payable-status],[data-payable-supplier]'))filterPayables();});
 function filterPayables(){const query=$('[data-filter="payables"]')?.value||'',status=$('[data-payable-status]')?.value||'all',supplierId=$('[data-payable-supplier]')?.value||'all';const matches=filterAccountsPayable(store.collection,{query,status,supplierId});if($('[data-payables-summary]'))$('[data-payables-summary]').innerHTML=payableSummary(matches);if($('#payables-table'))$('#payables-table').innerHTML=payableTable(store.collection,matches);}
+function escapeSalesOption(value){return String(value??'').replace(/[&<>"']/g,character=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[character]));}
 function applySalesFilters(){
 	const allSales=normalizeSales(store.collection.sales||store.collection.ventas||[]);
-	const sales=filterSales(allSales,{...salesViewState,stores:store.collection.stores}).sort((left,right)=>{
+	const users=store.collection.users||[];
+	const sellerValues=salesSellers(allSales,users);
+	const sellerSelect=$('[data-sales-seller]');
+	if(sellerSelect)sellerSelect.innerHTML='<option value="all">Todos los usuarios</option>'+sellerValues.map(seller=>`<option value="${escapeSalesOption(seller.value)}">${escapeSalesOption(seller.name)}</option>`).join('');
+	if(sellerSelect){sellerSelect.value=salesViewState.seller;if(sellerSelect.value!==salesViewState.seller)salesViewState.seller='all';}
+	const sales=filterSales(allSales,{...salesViewState,stores:store.collection.stores,users}).sort((left,right)=>{
 		const leftTime=saleTimestamp(left.date);
 		const rightTime=saleTimestamp(right.date);
 		return rightTime-leftTime;
 	});
-	const paymentValues=salesPaymentMethods(allSales);
-	const paymentSelect=$('[data-sales-payment]');
-	if(paymentSelect)paymentSelect.innerHTML='<option value="all">Todos los medios</option>'+paymentValues.map(value=>`<option value="${value}">${value}</option>`).join('');
-	if(paymentSelect){paymentSelect.value=salesViewState.payment;if(paymentSelect.value!==salesViewState.payment)salesViewState.payment='all';}
 	if($('[data-sales-store]'))$('[data-sales-store]').value=salesViewState.store;
 	if($('[data-sales-month]'))$('[data-sales-month]').value=salesViewState.month;
 	if($('[data-filter="sales"]'))$('[data-filter="sales"]').value=salesViewState.query;

@@ -82,21 +82,72 @@ export function findMatchingSaleCustomer(sale, customers = []) {
     || (nameKey && customerMatchKey(customer.name ?? customer.customer ?? customer.nombre) === nameKey)
   ) || null;
 }
-function paymentKey(value) {
-  return String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase().trim();
+function escapeOptionText(value) {
+  return String(value ?? '').replace(/[&<>"']/g, character => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;',
+  })[character]);
 }
 
-export function salesPaymentMethods(sales) {
-  const methods = new Map();
-  normalizeSales(sales).forEach(sale => {
-    const method = String(sale.paymentMethod || '').trim();
-    const key = paymentKey(method);
-    if (key && !methods.has(key)) methods.set(key, method);
+function saleSellerValue(sale) {
+  return String(
+    sale?.seller ?? sale?.vendedor ?? sale?.empleado ?? sale?.usuario
+    ?? sale?.usuario_nombre ?? sale?.userName ?? sale?.user
+    ?? sale?.createdBy ?? sale?.created_by ?? sale?.userId ?? sale?.usuario_id ?? ''
+  ).trim();
+}
+
+function sellerUser(user) {
+  return canonicalSellerName(user?.name || user?.displayName || user?.username || user?.nombre || '');
+}
+
+function sellerFilterValue(name) {
+  return `seller:${sellerKey(name)}`;
+}
+
+function resolveSaleSeller(sale, users = []) {
+  const value = saleSellerValue(sale);
+  const valueKey = sellerKey(value);
+  const matches = users.filter(user => {
+    const identifiers = [user?.id, user?.username, user?.authAccountId, user?.authUserId]
+      .map(item => String(item ?? '').trim())
+      .filter(Boolean);
+    const names = [user?.name, user?.displayName, user?.username, user?.nombre]
+      .map(sellerKey)
+      .filter(Boolean);
+    return identifiers.includes(value) || (valueKey && names.includes(valueKey));
   });
-  return [...methods.values()].sort((left, right) => left.localeCompare(right, 'es'));
+  const user = matches[0];
+  const name = sellerUser(user) === 'Sin vendedor'
+    ? canonicalSellerName(value)
+    : sellerUser(user);
+  return {
+    value: sellerFilterValue(name),
+    name,
+  };
 }
 
-export function filterSales(sales, { query = '', store = 'all', month = '', payment = 'all', stores = [] } = {}) {
+export function salesSellers(sales, users = []) {
+  const sellers = new Map();
+  users.forEach(user => {
+    const name = sellerUser(user);
+    if (name === 'Sin vendedor') return;
+    const value = sellerFilterValue(name);
+    if (!sellers.has(value)) sellers.set(value, { value, name });
+  });
+  normalizeSales(sales).forEach(sale => {
+    const seller = resolveSaleSeller(sale, users);
+    if (seller.name !== 'Sin vendedor' && !sellers.has(seller.value)) {
+      sellers.set(seller.value, seller);
+    }
+  });
+  return [...sellers.values()].sort((left, right) => left.name.localeCompare(right.name, 'es'));
+}
+
+export function filterSales(sales, { query = '', store = 'all', month = '', seller = 'all', stores = [], users = [] } = {}) {
   const normalizedQuery = String(query).toLocaleLowerCase();
   const selectedStore = stores.find(item => String(item.id) === String(store));
   const selectedStoreKey = localKey(selectedStore?.name || store);
@@ -106,7 +157,7 @@ export function filterSales(sales, { query = '', store = 'all', month = '', paym
     return (!normalizedQuery || haystack.includes(normalizedQuery))
       && storeMatches
       && (!month || salesMonthKey(sale.date) === month)
-      && (payment === 'all' || paymentKey(sale.paymentMethod) === paymentKey(payment));
+      && (seller === 'all' || resolveSaleSeller(sale, users).value === seller);
   });
 }
 
@@ -163,13 +214,14 @@ export function salesSummary(sales) {
 export function renderVentas(data) {
   const sales = normalizeSales(data.sales || data.ventas || []);
   const storeOptions = (data.stores || []).map(store => `<option value="${store.id}">${store.name}</option>`).join('');
-  const paymentOptions = salesPaymentMethods(sales).map(method => `<option value="${method}">${method}</option>`).join('');
+  const sellerOptions = salesSellers(sales, data.users || [])
+    .map(seller => `<option value="${escapeOptionText(seller.value)}">${escapeOptionText(seller.name)}</option>`).join('');
   const now = new Date();
   const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
   return page(
      'OPERACION',
      'Ventas',
      '<button class="primary" data-action="new-sale">＋ Nueva venta</button>',
-    `<div class="toolbar"><label class="input-label">Buscar ventas<input class="field" data-filter="sales" placeholder="Buscar factura o cliente..."></label><label class="input-label">Local<select class="field" data-sales-store><option value="all">Todos los locales</option>${storeOptions}</select></label><label class="input-label">Mes de ventas<input class="field" type="month" data-sales-month value="${currentMonth}"></label><label class="input-label">Método de pago<select class="field" data-sales-payment><option value="all">Todos los métodos</option>${paymentOptions}</select></label></div><div data-sales-summary>${salesSummary(sales)}</div><div data-sales-table>${salesTable(data, sales)}</div>`
+    `<div class="toolbar"><label class="input-label">Buscar ventas<input class="field" data-filter="sales" placeholder="Buscar factura o cliente..."></label><label class="input-label">Local<select class="field" data-sales-store><option value="all">Todos los locales</option>${storeOptions}</select></label><label class="input-label">Mes de ventas<input class="field" type="month" data-sales-month value="${currentMonth}"></label><label class="input-label">Usuario<select class="field" data-sales-seller><option value="all">Todos los usuarios</option>${sellerOptions}</select></label></div><div data-sales-summary>${salesSummary(sales)}</div><div data-sales-table>${salesTable(data, sales)}</div>`
   );
 }
