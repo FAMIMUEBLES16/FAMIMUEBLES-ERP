@@ -52,7 +52,7 @@
   <nav class="bottom-nav" id="bottom-nav" aria-label="Navegacion movil"></nav>
   <div id="toast-region" class="toast-region" aria-live="polite"></div>
   <div id="modal-root"></div>
-  <script type="module" src="js/app-v3.js?v=20261019-credinet-reconciliation-v1"></script>
+  <script type="module" src="js/app-v3.js?v=20261020-sistecredito-hydrate-before-render-v1"></script>
   <script>
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', async () => {
@@ -61,7 +61,7 @@
             window.location.reload();
           }, { once: true });
 
-          const registration = await navigator.serviceWorker.register('./service-worker.js?v=20261020-current-sistecredito-screen-v2', {
+          const registration = await navigator.serviceWorker.register('./service-worker.js?v=20261020-current-sistecredito-screen-v3', {
             scope: './',
             updateViaCache: 'none'
           });

@@ -1650,6 +1650,9 @@ async function boot() {
 	store.state = normalized;
 	store.collection.demoMode = false;
 	await hydrateCatalog(store.state,bootstrap);
+	if(sistecreditoLedgerEnabled&&['dashboard','paridad'].includes(currentRoute())){
+		await loadDomainCollections(store.state,['sistecreditoAdjustments','sistecreditoSaleAmounts'],5000,2,1,true);
+	}
 	hydrateUsers(store.state).then(() => {
 		if (currentRoute() === 'usuarios') render();
 	}).catch(error => console.warn('No se pudieron actualizar los usuarios:', error.message));
