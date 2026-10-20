@@ -23,28 +23,34 @@ function findPurchaseRecord(state, purchaseId) {
     || null;
 }
 
-function normalizePurchaseRecord(record) {
+function normalizePurchaseRecord(record, suppliers = []) {
   if (!record) return null;
+  const supplierId = record.supplierId || record.supplier_id || record.proveedor_id || record.empleado || record.supplier_name || '';
+  const rawSupplierName = record.supplierName || record.supplier_name || record.proveedor || record.empleado || '';
+  const supplier = suppliers.find(item => String(item.id) === String(supplierId))
+    || suppliers.find(item => String(item.name || '').trim().toLowerCase() === String(rawSupplierName).trim().toLowerCase());
   return {
     ...record,
     status: record.status || record.estado || 'RECIBIDA',
+    supplierId: supplier?.id || supplierId,
     storeId: record.storeId || record.local_id || record.local || record.local_destino || '',
-    supplierName: record.supplierName || record.supplier_name || record.proveedor || record.empleado || 'Proveedor',
+    supplierName: supplier?.name || rawSupplierName || 'Proveedor',
     supplierInvoice: record.supplierInvoice || record.factura || record.numero_factura || '',
     createdAt: record.createdAt || record.created_at || record.fecha || '',
+    paymentMethod: record.paymentMethod || record.metodo_pago || 'Sin dato',
     items: Array.isArray(record.items) ? record.items : [],
   };
 }
 
 export function purchaseDetail(state, purchaseId) {
-  const purchase = normalizePurchaseRecord(findPurchaseRecord(state, purchaseId));
+  const purchase = normalizePurchaseRecord(findPurchaseRecord(state, purchaseId), state.suppliers || []);
   if (!purchase) return '<p class="empty-state">Compra no encontrada.</p>';
   if (!purchase.items.length) {
     purchase.items = (state.inventoryMovements || state.movements || [])
       .filter(item => String(item.movementId || item.movimiento_id || item.id) === String(purchaseId))
       .map(item => ({ productId: item.productId || item.codigo, name: item.name || item.descripcion || item.producto, quantity: item.quantity || item.cantidad, unitCost: item.unitCost || item.precio_unitario || 0, subtotal: item.subtotal || item.precio_total || 0 }));
   }
-  const supplier = (state.suppliers || []).find(item => item.id === purchase.supplierId) || { name: purchase.supplierName || purchase.supplierId || 'Proveedor' };
+  const supplier = (state.suppliers || []).find(item => String(item.id) === String(purchase.supplierId)) || (state.suppliers || []).find(item => String(item.name || '').trim().toLowerCase() === String(purchase.supplierName || '').trim().toLowerCase()) || { name: purchase.supplierName || purchase.supplierId || 'Proveedor' };
   const totals = purchaseTotals(state, purchase);
   const destination = (state.stores || []).find(item => String(item.id) === String(purchase.storeId || purchase.local_id || purchase.local))?.name || purchase.storeName || purchase.local || purchase.storeId || 'Sin local';
   const createdAt = purchase.createdAt || purchase.fecha || purchase.created_at || new Date().toISOString();

@@ -41,11 +41,11 @@ import { createProduct, updateProduct, setProductActive, generateTestProducts, s
 import { productDetail } from './modules/product-detail.js?v=14';
 import { importPreview, importPreviewRows, importProducts } from './modules/product-import.js?v=15';
 import { renderProveedores, supplierRecords, supplierTable } from './modules/proveedores.js?v=20261019-preserve-supplier-history-v1';
-import { renderCompras, purchaseTable, purchaseSummary } from './modules/compras.js?v=20261019-preserve-supplier-history-v1';
-import { purchaseTotal, createPurchase, orderPurchase, receivePurchase, receiveTalonarioPurchase, cancelPurchase } from './services/purchase-service.js?v=16';
+import { renderCompras, purchaseTable, purchaseSummary } from './modules/compras.js?v=20261020-purchase-entry-sequence-v1';
+import { purchaseTotal, createPurchase, receivePurchase, receiveTalonarioPurchase, validatePurchaseDueDate, nextPurchaseId, nextPurchaseEntryId } from './services/purchase-service.js?v=20261020-purchase-entry-sequence-v2';
 import { purchaseDetail } from './modules/purchase-detail.js?v=16';
 import { renderCuentasPorPagar, payableTable, payableSummary } from './modules/cuentas-por-pagar.js?v=20261010-payables-summary-v1';
-import { accountsPayableDetail } from './modules/accounts-payable-detail.js?v=20261019-preserve-supplier-history-v1';
+import { accountsPayableDetail } from './modules/accounts-payable-detail.js?v=20261020-purchase-payable-sync-v1';
 import { accountPayableSupplierKey, calculateBalance, filterAccountsPayable, normalizePayableSuppliers, registerPayment as registerSupplierPayment, updateAccountPayableStatus } from './services/accounts-payable-service.js?v=20261019-preserve-supplier-history-v1';
 import { renderOperaciones, advancedModal, nextAdvancedId } from './modules/operaciones.js?v=2';
 import { renderParidad, payrollModal, payrollConfigModal, countModal, sistecreditoModal, sistecreditoDepositModal, sistecreditoOpeningModal, formatParityResult, sistecreditoSummary, sistecreditoTable } from './modules/paridad.js?v=20261019-credinet-reconciliation-v1';
@@ -96,7 +96,7 @@ const actionPermissionMap = {
 	'new-user':['Usuarios','create'],'edit-user':['Usuarios','edit'],'user-permissions':['Usuarios','edit'],
 	'new-store':['Locales','create'],'edit-store':['Locales','edit'],'delete-store':['Locales','delete'],
 	'sale-detail':['Ventas','view'],'edit-sale':['Ventas','edit'],'delete-sale':['Ventas','delete'],'new-sale':['Ventas','create'],
-	'purchase-detail':['Compras','view'],'edit-purchase':['Compras','edit'],'delete-purchase':['Compras','delete'],'order-purchase':['Compras','edit'],'receive-purchase':['Compras','edit'],'cancel-purchase':['Compras','delete'],'new-purchase':['Compras','create'],
+	'purchase-detail':['Compras','view'],'edit-purchase':['Compras','edit'],'delete-purchase':['Compras','delete'],'delete-purchase-mirror':['Compras','delete'],'new-purchase':['Compras','create'],
 	'view-transfer':['Traslados','view'],'edit-transfer':['Traslados','edit'],'delete-transfer':['Traslados','delete'],'transfer-send':['Traslados','edit'],'transfer-receive':['Traslados','edit'],'transfer-cancel':['Traslados','delete'],'new-transfer':['Traslados','create'],
 	'product-detail':['Productos','view'],'edit-product':['Productos','edit'],'delete-product':['Productos','delete'],'new-product':['Productos','create'],
 	'view-customer':['Clientes','view'],'edit-customer':['Clientes','edit'],'delete-customer':['Clientes','delete'],'new-customer':['Clientes','create'],
@@ -203,6 +203,23 @@ function refreshProducts(){ const query=$('[data-filter="products"]')?.value||''
 function clearProductFilters(){ const defaults={'[data-filter="products"]':'','[data-product-store]':'all','[data-product-active]':'active'};Object.entries(defaults).forEach(([selector,value])=>{const element=$(selector);if(element)element.value=value;});productPage=1;refreshProducts();}
 function modal(title, fields, onSubmit){ $('#modal-root').innerHTML=`<div class="modal-backdrop"><form class="modal" id="data-modal"><button type="button" class="modal-close">×</button><p class="eyebrow">FAMIMUEBLES ERP</p><h2>${title}</h2>${fields.map(field=>`<label class="input-label">${field.label}<input class="field" name="${field.name}" type="${field.type||'text'}" value="${field.value||''}" ${field.required===false?'':'required'}></label>`).join('')}<button class="primary wide">Guardar</button></form></div>`; $('.modal-close').onclick=()=>$('#modal-root').innerHTML=''; $('#data-modal').onsubmit=async event=>{event.preventDefault();const button=event.target.querySelector('button.primary');button.disabled=true;try{await onSubmit(Object.fromEntries(new FormData(event.target)));}catch(error){showToast(error.message,'error');}finally{button.disabled=false;}}; }
 async function persistCatalogRecord(path, record, method='POST', stableRequestId=''){ const requestId=method==='POST'?(stableRequestId||(globalThis.crypto?.randomUUID?crypto.randomUUID():`${path}-${Date.now()}-${Math.random()}`)):''; const options={headers:{'X-Tenant-ID':activeTenantId(),...(requestId?{'Idempotency-Key':requestId}: {})}}; const body={...record,...(requestId?{requestId}:{}),tenantId:activeTenantId()}; try { return method==='PUT' ? await api.put(path,body,options) : method==='DELETE' ? await api.delete(path,body,options) : await api.post(path,body,options); } catch(error) { if(error.status===401){localStorage.removeItem('famimuebles-auth-token');localStorage.removeItem('famimuebles-user');throw new Error('La sesion expiro. Inicia sesion nuevamente para guardar cambios.');} throw error; } }
+async function reservePurchaseId(){
+	const records=[
+		...(store.collection.purchases||[]),
+		...(store.collection.entries||[]),
+		...(store.collection.inventoryMovements||[]),
+		...(store.collection.movements||[]),
+	];
+	if(isStaticDeployment())return {id:nextPurchaseId(records),serverReserved:false};
+	try{
+		const result=await persistCatalogRecord('/api/purchases/next-id',{});
+		if(!result?.id)throw new Error('El servidor no devolvio el consecutivo de la compra.');
+		return {id:String(result.id),serverReserved:true};
+	}catch(error){
+		if(error.status!==404)throw error;
+		return {id:nextPurchaseId(records),serverReserved:false};
+	}
+}
 const remoteDomainCollections=['customers','suppliers','purchases','credits','expenses','accountsPayable','supplierPayments','customerAccounts','returns','supplierReturns','stockCounts','reservations','warranties','damagedStock','cashSessions','cashMovements','bankAccounts','quotes','orders','deliveries','creditNotes','transfers','talonarios','talonarioJustifications','workSchedules','staffAbsences','sistecreditoAdjustments','sistecreditoSaleAmounts'];
 async function persistDomainRecord(collection, record){
 	const path=`/api/domain/${encodeURIComponent(collection)}`;
@@ -376,7 +393,7 @@ async function loadDomainCollection(state, collection, timeout=5000, retries=0, 
 		try {
 			const payload=await api.get(`/api/domain/${encodeURIComponent(collection)}`,{headers:{'X-Tenant-ID':activeTenantId()},cache:'no-store',timeout});
 			const items=Array.isArray(payload.items)?payload.items:[];
-			if(items.length||!Array.isArray(state[collection])||state[collection].length===0)state[collection]=items;
+			if(refreshExisting||items.length||!Array.isArray(state[collection])||state[collection].length===0)state[collection]=items;
 			return true;
 		} catch(error) {
 			const retryable=error.status===0||[408,429,502,503,504].includes(error.status);
@@ -842,20 +859,66 @@ async function deleteSale(saleId){if(!window.confirm('¿Anular esta venta? El in
 function deleteLocalTransfer(transferId){if(!window.confirm('¿Eliminar este traslado?'))return;const transfer=store.collection.transfers.find(item=>String(item.id)===String(transferId));if(!transfer)return;try{runTransaction(store.collection,()=>{if(transfer.status==='EN_TRANSITO')transfer.items.forEach(item=>increaseStock(store.collection,item.productId,transfer.originStoreId,item.quantity,transfer.id,'ANULACION_TRASLADO'));if(transfer.status==='RECIBIDO'){transfer.items.forEach(item=>{decreaseStock(store.collection,item.productId,transfer.destinationStoreId,item.quantity,transfer.id,'ANULACION_TRASLADO');increaseStock(store.collection,item.productId,transfer.originStoreId,item.quantity,transfer.id,'ANULACION_TRASLADO');});}store.collection.transfers=store.collection.transfers.filter(item=>item.id!==transfer.id);store.collection.auditLog.push({id:generateId('AUD',store.collection.auditLog),date:new Date().toISOString(),userId:'USR-00001',action:'Eliminar traslado',transferId:transfer.id});});store.save();render();showToast('Traslado eliminado e inventario revertido.');}catch(error){showToast(error.message,'error');}}
 async function deleteLocalPurchase(purchaseId){
 	if(!window.confirm('¿Eliminar esta compra?'))return;
-	const purchase=(store.collection.purchases||[]).find(item=>String(item.id)===String(purchaseId)) || (store.collection.entries||[]).find(item=>String(item.id)===String(purchaseId));
+	const domainPurchase=(store.collection.purchases||[]).find(item=>String(item.id)===String(purchaseId));
+	const entry=(store.collection.entries||[]).find(item=>String(item.id)===String(purchaseId));
+	const purchase=domainPurchase||entry;
 	if(!purchase)return;
 	try{
-		if(String(purchase.status||'').toUpperCase()==='RECIBIDA' && Array.isArray(purchase.items)){
-			purchase.items.forEach(item=>decreaseStock(store.collection,item.productId,purchase.storeId,item.quantity,purchase.id,'ANULACION_COMPRA'));
+		const linkedEntry=domainPurchase&&(store.collection.entries||[]).find(candidate=>{
+			if([candidate.purchaseId,candidate.purchase_id,candidate.compra_id,candidate.referencia].some(id=>String(id||'')===String(domainPurchase.id)))return true;
+			const invoice=String(domainPurchase.supplierInvoice||domainPurchase.invoiceNumber||domainPurchase.factura||'').trim().toUpperCase();
+			const candidateInvoice=String(candidate.supplierInvoice||candidate.invoiceNumber||candidate.factura||candidate.numero_factura||'').trim().toUpperCase();
+			const date=String(domainPurchase.createdAt||domainPurchase.fecha||'').slice(0,10);
+			const candidateDate=String(candidate.createdAt||candidate.fecha||candidate.created_at||'').slice(0,10);
+			const amount=Number(domainPurchase.total??domainPurchase.amount??purchaseTotal(store.collection,domainPurchase));
+			const candidateAmount=Number(candidate.total??candidate.valor??candidate.amount??candidate.monto??candidate.valor_total??0);
+			const storeKey=value=>{
+				const text=String(value||'').trim();
+				return String((store.collection.stores||[]).find(item=>[item.id,item.code,item.name].some(key=>String(key||'')===text))?.name||text).toUpperCase();
+			};
+			const purchaseStore=storeKey(domainPurchase.storeId||domainPurchase.local_id||domainPurchase.local);
+			const entryStore=storeKey(candidate.storeId||candidate.local_id||candidate.local);
+			return invoice&&invoice===candidateInvoice&&date&&date===candidateDate&&Math.round(amount)===Math.round(candidateAmount)&&purchaseStore===entryStore;
+		});
+		const linkedPayables=(store.collection.accountsPayable||[]).filter(item=>String(item.purchaseId||'')===String(purchase.id));
+		if(domainPurchase&&String(purchase.status||'').toUpperCase()==='RECIBIDA'&&!linkedEntry){
+			throw new Error('No se puede eliminar una compra recibida sin una entrada vinculada; registre una devolucion al proveedor.');
 		}
-		store.collection.purchases = (store.collection.purchases || []).filter(item=>String(item.id)!==String(purchaseId));
-		store.collection.entries = (store.collection.entries || []).filter(item=>String(item.id)!==String(purchaseId));
-		store.collection.accountsPayable=(store.collection.accountsPayable||[]).filter(item=>String(item.purchaseId)!==String(purchaseId));
+		if(domainPurchase&&linkedPayables.length){
+			throw new Error('No se puede eliminar la compra mientras tenga cuentas por pagar vinculadas.');
+		}
+		const path=domainPurchase
+			? `/api/domain/purchases/${encodeURIComponent(purchase.id)}`
+			: `/api/shared-entry/${encodeURIComponent(purchase.id)}`;
+		await persistCatalogRecord(path,{},'DELETE');
+		if(domainPurchase){
+			store.collection.purchases=(store.collection.purchases||[]).filter(item=>String(item.id)!==String(purchaseId));
+		}else{
+			store.collection.entries=(store.collection.entries||[]).filter(item=>String(item.id)!==String(purchaseId));
+			const normalized=await hydrateState();
+			if(normalized){store.state=normalized;await hydrateCatalog(store.state);}
+		}
 		store.save();
-		const isSharedEntry = !(store.collection.purchases || []).some(item=>String(item.id)===String(purchaseId));
-		await persistCatalogRecord(isSharedEntry ? `/api/shared-entry/${encodeURIComponent(purchase.id)}` : `/api/domain/purchases/${encodeURIComponent(purchase.id)}`,{},'DELETE');
 		render();
 		showToast('Compra eliminada.');
+	}catch(error){showToast(error.message,'error');}
+}
+async function deletePurchaseMirror(purchaseId,entryId){
+	const sameId=String(purchaseId)===String(entryId);
+	if(!window.confirm(`¿Eliminar solo el registro duplicado ${purchaseId}? Se conservarán la entrada ${entryId}, el inventario y las cuentas por pagar.`))return;
+	try{
+		const purchase=(store.collection.purchases||[]).find(item=>String(item.id)===String(purchaseId));
+		const entry=(store.collection.entries||[]).find(item=>String(item.id)===String(entryId));
+		if(!purchase||!entry)throw new Error('No se encontró el espejo de compra y su entrada relacionada.');
+		if(sameId){
+			await persistCatalogRecord(`/api/domain/purchases/${encodeURIComponent(purchaseId)}`,{},'DELETE');
+		}else{
+			await persistCatalogRecord(`/api/purchases/duplicate/${encodeURIComponent(purchaseId)}/${encodeURIComponent(entryId)}`,{},'DELETE');
+		}
+		store.collection.purchases=(store.collection.purchases||[]).filter(item=>String(item.id)!==String(purchaseId));
+		store.save();
+		render();
+		showToast(`Registro duplicado ${purchaseId} eliminado. La entrada y el inventario siguen intactos.`);
 	}catch(error){showToast(error.message,'error');}
 }
 document.addEventListener('click',event=>{const button=event.target.closest('[data-action]');if(!button)return;const storeId=button.dataset.storeId;if(button.dataset.action==='toggle-store')toggleStore(storeId);if(button.dataset.action==='delete-store')deleteStore(storeId);});
@@ -901,37 +964,126 @@ function openApartadoEditModal(id){
 function openPurchaseEditModal(purchase,targetCollection='purchases'){
 	const suppliers=store.collection.suppliers||[];
 	const stores=store.collection.stores||[];
-	const supplierOptions=suppliers.map(supplier=>`<option value="${supplier.id}" ${String(supplier.id)===String(purchase.supplierId)?'selected':''}>${supplier.code||''} · ${supplier.name}</option>`).join('');
-	const storeOptions=stores.map(storeItem=>`<option value="${storeItem.id}" ${String(storeItem.id)===String(purchase.storeId)?'selected':''}>${storeItem.name||storeItem.id}</option>`).join('');
-	const total=Number(purchase.total ?? purchase.amount ?? (purchase.items||[]).reduce((sum,item)=>sum+Number(item.quantity||0)*Number(item.unitCost??item.price??0),0));
+	const currentSupplier=suppliers.find(item=>String(item.id)===String(purchase.supplierId||purchase.supplier_id||purchase.proveedor_id||purchase.supplierName||purchase.supplier_name||purchase.empleado))||suppliers.find(item=>String(item.name||'').trim().toLowerCase()===String(purchase.supplierName||purchase.supplier_name||purchase.empleado||'').trim().toLowerCase());
+	const supplierOptions=suppliers.map(supplier=>`<option value="${supplier.id}" ${String(supplier.id)===String(currentSupplier?.id)?'selected':''}>${supplier.code||''} · ${supplier.name}</option>`).join('');
+	const storeId=purchase.storeId||purchase.local_id||purchase.local||'';
+	const destination=stores.find(item=>String(item.id)===String(storeId))?.name||storeId||'Sin local';
+	const items=Array.isArray(purchase.items)?purchase.items:[];
+	const total=Number(purchase.total ?? purchase.amount ?? purchase.valor_total ?? purchase.valor ?? items.reduce((sum,item)=>sum+Number(item.quantity||0)*Number(item.unitCost??item.price??0),0));
 	const dueDate=String(purchase.dueDate||'').slice(0,10);
-	$('#modal-root').innerHTML=`<div class="modal-backdrop"><form class="modal" id="purchase-edit-form"><button type="button" class="modal-close">×</button><p class="eyebrow">ABASTECIMIENTO</p><h2>Editar compra ${purchase.id}</h2><label class="input-label">Proveedor<select class="field" name="supplierId" required><option value="">Seleccionar proveedor</option>${supplierOptions}</select></label><label class="input-label">Local destino<select class="field" name="storeId" required>${storeOptions}</select></label><label class="input-label">Factura proveedor<input class="field" name="supplierInvoice" value="${purchase.supplierInvoice||purchase.factura||''}"></label><label class="input-label">Total de la compra<input class="field" name="total" type="number" min="0" step="0.01" value="${total}" required></label><label class="input-label">Forma de pago<select class="field" name="paymentMethod"><option value="Contado" ${String(purchase.paymentMethod).toLowerCase()==='contado'?'selected':''}>Contado</option><option value="Credito" ${String(purchase.paymentMethod).toLowerCase().includes('credito')?'selected':''}>Crédito</option><option value="Transferencia" ${String(purchase.paymentMethod).toLowerCase()==='transferencia'?'selected':''}>Transferencia</option></select></label><label class="input-label">Vencimiento de la cuenta<input class="field" name="dueDate" type="date" value="${dueDate}"></label><label class="input-label">Estado<select class="field" name="status"><option value="RECIBIDA" ${String(purchase.status).toUpperCase()==='RECIBIDA'?'selected':''}>Recibida</option><option value="BORRADOR" ${String(purchase.status).toUpperCase()==='BORRADOR'?'selected':''}>Borrador</option><option value="CANCELADA" ${String(purchase.status).toUpperCase()==='CANCELADA'?'selected':''}>Cancelada</option></select></label><p class="muted">Al elegir Crédito se creará o actualizará la cuenta por pagar vinculada a esta compra.</p><button class="primary wide">Guardar cambios</button></form></div>`;
+	const paymentFields=targetCollection==='entries'?'':`<label class="input-label">Forma de pago<select class="field" name="paymentMethod"><option value="Contado" ${String(purchase.paymentMethod).toLowerCase()==='contado'?'selected':''}>Contado</option><option value="Credito" ${String(purchase.paymentMethod).toLowerCase().includes('credito')?'selected':''}>Crédito</option><option value="Transferencia" ${String(purchase.paymentMethod).toLowerCase()==='transferencia'?'selected':''}>Transferencia</option></select></label><label class="input-label">Vencimiento de la cuenta<input class="field" name="dueDate" type="date" value="${dueDate}"></label>`;
+	const productRows=items.map((item,index)=>{
+		const productId=String(item.productId||item.code||item.codigo||'');
+		const productOptions=(store.collection.products||[]).map(product=>{
+			const code=String(product.code||product.id);
+			return `<option value="${code}" ${code===productId||String(product.id)===productId?'selected':''}>${product.name||code} · ${code}</option>`;
+		}).join('');
+		return `<div class="purchase-edit-line" data-purchase-edit-line="${index}"><label class="input-label">Producto<select class="field" data-purchase-edit-product>${productOptions}</select></label><div class="purchase-line-fields"><input class="field" type="number" min="1" step="1" value="${Number(item.quantity||1)}" data-purchase-edit-quantity placeholder="Cantidad"><input class="field" type="number" min="0" step="1" value="${Number(item.unitCost??item.price??0)}" data-purchase-edit-cost placeholder="Costo unitario">${targetCollection==='entries'?'':'<input class="field" type="number" min="0" step="0.01" value="'+Number(item.iva||0)+'" data-purchase-edit-iva placeholder="IVA %"><input class="field" type="number" min="0" step="0.01" value="'+Number(item.discount||0)+'" data-purchase-edit-discount placeholder="Descuento">'}</div><button type="button" class="table-action danger-text" data-action="remove-purchase-edit-line">Quitar producto</button></div>`;
+	}).join('');
+	const addLineButton=targetCollection==='entries'?'': '<button type="button" class="outline wide" data-action="add-purchase-edit-line">Agregar producto</button>';
+	$('#modal-root').innerHTML=`<div class="modal-backdrop"><form class="modal" id="purchase-edit-form"><button type="button" class="modal-close">×</button><p class="eyebrow">ABASTECIMIENTO</p><h2>Editar compra ${purchase.id}</h2><label class="input-label">Proveedor<select class="field" name="supplierId" required><option value="">Seleccionar proveedor</option>${supplierOptions}</select></label><p class="muted">Local destino: ${destination} · Estado: ${purchase.status||purchase.estado||'RECIBIDA'}</p><label class="input-label">Factura proveedor<input class="field" name="supplierInvoice" value="${purchase.supplierInvoice||purchase.factura||purchase.numero_factura||''}"></label><h3>Productos y cantidades</h3><div data-purchase-edit-lines>${productRows}</div>${addLineButton}<label class="input-label">Total de la compra<input class="field" name="total" type="number" min="0" step="0.01" value="${total}" readonly required></label>${paymentFields}<p class="muted">Al guardar se actualizarán los productos, el inventario y la cuenta por pagar vinculada.</p><button class="primary wide">Guardar cambios</button></form></div>`;
 	$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';
+	const form=$('#purchase-edit-form');
+	const updateTotal=()=>{
+		const lines=[...form.querySelectorAll('[data-purchase-edit-line]')];
+		const amount=lines.reduce((sum,line)=>{
+			const quantity=Number(line.querySelector('[data-purchase-edit-quantity]').value||0);
+			const cost=Number(line.querySelector('[data-purchase-edit-cost]').value||0);
+			const iva=Number(line.querySelector('[data-purchase-edit-iva]')?.value||0);
+			const discount=Number(line.querySelector('[data-purchase-edit-discount]')?.value||0);
+			const base=Math.max(0,quantity*cost-discount);
+			return sum+base+base*iva/100;
+		},0);
+		form.elements.total.value=String(Math.round(amount*100)/100);
+	};
+	form.addEventListener('input',event=>{if(event.target.matches('[data-purchase-edit-quantity],[data-purchase-edit-cost],[data-purchase-edit-iva],[data-purchase-edit-discount]'))updateTotal();});
+	form.addEventListener('change',event=>{if(event.target.matches('[data-purchase-edit-product]'))updateTotal();});
+	form.addEventListener('click',event=>{
+		const remove=event.target.closest('[data-action="remove-purchase-edit-line"]');
+		if(remove){remove.closest('[data-purchase-edit-line]').remove();updateTotal();}
+		if(event.target.closest('[data-action="add-purchase-edit-line"]')){
+			const product=(store.collection.products||[]).find(item=>!form.querySelector(`[data-purchase-edit-product] option[value="${item.code||item.id}"]:checked`));
+			if(!product)return showToast('No hay más productos disponibles para agregar.','error');
+			const line=document.createElement('div');
+			line.className='purchase-edit-line';
+			line.dataset.purchaseEditLine='new';
+			line.innerHTML=`<label class="input-label">Producto<select class="field" data-purchase-edit-product>${(store.collection.products||[]).map(item=>`<option value="${item.code||item.id}" ${String(item.id)===String(product.id)?'selected':''}>${item.name} · ${item.code||item.id}</option>`).join('')}</select></label><div class="purchase-line-fields"><input class="field" type="number" min="1" step="1" value="1" data-purchase-edit-quantity placeholder="Cantidad"><input class="field" type="number" min="0" step="1" value="${Number(product.cost||0)}" data-purchase-edit-cost placeholder="Costo unitario"><input class="field" type="number" min="0" step="0.01" value="0" data-purchase-edit-iva placeholder="IVA %"><input class="field" type="number" min="0" step="0.01" value="0" data-purchase-edit-discount placeholder="Descuento"></div><button type="button" class="table-action danger-text" data-action="remove-purchase-edit-line">Quitar producto</button>`;
+			form.querySelector('[data-purchase-edit-lines]').append(line);
+			updateTotal();
+		}
+	});
 	$('#purchase-edit-form').onsubmit=async event=>{
 		event.preventDefault();
+		const saveButton=event.target.querySelector('button.primary');
+		saveButton.disabled=true;
+		let savedPurchase=false;
 		try{
 			const values=Object.fromEntries(new FormData(event.target));
 			const supplier=suppliers.find(item=>String(item.id)===String(values.supplierId));
 			if(!supplier)throw new Error('Selecciona un proveedor válido.');
-			const amount=Number(values.total);
+			const updatedItems=[...form.querySelectorAll('[data-purchase-edit-line]')].map(line=>({
+				...(items[Number(line.dataset.purchaseEditLine)]||{}),
+				productId:String(line.querySelector('[data-purchase-edit-product]').value||''),
+				quantity:Number(line.querySelector('[data-purchase-edit-quantity]').value),
+				unitCost:Number(line.querySelector('[data-purchase-edit-cost]').value),
+				iva:Number(line.querySelector('[data-purchase-edit-iva]')?.value||0),
+				discount:Number(line.querySelector('[data-purchase-edit-discount]')?.value||0),
+			}));
+			if(!updatedItems.length||updatedItems.some(item=>!item.productId||!Number.isInteger(item.quantity)||item.quantity<=0||!Number.isFinite(item.unitCost)||item.unitCost<0||!Number.isFinite(item.iva)||item.iva<0||!Number.isFinite(item.discount)||item.discount<0))throw new Error('Revisa productos, cantidades y costos antes de guardar.');
+			const amount=updatedItems.reduce((sum,item)=>{
+				const base=Math.max(0,item.quantity*item.unitCost-item.discount);
+				return sum+base+base*item.iva/100;
+			},0);
 			if(!Number.isFinite(amount)||amount<0)throw new Error('El total debe ser un valor válido.');
-			const updated={...purchase,supplierId:supplier.id,supplierName:supplier.name,storeId:values.storeId,supplierInvoice:String(values.supplierInvoice||''),paymentMethod:values.paymentMethod,total:amount,amount,status:values.status,updatedAt:new Date().toISOString()};
-			if(targetCollection==='entries')await persistCatalogRecord('/api/shared-entry',updated,'PUT');else await persistDomainRecord('purchases',updated);
+			const updated={...purchase,supplierId:supplier.id,supplierName:supplier.name,supplier_name:supplier.name,storeId,local:purchase.local||storeId,supplierInvoice:String(values.supplierInvoice||''),factura:String(values.supplierInvoice||''),paymentMethod:values.paymentMethod||purchase.paymentMethod||purchase.metodo_pago||'',items:updatedItems,total:amount,amount,status:purchase.status||purchase.estado||'RECIBIDA',updatedAt:new Date().toISOString()};
 			const source=store.collection[targetCollection]||[];
+			const purchaseReferences=new Set([purchase.id,purchase.referencia,purchase.purchaseId].filter(Boolean).map(String));
+			const existing=(store.collection.accountsPayable||[]).find(account=>purchaseReferences.has(String(account.purchaseId||'')));
+			if(targetCollection!=='entries'&&existing&&Number(existing.paidAmount||0)>0&&!String(values.paymentMethod||'').toLowerCase().includes('credito')){
+				throw new Error('No se puede cambiar una compra a pago de contado porque ya tiene abonos registrados.');
+			}
+			let entrySaveResult=null;
+			if(targetCollection==='entries'){
+				entrySaveResult=await persistCatalogRecord('/api/shared-entry',updated,'PUT');
+				if(Number.isFinite(Number(entrySaveResult?.total)))updated.total=updated.amount=Number(entrySaveResult.total);
+			}else{
+				await persistDomainRecord('purchases',updated);
+				savedPurchase=true;
+			}
+			let accountUpdate=null;
+			if(targetCollection==='entries'&&Array.isArray(entrySaveResult?.accountsPayable)){
+				for(const account of entrySaveResult.accountsPayable){
+					const accountIndex=(store.collection.accountsPayable||[]).findIndex(item=>String(item.id)===String(account.id));
+					if(accountIndex<0)store.collection.accountsPayable.push(account);
+					else store.collection.accountsPayable[accountIndex]=account;
+				}
+				for(const purchaseUpdate of entrySaveResult.purchases||[]){
+					const purchaseIndex=(store.collection.purchases||[]).findIndex(item=>String(item.id)===String(purchaseUpdate.id));
+					if(purchaseIndex>=0)store.collection.purchases[purchaseIndex]=purchaseUpdate;
+				}
+			}else if(targetCollection!=='entries'&&String(values.paymentMethod).toLowerCase().includes('credito')){
+				accountUpdate={...(existing||{id:generateId('CXP',store.collection.accountsPayable),purchaseId:String(purchase.id),paidAmount:0,createdAt:new Date().toISOString()}),supplierId:supplier.id,supplierName:supplier.name,storeId,invoiceNumber:String(values.supplierInvoice||purchase.id),issueDate:purchase.createdAt||new Date().toISOString(),dueDate:values.dueDate?`${values.dueDate}T23:59:59.000Z`:new Date(Date.now()+30*86400000).toISOString(),totalAmount:amount,balance:Math.max(0,amount-Number(existing?.paidAmount||0)),status:Number(existing?.paidAmount||0)>=amount?'PAGADA':'PENDIENTE',paymentTerms:'Credito',updatedAt:new Date().toISOString()};
+				await persistDomainRecord('accountsPayable',accountUpdate);
+			}else if(targetCollection!=='entries'&&existing&&Number(existing.paidAmount||0)===0){
+				accountUpdate={...existing,status:'ANULADA',updatedAt:new Date().toISOString()};
+				await persistDomainRecord('accountsPayable',accountUpdate);
+			}
 			const index=source.findIndex(item=>String(item.id)===String(purchase.id));
 			if(index>=0)source[index]=updated;
-			const existing=(store.collection.accountsPayable||[]).find(account=>String(account.purchaseId)===String(purchase.id));
-			if(String(values.paymentMethod).toLowerCase().includes('credito')){
-				const account=existing||{id:generateId('CXP',store.collection.accountsPayable),purchaseId:String(purchase.id),paidAmount:0,createdAt:new Date().toISOString()};
-				Object.assign(account,{supplierId:supplier.id,supplierName:supplier.name,storeId:values.storeId,invoiceNumber:String(values.supplierInvoice||purchase.id),issueDate:purchase.createdAt||new Date().toISOString(),dueDate:values.dueDate?`${values.dueDate}T23:59:59.000Z`:new Date(Date.now()+30*86400000).toISOString(),totalAmount:amount,balance:Math.max(0,amount-Number(account.paidAmount||0)),status:'PENDIENTE',paymentTerms:'Credito',updatedAt:new Date().toISOString()});
-				await persistDomainRecord('accountsPayable',account);
-				if(!existing)store.collection.accountsPayable.push(account);
-			}else if(existing&&Number(existing.paidAmount||0)===0){
-				existing.status='ANULADA';
-				await persistDomainRecord('accountsPayable',existing);
+			if(accountUpdate){
+				const accountIndex=(store.collection.accountsPayable||[]).findIndex(account=>String(account.id)===String(accountUpdate.id));
+				if(accountIndex<0)store.collection.accountsPayable.push(accountUpdate);
+				else store.collection.accountsPayable[accountIndex]=accountUpdate;
 			}
 			store.save();$('#modal-root').innerHTML='';render();showToast('Compra y cuenta por pagar actualizadas correctamente.');
-		}catch(error){showToast(error.message,'error');}
+		}catch(error){
+			if(savedPurchase){
+				try{await persistDomainRecord('purchases',purchase);}
+				catch(rollbackError){error=new Error(`${error.message} No se pudo restaurar la compra anterior: ${rollbackError.message}`);}
+			}
+			saveButton.disabled=false;
+			showToast(error.message,'error');
+		}
 	};
 }
 function openDomainEditModal(collection,id,label){
@@ -1008,11 +1160,12 @@ function openPurchaseModalV2(){
 	const suppliers=store.collection.suppliers.filter(item=>item.active!==false).map(item=>`<option value="${item.id}">${item.code} · ${item.name}</option>`).join('');
 	const stores=store.collection.stores.map(item=>`<option value="${item.id}">${item.name}</option>`).join('');
 	const products=store.collection.products.map(item=>`<option value="${item.id}">${item.code} · ${item.name}</option>`).join('');
-	$('#modal-root').innerHTML=`<div class="modal-backdrop"><form class="modal" id="purchase-modal"><button type="button" class="modal-close">×</button><p class="eyebrow">ABASTECIMIENTO</p><h2>Nueva compra</h2><label class="input-label">Tipo de compra<select class="field" name="purchaseType" data-purchase-type><option value="PRODUCTOS">Productos</option><option value="TALONARIOS">Talonarios</option></select></label><label class="input-label">Proveedor<select class="field" name="supplierId" required>${suppliers}</select></label><label class="input-label">Local destino<select class="field" name="storeId" required>${stores}</select></label><label class="input-label">Factura proveedor<input class="field" name="supplierInvoice"></label><label class="input-label">Forma de pago<select class="field" name="paymentMethod"><option>Contado</option><option>Credito</option><option>Transferencia</option></select></label><div data-talonario-purchase-fields hidden><label class="input-label">Tipo de talonario<select class="field" name="talonarioType"><option value="REMISION">Remisiones</option><option value="RECIBO">Recibos</option></select></label><label class="input-label">Cantidad de talonarios<input class="field" name="talonarioCount" type="number" min="1" step="1"></label><label class="input-label">Consecutivo inicial recibido<input class="field" name="talonarioStart" type="number" min="1" step="1"></label><label class="input-label">Consecutivo final recibido<input class="field" name="talonarioEnd" type="number" min="1" step="1"></label><label class="input-label">Valor total de la compra<input class="field" name="talonarioTotal" type="number" min="0" step="0.01"></label></div><div data-purchase-products><label class="input-label">Producto<select class="field" data-purchase-product>${products}</select></label><div class="purchase-line-fields"><input class="field" type="number" min="1" value="1" data-purchase-quantity placeholder="Cantidad"><input class="field" type="number" min="0" value="0" data-purchase-cost placeholder="Costo unitario"><input class="field" type="number" min="0" value="0" data-purchase-iva placeholder="IVA %"><input class="field" type="number" min="0" value="0" data-purchase-discount placeholder="Descuento"></div><button type="button" class="outline wide" data-action="add-purchase-line">Agregar producto</button><div class="purchase-draft"></div></div><label class="input-label">Observaciones<textarea class="field" name="notes"></textarea></label><button class="primary wide">Guardar compra</button></form></div>`;
+	$('#modal-root').innerHTML=`<div class="modal-backdrop"><form class="modal" id="purchase-modal"><button type="button" class="modal-close">×</button><p class="eyebrow">ABASTECIMIENTO</p><h2>Nueva compra</h2><label class="input-label">Tipo de compra<select class="field" name="purchaseType" data-purchase-type><option value="PRODUCTOS">Productos</option><option value="TALONARIOS">Talonarios</option></select></label><label class="input-label">Proveedor<select class="field" name="supplierId" required>${suppliers}</select></label><label class="input-label">Local destino<select class="field" name="storeId" required>${stores}</select></label><label class="input-label">Factura proveedor<input class="field" name="supplierInvoice"></label><label class="input-label">Forma de pago<select class="field" name="paymentMethod"><option>Contado</option><option>Credito</option><option>Transferencia</option></select></label><label class="input-label" data-purchase-due-date hidden>Fecha de vencimiento<input class="field" name="dueDate" type="date"></label><div data-talonario-purchase-fields hidden><label class="input-label">Tipo de talonario<select class="field" name="talonarioType"><option value="REMISION">Remisiones</option><option value="RECIBO">Recibos</option></select></label><label class="input-label">Cantidad de talonarios<input class="field" name="talonarioCount" type="number" min="1" step="1"></label><label class="input-label">Consecutivo inicial recibido<input class="field" name="talonarioStart" type="number" min="1" step="1"></label><label class="input-label">Consecutivo final recibido<input class="field" name="talonarioEnd" type="number" min="1" step="1"></label><label class="input-label">Valor total de la compra<input class="field" name="talonarioTotal" type="number" min="0" step="0.01"></label></div><div data-purchase-products><label class="input-label">Producto<select class="field" data-purchase-product>${products}</select></label><div class="purchase-line-fields"><input class="field" type="number" min="1" value="1" data-purchase-quantity placeholder="Cantidad"><input class="field" type="number" min="0" value="0" data-purchase-cost placeholder="Costo unitario"><input class="field" type="number" min="0" value="0" data-purchase-iva placeholder="IVA %"><input class="field" type="number" min="0" value="0" data-purchase-discount placeholder="Descuento"></div><button type="button" class="outline wide" data-action="add-purchase-line">Agregar producto</button><div class="purchase-draft"></div></div><label class="input-label">Observaciones<textarea class="field" name="notes"></textarea></label><button class="primary wide">Guardar y recibir compra</button></form></div>`;
 	$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';
 	const form=$('#purchase-modal');
-	const sync=()=>{const isTalonarios=form.elements.purchaseType.value==='TALONARIOS';form.querySelector('[data-talonario-purchase-fields]').hidden=!isTalonarios;form.querySelector('[data-purchase-products]').hidden=isTalonarios;form.elements.talonarioCount.required=isTalonarios;form.elements.talonarioStart.required=isTalonarios;form.elements.talonarioEnd.required=isTalonarios;form.elements.talonarioTotal.required=isTalonarios;};
+	const sync=()=>{const isTalonarios=form.elements.purchaseType.value==='TALONARIOS';const isCredit=String(form.elements.paymentMethod.value).toLocaleLowerCase().includes('credito');form.querySelector('[data-talonario-purchase-fields]').hidden=!isTalonarios;form.querySelector('[data-purchase-products]').hidden=isTalonarios;form.querySelector('[data-purchase-due-date]').hidden=!isCredit;form.elements.dueDate.required=isCredit;form.elements.talonarioCount.required=isTalonarios;form.elements.talonarioStart.required=isTalonarios;form.elements.talonarioEnd.required=isTalonarios;form.elements.talonarioTotal.required=isTalonarios;};
 	form.elements.purchaseType.onchange=sync;
+	form.elements.paymentMethod.onchange=sync;
 	form.querySelector('[name="storeId"]').value=state.storeId||store.collection.stores[0]?.id||'';
 	sync();
 }
@@ -1020,13 +1173,30 @@ function addPurchaseLine(){ const productId=$('[data-purchase-product]').value,q
 document.addEventListener('submit',async event=>{
 	if(!event.target.matches('#purchase-modal')||event.target.elements.purchaseType?.value!=='TALONARIOS')return;
 	event.preventDefault();event.stopImmediatePropagation();
+	const submitButton=event.target.querySelector('button.primary');
+	submitButton.disabled=true;
 	try{
 		const values=Object.fromEntries(new FormData(event.target));
 		const count=Number(values.talonarioCount),start=Number(values.talonarioStart),end=Number(values.talonarioEnd),total=Number(values.talonarioTotal);
 		if(!Number.isInteger(count)||count<=0||!Number.isInteger(start)||!Number.isInteger(end)||end<start||!Number.isFinite(total)||total<0)throw new Error('Cantidad, rango y valor total son obligatorios y validos.');
-		const purchase={id:generateId('COM',store.collection.purchases),purchaseType:'TALONARIOS',supplierId:values.supplierId,storeId:values.storeId,supplierInvoice:String(values.supplierInvoice||''),paymentMethod:String(values.paymentMethod||'Credito'),notes:String(values.notes||''),talonarioType:values.talonarioType,talonarioCount:count,talonarioStart:start,talonarioEnd:end,talonarioTotal:total,talonarioUnitCost:total/count,items:[{productId:'TALONARIOS',quantity:count,unitCost:total/count,iva:0,discount:0}],createdAt:new Date().toISOString(),status:'BORRADOR'};
-		await persistDomainRecord('purchases',purchase);store.collection.purchases.push(purchase);$('#modal-root').innerHTML='';location.hash='#compras';render();showToast('Compra de talonarios guardada.');
-	}catch(error){showToast(error.message,'error');}
+		const paymentMethod=String(values.paymentMethod||'Credito');
+		const dueDate=validatePurchaseDueDate(paymentMethod,values.dueDate);
+		if(!store.collection.suppliers.some(item=>String(item.id)===String(values.supplierId)))throw new Error('El proveedor de la compra no existe.');
+		if(!store.collection.stores.some(item=>String(item.id)===String(values.storeId)))throw new Error('El local destino de la compra no existe.');
+		const draftState=structuredClone(store.collection);
+		const reservation=await reservePurchaseId();
+		const purchase={id:reservation.id,purchaseType:'TALONARIOS',supplierId:values.supplierId,storeId:values.storeId,supplierInvoice:String(values.supplierInvoice||''),paymentMethod,dueDate,notes:String(values.notes||''),talonarioType:values.talonarioType,talonarioCount:count,talonarioStart:start,talonarioEnd:end,talonarioTotal:total,talonarioUnitCost:total/count,items:[{productId:'TALONARIOS',quantity:count,unitCost:total/count,iva:0,discount:0}],createdAt:new Date().toISOString(),status:'BORRADOR'};
+		if(!Array.isArray(draftState.purchases))draftState.purchases=[];
+		draftState.purchases.push(purchase);
+		const received=receiveTalonarioPurchase(draftState,purchase.id);
+		if(!isStaticDeployment()){
+			await persistDomainRecord('purchases',received.purchase);
+			for(const talonario of received.records)await persistDomainRecord('talonarios',talonario);
+			for(const account of draftState.accountsPayable.filter(item=>String(item.purchaseId)===String(purchase.id)))await persistDomainRecord('accountsPayable',account);
+		}
+		store.state=draftState;
+		store.save();$('#modal-root').innerHTML='';location.hash='#compras';render();showToast(reservation.serverReserved?'Compra de talonarios recibida y cuenta por pagar creada.':'Compra recibida y cuenta por pagar creada. Consecutivo calculado con el historial disponible; reinicia el servidor para habilitar reserva central.');
+	}catch(error){submitButton.disabled=false;showToast(error.message,'error');}
 },true);
 function openProductEditor(productId=''){ const product=productId&&store.collection.products.find(item=>item.id===productId); const fields=[['name','Nombre',product?.name],['code','Codigo',product?.code],['barcode','Codigo de barras',product?.barcode],['reference','Referencia',product?.reference],['category','Categoria',product?.category],['subcategory','Subcategoria',product?.subcategory],['brand','Marca',product?.brand],['supplierName','Proveedor',product?.supplierName],['cost','Costo',product?.cost||0,'number'],['price','Precio de venta',product?.price||0,'number'],['specialPrice','Precio especial',product?.specialPrice||0,'number'],['iva','IVA',product?.iva||0,'number'],['minimum','Stock minimo',product?.minimum||0,'number'],['maximum','Stock maximo',product?.maximum||0,'number']].map(field=>({name:field[0],label:field[1],value:field[2],type:field[3]}));modal(product?'Editar producto':'Nuevo producto',fields,async values=>{try{const normalized=product?updateProduct(store.collection,product.id,values):createProduct(store.collection,values);if(!product)ensureInventoryEntry(store.collection,normalized.id,state.storeId);await persistCatalogRecord('/api/catalog/product',{...normalized,id:normalized.id,salePrice:normalized.salePrice||normalized.price,taxRate:normalized.iva||0},product?'PUT':'POST');const remote=await hydrateState();if(remote){store.state=remote;await hydrateCatalog(store.state);}$('#modal-root').innerHTML='';render();showToast('Producto guardado correctamente.');}catch(error){showToast(error.message,'error');}}); }
 function openImportModal(){ $('#modal-root').innerHTML='<div class="modal-backdrop"><form class="modal" id="import-modal"><button type="button" class="modal-close">×</button><p class="eyebrow">PRODUCTOS</p><h2>Importar productos</h2><p class="muted">Sube un archivo Excel (.xlsx, .xls), PDF o CSV. Encabezados recomendados: codigo, nombre, referencia, categoria, costo, precio, barcode.</p><label class="input-label">Archivo de productos<input class="field" id="import-file" type="file" accept=".xlsx,.xls,.pdf,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,application/pdf,text/csv" required></label><textarea class="field import-text" rows="6" placeholder="O pega aqui un CSV: codigo,nombre,categoria,costo,precio"></textarea><div class="import-preview"></div><button type="button" class="outline" data-action="preview-import">Vista previa</button><button class="primary wide" data-action="confirm-import" disabled>Importar productos</button></form></div>';$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';$('#import-file').onchange=()=>readImportFile(); }
@@ -1148,19 +1318,24 @@ function updateSalesViewState(){
 document.addEventListener('input',event=>{if(event.target.matches('[data-filter="sales"]'))updateSalesViewState();});
 document.addEventListener('change',event=>{if(event.target.matches('[data-sales-store],[data-sales-month],[data-sales-seller]'))updateSalesViewState();});
 function updateProductViewState(){productViewState={query:$('[data-filter="products"]')?.value||'',store:$('[data-product-store]')?.value||'all',active:$('[data-product-active]')?.value||'all',version:productViewState.version+1};productPage=1;refreshProducts();}
-document.addEventListener('input',event=>{if(event.target.matches('[data-filter="purchases"]'))filterPurchases();});
-document.addEventListener('change',event=>{if(event.target.matches('[data-purchase-supplier],[data-purchase-store],[data-purchase-status]'))filterPurchases();});
-function filterPurchases(){const query=$('[data-filter="purchases"]')?.value.toLowerCase()||'',supplier=$('[data-purchase-supplier]')?.value||'all',storeId=$('[data-purchase-store]')?.value||'all',status=$('[data-purchase-status]')?.value||'all';const matches=(store.collection.purchases||[]).filter(purchase=>{const supplierName=store.collection.suppliers?.find(item=>item.id===purchase.supplierId)?.name||'';return `${purchase.id} ${purchase.supplierInvoice} ${purchase.supplierName||''} ${supplierName}`.toLowerCase().includes(query)&&(supplier==='all'||purchase.supplierId===supplier)&&(storeId==='all'||purchase.storeId===storeId)&&(status==='all'||purchase.status===status);});if($('#purchases-table'))$('#purchases-table').innerHTML=purchaseTable(store.collection,matches);}
 function filterSharedPurchases(){
 	const query=$('[data-filter="purchases"]')?.value.toLowerCase()||'';
 	const supplier=$('[data-purchase-supplier]')?.value||'all';
 	const storeId=$('[data-purchase-store]')?.value||'all';
 	const status=$('[data-purchase-status]')?.value||'all';
 	const items=[...(store.collection.purchases||[]),...(store.collection.entries||[])].filter(item=>{
-		const text=Object.values(item).map(value=>String(value??'')).join(' ').toLowerCase();
 		const linkedPayable=(store.collection.accountsPayable||[]).find(account=>String(account.purchaseId||'')===String(item.id||''));
-		const linkedSupplierId=linkedPayable?accountPayableSupplierKey(store.collection,linkedPayable):String(item.supplierId||item.proveedor_id||'');
-		return text.includes(query)&&(supplier==='all'||linkedSupplierId===supplier)&&(storeId==='all'||String(item.storeId||item.local_id||item.local||'')===storeId)&&(status==='all'||String(item.status||item.estado||'').toUpperCase()===status);
+		const rawSupplierId=String(item.supplierId||item.supplier_id||item.proveedor_id||item.id_proveedor||'');
+		const supplierByName=(store.collection.suppliers||[]).find(supplier=>String(supplier.name||'').trim().toLowerCase()===String(item.supplierName||item.supplier_name||item.empleado||'').trim().toLowerCase());
+		const supplierRecord=(store.collection.suppliers||[]).find(candidate=>String(candidate.id)===rawSupplierId);
+		const text=`${Object.values(item).map(value=>String(value??'')).join(' ')} ${supplierRecord?.name||supplierByName?.name||''}`.toLowerCase();
+		const linkedSupplierId=linkedPayable?accountPayableSupplierKey(store.collection,linkedPayable):rawSupplierId||String(supplierByName?.id||'');
+		const currentStatus=String(item.status||item.estado||'').toUpperCase();
+		const statusMatches=status==='all'||currentStatus===status||(status==='RECIBIDA'&&currentStatus==='COMPLETADO'&&(item.estado||item.local||item.supplier_name));
+		const rawStore=String(item.storeId||item.local_id||item.local||'');
+		const matchedStore=(store.collection.stores||[]).find(candidate=>[candidate.id,candidate.code,candidate.name].some(value=>String(value||'')===rawStore));
+		const purchaseStoreId=String(matchedStore?.id||rawStore);
+		return text.includes(query)&&(supplier==='all'||linkedSupplierId===supplier)&&(storeId==='all'||purchaseStoreId===storeId)&&statusMatches;
 	});
 	if($('[data-purchase-summary]'))$('[data-purchase-summary]').innerHTML=purchaseSummary(store.collection,items);
 	if($('#purchases-table'))$('#purchases-table').innerHTML=purchaseTable(store.collection,items);
@@ -1204,51 +1379,26 @@ function transferSource(){return store.collection.transfers?.length ? store.coll
 function filterTransfers(){const query=$('[data-filter="transfers"]')?.value.toLocaleLowerCase()||'',origin=$('[data-transfer-origin]')?.value||'all',destination=$('[data-transfer-destination]')?.value||'all',status=$('[data-transfer-status]')?.value||'Todos',date=$('[data-transfer-date]')?.value||'';const items=transferSource().filter(item=>{const products=(item.items||[]).map(line=>`${line.productId||''} ${line.name||''}`).join(' ');const haystack=`${item.id||''} ${item.originStoreId||''} ${item.destinationStoreId||''} ${item.createdBy||''} ${item.status||''} ${products}`.toLocaleLowerCase();const created=String(item.createdAt||item.fecha||'').slice(0,10);return (!query||haystack.includes(query))&&(origin==='all'||String(item.originStoreId)===origin)&&(destination==='all'||String(item.destinationStoreId)===destination)&&(status==='Todos'||String(item.status).toUpperCase()===status)&&(date===''||created===date);});if($('#transfers-table'))$('#transfers-table').innerHTML=transferTable(store.collection,items);}
 document.addEventListener('input',event=>{if(event.target.matches('[data-filter="transfers"]'))filterTransfers();});
 document.addEventListener('change',event=>{if(event.target.matches('[data-transfer-origin],[data-transfer-destination],[data-transfer-status],[data-transfer-date]'))filterTransfers();});
-document.addEventListener('click',async event=>{
-	const button = event.target.closest('[data-action]');
+document.addEventListener('click',event=>{
+	const button=event.target.closest('[data-action]');
 	if(!button)return;
-	const action = button.dataset.action;
-	const purchaseId = button.dataset.purchaseId;
+	const action=button.dataset.action;
 	if(action==='new-supplier')openSupplierModal();
 	if(action==='new-purchase')openPurchaseModalV2();
 	if(action==='add-purchase-line')addPurchaseLine();
 	if(action==='purchase-detail'){
+		const purchaseId=button.dataset.purchaseId;
 		if(!purchaseId)return;
 		$('#modal-root').innerHTML=purchaseDetail(store.collection,purchaseId);
 		const closeButton=$('.modal-close');
 		if(closeButton)closeButton.onclick=()=>$('#modal-root').innerHTML='';
-	}
-	if(['order-purchase','receive-purchase','cancel-purchase'].includes(action)){
-		if(!purchaseId)return;
-		try{
-			const handlers={ 'order-purchase':orderPurchase,'receive-purchase':receivePurchase,'cancel-purchase':cancelPurchase };
-			const purchase=(store.collection.purchases||[]).find(item=>String(item.id)===String(purchaseId));
-			if(!purchase)throw new Error('Compra no encontrada.');
-			if(action==='receive-purchase'){
-				if(purchase.purchaseType==='TALONARIOS'){
-					const result=receiveTalonarioPurchase(store.collection,purchaseId);
-					await persistDomainRecord('purchases',result.purchase);
-					for(const talonario of result.records)await persistDomainRecord('talonarios',talonario);
-					for(const account of (store.collection.accountsPayable||[]).filter(item=>item.purchaseId===purchase.id))await persistDomainRecord('accountsPayable',account);
-				}else{
-					await persistCatalogRecord('/api/shared-purchase',{purchase,tenantId:activeTenantId()});
-					purchase.status='RECIBIDA';
-					purchase.receivedAt=purchase.receivedAt||new Date().toISOString();
-				}
-			}else{
-				handlers[action](store.collection,purchaseId);
-				await persistDomainRecord('purchases',purchase);
-			}
-			store.save();
-			render();
-			showToast(action==='receive-purchase'?'Compra recibida e inventario actualizado.':action==='order-purchase'?'Compra ordenada.':'Compra cancelada.');
-		}catch(error){showToast(error.message,'error');}
 	}
 });
 document.addEventListener('click',event=>{const rankingButton=event.target.closest('[data-action="seller-ranking"]');if(rankingButton){openSellerRanking();return;}if(event.target.closest('[data-action="sale-detail"]')){const saleId=event.target.closest('[data-sale-id]')?.dataset.saleId;saleDetail(saleId);decorateSaleSeller(saleId);attachSaleItemForm(saleId);$('.modal-close')?.addEventListener('click',()=>$('#modal-root').innerHTML='');}});
 document.addEventListener('click',event=>{const button=event.target.closest('[data-action]');if(!button)return;const saleId=button.dataset.saleId;if(button.dataset.action==='edit-sale')openSaleEditModal(saleId);if(button.dataset.action==='delete-sale')deleteSale(saleId);});
 	document.addEventListener('click',event=>{const button=event.target.closest('[data-action]');if(!button)return;const actions={
 	'delete-purchase':()=>deleteLocalPurchase(button.dataset.purchaseId),
+	'delete-purchase-mirror':()=>deletePurchaseMirror(button.dataset.purchaseId,button.dataset.entryId),
 	'delete-transfer':()=>deleteTransferRemote(button.dataset.transferId),
 	'delete-inventory':()=>deleteInventoryEntry(button.dataset.productId,button.dataset.storeId),
 	'delete-customer':()=>deleteDomainRecord('customers',button.dataset.customerId,'cliente'),
@@ -1316,7 +1466,6 @@ function addSaleItemToEditForm(form,sale){
 	};
 }
 document.addEventListener('click',event=>{const button=event.target.closest('[data-action="edit-sale"]');if(!button)return;setTimeout(()=>{const sale=store.collection.sales.find(item=>String(item.id)===String(button.dataset.saleId));const form=$('#sale-edit-modal');if(sale&&form)addSaleItemToEditForm(form,sale);},0);});
-document.addEventListener('submit',event=>{if(!event.target.matches('#purchase-modal'))return;event.preventDefault();if(!purchaseDraft.length)return showToast('Agrega al menos un producto.','error');try{const values=Object.fromEntries(new FormData(event.target));createPurchase(store.collection,{...values,items:purchaseDraft});store.save();$('#modal-root').innerHTML='';location.hash='#compras';render();showToast('Compra guardada.');}catch(error){showToast(error.message,'error');}});
 async function changeTransfer(id, action){const transfer=store.collection.transfers.find(item=>item.id===id);if(!transfer)return;if(action==='cancel'&&transfer.status==='BORRADOR')transfer.status='CANCELADO';else if(action==='send'&&transfer.status==='BORRADOR'){try{for(const item of transfer.items)await persistCatalogRecord('/api/catalog/inventory-movement',{id:`${transfer.id}-OUT-${item.productId}`,productId:item.productId,storeId:transfer.originStoreId,quantity:item.quantity,movementType:'TRASLADO_SALIDA',referenceId:transfer.id,note:`Traslado ${transfer.id}`});transfer.status='EN_TRANSITO';transfer.sentAt=new Date().toISOString();}catch(error){showToast(error.message,'error');return;}}else if(action==='receive'&&transfer.status==='EN_TRANSITO'){try{for(const item of transfer.items)await persistCatalogRecord('/api/catalog/inventory-movement',{id:`${transfer.id}-IN-${item.productId}`,productId:item.productId,storeId:transfer.destinationStoreId,quantity:item.quantity,movementType:'TRASLADO_ENTRADA',referenceId:transfer.id,note:`Traslado ${transfer.id}`});transfer.status='RECIBIDO';transfer.receivedAt=new Date().toISOString();}catch(error){showToast(error.message,'error');return;}}else return showToast('Transicion de traslado no permitida.','error');try{await persistDomainRecord('transfers',transfer);store.save();render();showToast(action==='send'?'Traslado enviado y descontado en PostgreSQL.':action==='receive'?'Traslado recibido y actualizado en PostgreSQL.':'Traslado cancelado.');}catch(error){showToast(error.message,'error');}}
 document.addEventListener('click',event=>{const action=event.target.closest('[data-action]')?.dataset.action;if(['transfer-send','transfer-receive','transfer-cancel'].includes(action))changeTransfer(event.target.closest('[data-transfer-id]')?.dataset.transferId,action.replace('transfer-',''));});
 document.addEventListener('click',event=>{const pageAction=event.target.closest('[data-product-page]')?.dataset.productPage;if(pageAction){productPage=Math.max(1,pageAction==='next'?productPage+1:productPage-1);refreshProducts();}});
@@ -1587,7 +1736,57 @@ document.addEventListener('click',async event=>{
 		showToast(error.message,'error');
 	}
 },true);
-document.addEventListener('submit',async event=>{if(!event.target.matches('#purchase-modal'))return;event.preventDefault();event.stopImmediatePropagation();if(!purchaseDraft.length)return showToast('Agrega al menos un producto.','error');try{const values=Object.fromEntries(new FormData(event.target));const purchase={id:generateId('COM',store.collection.purchases),...values,items:purchaseDraft,createdAt:new Date().toISOString(),status:'BORRADOR'};await persistDomainRecord('purchases',purchase);store.collection.purchases.push(purchase);$('#modal-root').innerHTML='';location.hash='#compras';render();showToast('Compra guardada en PostgreSQL.');}catch(error){showToast(error.message,'error');}},true);
+document.addEventListener('submit',async event=>{
+	if(!event.target.matches('#purchase-modal')||event.target.elements.purchaseType?.value==='TALONARIOS')return;
+	event.preventDefault();
+	if(!purchaseDraft.length)return showToast('Agrega al menos un producto.','error');
+	const submitButton=event.target.querySelector('button.primary');
+	submitButton.disabled=true;
+	try{
+		const values=Object.fromEntries(new FormData(event.target));
+		const draftState=structuredClone(store.collection);
+		const provisionalPurchaseId=isStaticDeployment()
+			? nextPurchaseEntryId([...(draftState.purchases||[]),...(draftState.entries||[])])
+			: `TMP-${globalThis.crypto?.randomUUID?crypto.randomUUID():`${Date.now()}-${Math.random()}`}`;
+		const purchase=createPurchase(draftState,{...values,id:provisionalPurchaseId,items:purchaseDraft});
+		const purchasePayload=structuredClone(purchase);
+		const received=receivePurchase(draftState,purchase.id);
+		const result=isStaticDeployment()
+			? {id:purchase.id,purchase:received,accountPayable:draftState.accountsPayable.find(item=>String(item.purchaseId)===String(purchase.id))}
+			: await persistCatalogRecord('/api/shared-purchase',{purchase:purchasePayload,tenantId:activeTenantId()});
+		Object.assign(received,result.purchase||{});
+		const entryId=String(result.id||'');
+		if(!/^\d+$/.test(entryId))throw new Error('El servidor no devolvió el consecutivo numérico de la entrada.');
+		received.id=entryId;
+		if(!Array.isArray(draftState.accountsPayable))draftState.accountsPayable=[];
+		if(result.accountPayable){
+			draftState.accountsPayable=draftState.accountsPayable.filter(item=>String(item.purchaseId)!==provisionalPurchaseId&&String(item.id)!==String(result.accountPayable.id));
+			draftState.accountsPayable.push({...result.accountPayable,purchaseId:entryId});
+		}else{
+			const localPayable=draftState.accountsPayable.find(item=>String(item.purchaseId)===provisionalPurchaseId);
+			if(localPayable)localPayable.purchaseId=entryId;
+		}
+		const accountPayable=draftState.accountsPayable.find(item=>String(item.purchaseId)===entryId);
+		if(!accountPayable)throw new Error('La compra se recibio, pero no se pudo preparar su cuenta por pagar.');
+		if(!isStaticDeployment()){
+			await persistDomainRecord('purchases',received);
+			await persistDomainRecord('accountsPayable',accountPayable);
+			if(provisionalPurchaseId!==entryId){
+				await persistCatalogRecord(`/api/domain/purchases/${encodeURIComponent(provisionalPurchaseId)}`,{},'DELETE');
+			}
+		}
+		store.state=draftState;
+		store.save();
+		purchaseDraft=[];
+		$('#modal-root').innerHTML='';
+		location.hash='#compras';
+		render();
+		showToast(`Compra recibida con consecutivo ${entryId}. Inventario y cuenta por pagar actualizados.`);
+	}catch(error){
+		submitButton.disabled=false;
+		showToast(error.message,'error');
+	}
+});
 async function boot() {
 	const appContent = $('#app-content');
 	if (appContent) appContent.innerHTML = '<section class="page-shell"><p class="eyebrow">FAMIMUEBLES ERP</p><h1>Cargando informacion...</h1></section>';
@@ -1650,6 +1849,7 @@ async function boot() {
 	store.state = normalized;
 	store.collection.demoMode = false;
 	await hydrateCatalog(store.state,bootstrap);
+	await loadDomainCollections(store.state,['suppliers','purchases','accountsPayable'],10000,3,1,true);
 	if(sistecreditoLedgerEnabled&&['dashboard','paridad'].includes(currentRoute())){
 		await loadDomainCollections(store.state,['sistecreditoAdjustments','sistecreditoSaleAmounts'],5000,2,1,true);
 	}

@@ -7,6 +7,7 @@ import csv
 import gzip
 import hashlib
 import io
+import math
 import msvcrt
 import re
 import secrets
@@ -14,10 +15,11 @@ import shutil
 import sys
 import subprocess
 import threading
+import unicodedata
 import urllib.error
 import urllib.request
 import zipfile
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -328,6 +330,9 @@ def _initialize_schema() -> sqlite3.Connection:
         "CREATE TABLE IF NOT EXISTS domain_records (collection TEXT NOT NULL, id TEXT NOT NULL, data_json TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (collection, id))"
     )
     database.execute(
+        "CREATE TABLE IF NOT EXISTS domain_sequences (tenant_id TEXT NOT NULL, sequence_name TEXT NOT NULL, last_value INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (tenant_id, sequence_name))"
+    )
+    database.execute(
         "CREATE TABLE IF NOT EXISTS auth_users (id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL, role TEXT NOT NULL, store_id TEXT, active INTEGER NOT NULL DEFAULT 1, tenant_id TEXT NOT NULL DEFAULT 'tenant-default', email TEXT NOT NULL DEFAULT '', phone TEXT NOT NULL DEFAULT '', telegram_id TEXT, display_name TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)"
     )
     user_columns = {row[1] for row in database.execute("PRAGMA table_info(auth_users)")}
@@ -426,6 +431,7 @@ def _initialize_postgres_schema() -> _PostgresConnection:
     statements = [
         "CREATE TABLE IF NOT EXISTS app_state (id INTEGER PRIMARY KEY, state_json TEXT NOT NULL, updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)",
         "CREATE TABLE IF NOT EXISTS domain_records (tenant_id TEXT NOT NULL, collection TEXT NOT NULL, id TEXT NOT NULL, data_json TEXT NOT NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (tenant_id, collection, id))",
+        "CREATE TABLE IF NOT EXISTS domain_sequences (tenant_id TEXT NOT NULL, sequence_name TEXT NOT NULL, last_value INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (tenant_id, sequence_name))",
         "CREATE TABLE IF NOT EXISTS auth_users (id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL, role TEXT NOT NULL, store_id TEXT, active INTEGER NOT NULL DEFAULT 1, tenant_id TEXT NOT NULL DEFAULT 'tenant-default', email TEXT NOT NULL DEFAULT '', phone TEXT NOT NULL DEFAULT '', telegram_id TEXT, display_name TEXT NOT NULL DEFAULT '', created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)",
         "ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS telegram_id TEXT",
         "ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS display_name TEXT NOT NULL DEFAULT ''",
@@ -649,6 +655,114 @@ def record_id(payload: dict) -> str:
     if not value:
         raise ValueError("El registro requiere un id")
     return value
+
+
+def match_purchase_payables(accounts, references, invoice, supplier_name):
+    reference_keys = {str(value) for value in references if value}
+    linked = [
+        (row, account) for row, account in accounts
+        if str(account.get("purchaseId") or "") in reference_keys
+    ]
+    if linked or not invoice:
+        return linked
+
+    normalize = lambda value: re.sub(r"[^a-z0-9]", "", str(value or "").casefold())
+    invoice_key = normalize(invoice)
+    supplier_key = normalize(supplier_name)
+    invoice_matches = [
+        (row, account) for row, account in accounts
+        if normalize(account.get("invoiceNumber")) == invoice_key
+        and (not supplier_key or normalize(account.get("supplierName")) == supplier_key)
+    ]
+    if len(invoice_matches) == 1:
+        return invoice_matches
+
+    invoice_matches = [
+        (row, account) for row, account in accounts
+        if normalize(account.get("invoiceNumber")) == invoice_key
+    ]
+    return invoice_matches if len(invoice_matches) == 1 else []
+
+
+def update_purchase_payable(account, total, supplier_id, supplier_name, store_id, invoice):
+    paid = float(account.get("paidAmount") or 0)
+    existing_status = str(account.get("status") or "").upper()
+    account.update({
+        "supplierId": supplier_id or account.get("supplierId", ""),
+        "supplierName": supplier_name or account.get("supplierName", ""),
+        "storeId": store_id or account.get("storeId", ""),
+        "invoiceNumber": invoice or account.get("invoiceNumber", ""),
+        "totalAmount": total,
+        "balance": max(0, total - paid),
+        "status": "ANULADA" if existing_status == "ANULADA" else "PAGADA" if paid >= total else "PARCIAL" if paid > 0 else "PENDIENTE",
+        "updatedAt": datetime.now(timezone.utc).isoformat(),
+    })
+    return account
+
+
+def _sequence_number(identifier, prefix):
+    match = re.fullmatch(rf"{re.escape(prefix)}-(\d+)", str(identifier or "").strip(), re.IGNORECASE)
+    return int(match.group(1)) if match else 0
+
+
+def _reserve_domain_sequence(database, tenant, sequence_name, existing_ids):
+    prefix = str(sequence_name).upper()
+    highest_existing = max((_sequence_number(identifier, prefix) for identifier in existing_ids), default=0)
+    database.execute(
+        "INSERT INTO domain_sequences (tenant_id, sequence_name, last_value) VALUES (?, ?, ?) "
+        "ON CONFLICT (tenant_id, sequence_name) DO NOTHING",
+        (tenant, prefix, highest_existing),
+    )
+    row = database.execute(
+        "UPDATE domain_sequences SET last_value = GREATEST(last_value, ?) + 1 "
+        "WHERE tenant_id = ? AND sequence_name = ? RETURNING last_value",
+        (highest_existing, tenant, prefix),
+    ).fetchone()
+    if not row:
+        raise RuntimeError(f"No se pudo reservar el consecutivo {prefix}")
+    return int(row["last_value"])
+
+
+def _reserve_purchase_id(database, tenant):
+    purchase_rows = database.execute(
+        "SELECT id FROM domain_records WHERE tenant_id = ? AND collection = 'purchases'",
+        (tenant,),
+    ).fetchall()
+    movement_rows = database.execute(
+        "SELECT referencia FROM movimientos WHERE referencia LIKE 'COM-%'",
+    ).fetchall()
+    existing_ids = [row["id"] for row in purchase_rows]
+    existing_ids.extend(row["referencia"] for row in movement_rows)
+    number = _reserve_domain_sequence(database, tenant, "COM", existing_ids)
+    return f"COM-{number:05d}"
+
+
+def _build_purchase_payable(account_id, purchase, total, due_date, paid_amount=0):
+    issue_date = str(purchase.get("createdAt") or datetime.now(timezone.utc).isoformat())[:10]
+    payment_method = str(purchase.get("paymentMethod") or "Credito")
+    supplier_name = str(purchase.get("supplierName") or "")
+    balance = max(0, total - paid_amount)
+    return {
+        "id": account_id,
+        "purchaseId": str(purchase.get("id") or ""),
+        "supplierId": str(purchase.get("supplierId") or ""),
+        "supplierName": supplier_name,
+        "storeId": str(purchase.get("storeId") or ""),
+        "invoiceNumber": str(purchase.get("supplierInvoice") or purchase.get("id") or ""),
+        "issueDate": issue_date,
+        "dueDate": due_date,
+        "totalAmount": total,
+        "paidAmount": paid_amount,
+        "balance": balance,
+        "status": "PAGADA" if balance == 0 else "PARCIAL" if paid_amount > 0 else "PENDIENTE",
+        "paymentTerms": payment_method,
+        "createdAt": datetime.now(timezone.utc).isoformat(),
+        "updatedAt": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _purchase_can_be_received(status):
+    return str(status or "").strip().upper() in {"BORRADOR", "ORDENADA"}
 
 
 TALONARIO_CONFIGURED_OWNERS = {
@@ -2154,7 +2268,24 @@ def _create_shared_purchase_entry(database: _PostgresConnection, payload: dict, 
     _, cached = claim_idempotency(database, handler, payload, "/api/shared-purchase")
     if cached is not None:
         return cached
-    purchase = payload.get("purchase") if isinstance(payload.get("purchase"), dict) else payload
+    purchase_payload = payload.get("purchase") if isinstance(payload.get("purchase"), dict) else payload
+    purchase_id = str(purchase_payload.get("id") or "").strip()
+    if not purchase_id:
+        raise ValueError("La compra requiere identificador")
+    current_tenant = tenant_id(handler, payload)
+    purchase_row = database.execute(
+        "SELECT data_json FROM domain_records WHERE tenant_id = ? AND collection = 'purchases' AND id = ? FOR UPDATE",
+        (current_tenant, purchase_id),
+    ).fetchone()
+    purchase = {**purchase_payload, **(json.loads(purchase_row["data_json"]) if purchase_row else {})}
+    if not purchase.get("supplierName"):
+        purchase["supplierName"] = purchase_payload.get("supplierName") or purchase_payload.get("supplierId") or ""
+    existing_movement = database.execute(
+        "SELECT id FROM movimientos WHERE tipo = 'ENTRADA' AND referencia = %s ORDER BY id DESC LIMIT 1",
+        (purchase_id,),
+    ).fetchone()
+    if not existing_movement and not _purchase_can_be_received(purchase.get("status")):
+        raise ValueError("Solo una compra nueva puede recibirse")
     store_id = str(purchase.get("storeId") or purchase.get("local") or "").strip()
     items = purchase.get("items")
     if not store_id or not isinstance(items, list) or not items:
@@ -2162,26 +2293,97 @@ def _create_shared_purchase_entry(database: _PostgresConnection, payload: dict, 
     enforce_user_store_proxy(user, store_id)
     if not database.execute("SELECT 1 FROM locales WHERE nombre = %s AND activo = TRUE", (store_id,)).fetchone():
         raise ValueError("El local destino no existe o esta inactivo")
+    payment_method = str(purchase.get("paymentMethod") or "Credito")
+    payment_method_key = "".join(
+        character for character in unicodedata.normalize("NFD", payment_method.casefold())
+        if not unicodedata.combining(character)
+    )
+    is_credit = "credito" in payment_method_key
+    due_date = str(purchase.get("dueDate") or "").strip()[:10]
+    if is_credit:
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", due_date):
+            raise ValueError("La fecha de vencimiento es obligatoria para compras a credito")
+        try:
+            datetime.strptime(due_date, "%Y-%m-%d")
+        except ValueError as exc:
+            raise ValueError("La fecha de vencimiento no es valida") from exc
     normalized = []
     for item in items:
         code = str(item.get("productId") or item.get("code") or "").strip()
-        quantity = int(float(item.get("quantity", 0) or 0))
-        unit_cost = int(float(item.get("unitCost", item.get("cost", 0)) or 0))
+        raw_quantity = float(item.get("quantity", 0) or 0)
+        unit_cost = float(item.get("unitCost", item.get("cost", 0)) or 0)
+        iva = float(item.get("iva", 0) or 0)
+        discount = float(item.get("discount", 0) or 0)
+        if not math.isfinite(raw_quantity) or raw_quantity != int(raw_quantity):
+            raise ValueError("La cantidad de cada producto debe ser un entero valido")
+        quantity = int(raw_quantity)
         product = database.execute("SELECT nombre_producto FROM productos WHERE codigo = %s AND UPPER(COALESCE(activo, 'SI')) <> 'NO'", (code,)).fetchone()
-        if not product or quantity <= 0 or unit_cost < 0:
+        if not product or quantity <= 0 or not math.isfinite(unit_cost) or unit_cost < 0 or not math.isfinite(iva) or iva < 0 or not math.isfinite(discount) or discount < 0 or discount > quantity * unit_cost:
             raise ValueError("Producto, cantidad y costo de entrada invalidos")
-        normalized.append((code, product["nombre_producto"], quantity, unit_cost))
+        normalized.append((code, product["nombre_producto"], quantity, unit_cost, iva, discount))
     invoice = str(purchase.get("supplierInvoice") or purchase.get("invoiceNumber") or purchase.get("id") or "").strip()
-    movement = database.execute(
-        "INSERT INTO movimientos (tipo, estado, local_origen, empleado, vendedor, factura, referencia, observacion, metodo_pago) VALUES ('ENTRADA', 'COMPLETADO', %s, %s, %s, %s, %s, %s, %s) RETURNING id",
-        (store_id, str(purchase.get("supplierName") or purchase.get("supplierId") or user.get("username") or "ERP"), str(user.get("username") or "ERP"), invoice, str(purchase.get("id") or ""), str(purchase.get("notes") or "Recepcion de compra ERP"), str(purchase.get("paymentMethod") or "Credito")),
-    ).fetchone()
-    total = 0
-    for code, description, quantity, unit_cost in normalized:
-        database.execute("INSERT INTO inventarios (local, codigo, descripcion, cantidad) VALUES (%s, %s, %s, %s) ON CONFLICT (local, codigo) DO UPDATE SET cantidad = inventarios.cantidad + EXCLUDED.cantidad, actualizado = CURRENT_TIMESTAMP", (store_id, code, description, quantity))
-        database.execute("INSERT INTO movimiento_productos (movimiento_id, codigo, descripcion, cantidad, precio_unitario, precio_total, entrada, salida) VALUES (%s, %s, %s, %s, %s, %s, %s, 0)", (movement[0], code, description, quantity, unit_cost, quantity * unit_cost, quantity))
-        total += quantity * unit_cost
-    result = {"ok": True, "id": movement[0], "purchaseId": str(purchase.get("id") or ""), "total": total}
+    total = int(round(sum(max(0, quantity * unit_cost - discount) * (1 + iva / 100) for _, _, quantity, unit_cost, iva, discount in normalized)))
+    if existing_movement:
+        movement_id = existing_movement["id"]
+    else:
+        movement = database.execute(
+            "INSERT INTO movimientos (tipo, estado, local_origen, empleado, vendedor, factura, referencia, observacion, metodo_pago) VALUES ('ENTRADA', 'COMPLETADO', %s, %s, %s, %s, %s, %s, %s) RETURNING id",
+            (store_id, str(purchase.get("supplierName") or purchase.get("supplierId") or user.get("username") or "ERP"), str(user.get("username") or "ERP"), invoice, purchase_id, str(purchase.get("notes") or "Recepcion de compra ERP"), payment_method),
+        ).fetchone()
+        movement_id = movement["id"]
+        for code, description, quantity, unit_cost, _, _ in normalized:
+            database.execute("INSERT INTO inventarios (local, codigo, descripcion, cantidad) VALUES (%s, %s, %s, %s) ON CONFLICT (local, codigo) DO UPDATE SET cantidad = inventarios.cantidad + EXCLUDED.cantidad, actualizado = CURRENT_TIMESTAMP", (store_id, code, description, quantity))
+            database.execute("INSERT INTO movimiento_productos (movimiento_id, codigo, descripcion, cantidad, precio_unitario, precio_total, entrada, salida) VALUES (%s, %s, %s, %s, %s, %s, %s, 0)", (movement_id, code, description, quantity, unit_cost, quantity * unit_cost, quantity))
+
+    issue_date = str(purchase.get("createdAt") or datetime.now(timezone.utc).isoformat())[:10]
+    if not due_date:
+        try:
+            due_date = (datetime.fromisoformat(issue_date) + timedelta(days=30)).date().isoformat()
+        except ValueError:
+            due_date = (datetime.now(timezone.utc) + timedelta(days=30)).date().isoformat()
+    payable_rows = database.execute(
+        "SELECT collection, id, data_json FROM domain_records WHERE tenant_id = ? AND collection IN ('accountsPayable', 'accounts-payable')",
+        (current_tenant,),
+    ).fetchall()
+    payable = next(
+        (json.loads(row["data_json"]) for row in payable_rows if str(json.loads(row["data_json"]).get("purchaseId") or "") == purchase_id),
+        None,
+    )
+    if payable is None:
+        account_id = f"CXP-{_reserve_domain_sequence(database, current_tenant, 'CXP', [row['id'] for row in payable_rows]):05d}"
+        paid_amount = float(total) if "contado" in payment_method_key else 0
+        payable = _build_purchase_payable(account_id, purchase, total, due_date, paid_amount)
+        payable_collection = "accountsPayable"
+    else:
+        paid_amount = float(payable.get("paidAmount") or 0)
+        payable.update({
+            "supplierId": str(purchase.get("supplierId") or payable.get("supplierId") or ""),
+            "supplierName": str(purchase.get("supplierName") or payable.get("supplierName") or ""),
+            "storeId": store_id,
+            "invoiceNumber": invoice,
+            "totalAmount": total,
+            "paidAmount": paid_amount,
+            "balance": max(0, total - paid_amount),
+            "status": "PAGADA" if paid_amount >= total else "PARCIAL" if paid_amount > 0 else "PENDIENTE",
+            "dueDate": due_date,
+            "updatedAt": datetime.now(timezone.utc).isoformat(),
+        })
+        payable_collection = next(row["collection"] for row in payable_rows if row["id"] == payable["id"])
+    payable_json = json.dumps(payable, ensure_ascii=False, separators=(",", ":"))
+    database.execute(
+        "INSERT INTO domain_records (tenant_id, collection, id, data_json, version) VALUES (?, ?, ?, ?, 1) "
+        "ON CONFLICT(tenant_id, collection, id) DO UPDATE SET data_json = excluded.data_json, "
+        "version = domain_records.version + 1, updated_at = CURRENT_TIMESTAMP",
+        (current_tenant, payable_collection, payable["id"], payable_json),
+    )
+    purchase.update({"status": "RECIBIDA", "receivedAt": purchase.get("receivedAt") or datetime.now(timezone.utc).isoformat()})
+    database.execute(
+        "INSERT INTO domain_records (tenant_id, collection, id, data_json, version) VALUES (?, 'purchases', ?, ?, 1) "
+        "ON CONFLICT(tenant_id, collection, id) DO UPDATE SET data_json = excluded.data_json, "
+        "version = domain_records.version + 1, updated_at = CURRENT_TIMESTAMP",
+        (current_tenant, purchase_id, json.dumps(purchase, ensure_ascii=False, separators=(",", ":"))),
+    )
+    result = {"ok": True, "id": movement_id, "purchaseId": purchase_id, "total": total, "purchase": purchase, "accountPayable": payable}
     complete_idempotency(database, handler, payload, "/api/shared-purchase", 201, result)
     return result
 
@@ -2903,6 +3105,11 @@ class AppHandler(SimpleHTTPRequestHandler):
                 return
             if path not in {"/api/auth/setup", "/api/auth/login", "/api/auth/telegram"} and not can_access(self, path, "POST"):
                 self.send_json(403, {"error": "Permiso insuficiente"})
+                return
+            if path == "/api/purchases/next-id":
+                with connection() as database:
+                    purchase_id = _reserve_purchase_id(database, tenant_id(self, payload))
+                self.send_json(200, {"id": purchase_id})
                 return
             if path == "/api/tenants":
                 name = str(payload.get("name", "")).strip()
@@ -3756,6 +3963,42 @@ class AppHandler(SimpleHTTPRequestHandler):
                 )
             self.send_json(200, {"ok": True, "id": str(fuel_id), "deleted": True})
             return
+        purchase_mirror_match = re.fullmatch(r"/api/purchases/duplicate/([^/]+)/([^/]+)", path)
+        if purchase_mirror_match:
+            user = authenticated_user(self)
+            if normalize_role(user.get("role")) != "ADMINISTRADOR":
+                self.send_json(403, {"error": "Solo el administrador puede eliminar compras duplicadas"})
+                return
+            if not _postgres_enabled():
+                self.send_json(503, {"error": "La eliminacion segura de duplicados requiere PostgreSQL"})
+                return
+            identifier = unquote(purchase_mirror_match.group(1)).strip()
+            entry_id = unquote(purchase_mirror_match.group(2)).strip()
+            with connection() as database:
+                purchase_row = database.execute(
+                    "SELECT data_json FROM domain_records WHERE tenant_id = ? AND collection = 'purchases' AND id = ? FOR UPDATE",
+                    (tenant_id(self), identifier),
+                ).fetchone()
+                if not purchase_row:
+                    self.send_json(404, {"error": "Compra duplicada no encontrada"})
+                    return
+                movement = database.execute(
+                    "SELECT id FROM movimientos WHERE id = %s AND tipo = 'ENTRADA' AND referencia = %s LIMIT 1",
+                    (entry_id, identifier),
+                ).fetchone()
+                if not movement:
+                    self.send_json(409, {"error": "No se encontro una entrada vinculada; no se elimino ningun registro"})
+                    return
+                database.execute(
+                    "DELETE FROM domain_records WHERE tenant_id = ? AND collection = 'purchases' AND id = ?",
+                    (tenant_id(self), identifier),
+                )
+                database.execute(
+                    "INSERT INTO audit_events (user_id, action, collection, record_id, data_json) VALUES (?, 'DELETE_DUPLICATE', 'purchases', ?, ?)",
+                    (user["id"], identifier, purchase_row["data_json"] or "{}"),
+                )
+            self.send_json(200, {"ok": True, "deleted": True, "preservedEntry": True, "preservedInventory": True, "preservedPayables": True})
+            return
         if path.startswith("/api/catalog/store/"):
             user = authenticated_user(self)
             if normalize_role(user.get("role")) != "ADMINISTRADOR":
@@ -3884,12 +4127,85 @@ class AppHandler(SimpleHTTPRequestHandler):
                             elif "cantidad" in stock:
                                 stock["cantidad"] = float(stock.get("cantidad") or 0) - quantity
                     state["entries"] = [item for item in entries if str(item.get("id")) != identifier]
+                    tenant = tenant_id(self)
+                    supplier_name = str(entry.get("supplierName") or entry.get("supplier_name") or entry.get("empleado") or "")
+                    invoice = str(entry.get("supplierInvoice") or entry.get("factura") or entry.get("invoiceNumber") or "")
+                    references = {identifier, str(entry.get("referencia") or "")}
+                    references.discard("")
+                    payable_rows = database.execute(
+                            "SELECT collection, id, data_json FROM domain_records WHERE tenant_id = ? AND collection IN ('accountsPayable', 'accounts-payable')",
+                            (tenant,),
+                    ).fetchall()
+                    payables = [(account_row, json.loads(account_row["data_json"] or "{}")) for account_row in payable_rows]
+                    linked_payables = match_purchase_payables(payables, references, invoice, supplier_name)
+                    payable_ids = {str(account_row["id"]) for account_row, _ in linked_payables}
+                    payment_rows = database.execute(
+                            "SELECT collection, id, data_json FROM domain_records WHERE tenant_id = ? AND collection IN ('supplierPayments', 'supplier-payments')",
+                            (tenant,),
+                    ).fetchall()
+                    has_payments = any(
+                            str(json.loads(payment_row["data_json"] or "{}").get("accountId") or "") in payable_ids
+                            for payment_row in payment_rows
+                    )
+                    if has_payments or any(float(account.get("paidAmount") or 0) > 0 for _, account in linked_payables):
+                            self.send_json(409, {"error": "No se puede eliminar la compra porque la cuenta por pagar vinculada tiene abonos registrados."})
+                            return
+                    linked_purchase_ids = references | {
+                            str(account.get("purchaseId") or "")
+                            for _, account in linked_payables
+                            if account.get("purchaseId")
+                    }
+                    purchase_rows = database.execute(
+                            "SELECT id, data_json FROM domain_records WHERE tenant_id = ? AND collection = 'purchases'",
+                            (tenant,),
+                    ).fetchall()
+                    purchase_candidates = [(purchase_row, json.loads(purchase_row["data_json"] or "{}")) for purchase_row in purchase_rows]
+                    linked_purchases = [
+                            (purchase_row, purchase) for purchase_row, purchase in purchase_candidates
+                            if str(purchase.get("id") or purchase_row["id"]) in linked_purchase_ids
+                    ]
+                    if not linked_purchases and invoice:
+                            normalize = lambda value: re.sub(r"[^a-z0-9]", "", str(value or "").casefold())
+                            invoice_key = normalize(invoice)
+                            supplier_key = normalize(supplier_name)
+                            invoice_matches = [
+                                (purchase_row, purchase) for purchase_row, purchase in purchase_candidates
+                                if normalize(
+                                    purchase.get("supplierInvoice")
+                                    or purchase.get("invoiceNumber")
+                                    or purchase.get("factura")
+                                ) == invoice_key
+                                and (
+                                    not supplier_key
+                                    or normalize(purchase.get("supplierName") or purchase.get("supplier_name")) == supplier_key
+                                )
+                            ]
+                            if len(invoice_matches) == 1:
+                                linked_purchases = invoice_matches
+                    for account_row, account in linked_payables:
+                            database.execute(
+                                "DELETE FROM domain_records WHERE tenant_id = ? AND collection = ? AND id = ?",
+                                (tenant, account_row["collection"], account_row["id"]),
+                            )
+                            database.execute(
+                                "INSERT INTO audit_events (user_id, action, collection, record_id, data_json) VALUES (?, ?, ?, ?, ?)",
+                                (user["id"], "DELETE", account_row["collection"], account_row["id"], account_row["data_json"]),
+                            )
+                    for purchase_row, purchase in linked_purchases:
+                            database.execute(
+                                "DELETE FROM domain_records WHERE tenant_id = ? AND collection = 'purchases' AND id = ?",
+                                (tenant, purchase_row["id"]),
+                            )
+                            database.execute(
+                                "INSERT INTO audit_events (user_id, action, collection, record_id, data_json) VALUES (?, ?, ?, ?, ?)",
+                                (user["id"], "DELETE", "purchases", purchase_row["id"], purchase_row["data_json"]),
+                            )
                     serialized = json.dumps(state, ensure_ascii=False)
                     database.execute("UPDATE tenant_states SET state_json = ?, updated_at = CURRENT_TIMESTAMP WHERE tenant_id = ?", (serialized, tenant_id(self)))
-                self.send_json(200, {"ok": True, "deleted": True})
+                self.send_json(200, {"ok": True, "deleted": True, "deletedAccountsPayable": len(linked_payables), "deletedPurchases": len(linked_purchases)})
                 return
             with connection() as database:
-                movement = database.execute("SELECT id, local_origen, tipo FROM movimientos WHERE id = %s FOR UPDATE", (identifier,)).fetchone()
+                movement = database.execute("SELECT id, local_origen, tipo, empleado, factura, referencia FROM movimientos WHERE id = %s FOR UPDATE", (identifier,)).fetchone()
                 if not movement or str(movement["tipo"] or "").upper() != "ENTRADA":
                     self.send_json(404, {"error": "Entrada no encontrada"})
                     return
@@ -3897,12 +4213,85 @@ class AppHandler(SimpleHTTPRequestHandler):
                 for line in lines:
                     stock = database.execute("SELECT cantidad FROM inventarios WHERE local = %s AND codigo = %s FOR UPDATE", (movement["local_origen"], line["codigo"])).fetchone()
                     if not stock or float(stock["cantidad"] or 0) < float(line["cantidad"] or 0):
-                        raise ValueError("No se puede eliminar la entrada porque el stock actual es menor que la cantidad registrada")
+                            raise ValueError("No se puede eliminar la entrada porque el stock actual es menor que la cantidad registrada")
+                tenant = tenant_id(self)
+                supplier_name = str(movement["empleado"] or "")
+                invoice = str(movement["factura"] or "")
+                references = {identifier, str(movement["referencia"] or "")}
+                references.discard("")
+                payable_rows = database.execute(
+                    "SELECT collection, id, data_json FROM domain_records WHERE tenant_id = ? AND collection IN ('accountsPayable', 'accounts-payable') FOR UPDATE",
+                    (tenant,),
+                ).fetchall()
+                payables = [(account_row, json.loads(account_row["data_json"] or "{}")) for account_row in payable_rows]
+                linked_payables = match_purchase_payables(payables, references, invoice, supplier_name)
+                payable_ids = {str(account_row["id"]) for account_row, _ in linked_payables}
+                payment_rows = database.execute(
+                    "SELECT data_json FROM domain_records WHERE tenant_id = ? AND collection IN ('supplierPayments', 'supplier-payments')",
+                    (tenant,),
+                ).fetchall()
+                has_payments = any(
+                    str(json.loads(payment_row["data_json"] or "{}").get("accountId") or "") in payable_ids
+                    for payment_row in payment_rows
+                )
+                if has_payments or any(float(account.get("paidAmount") or 0) > 0 for _, account in linked_payables):
+                    self.send_json(409, {"error": "No se puede eliminar la compra porque la cuenta por pagar vinculada tiene abonos registrados."})
+                    return
+                linked_purchase_ids = references | {
+                    str(account.get("purchaseId") or "")
+                    for _, account in linked_payables
+                    if account.get("purchaseId")
+                }
+                purchase_rows = database.execute(
+                    "SELECT id, data_json FROM domain_records WHERE tenant_id = ? AND collection = 'purchases' FOR UPDATE",
+                    (tenant,),
+                ).fetchall()
+                purchase_candidates = [(purchase_row, json.loads(purchase_row["data_json"] or "{}")) for purchase_row in purchase_rows]
+                linked_purchases = [
+                    (purchase_row, purchase) for purchase_row, purchase in purchase_candidates
+                    if str(purchase.get("id") or purchase_row["id"]) in linked_purchase_ids
+                ]
+                if not linked_purchases and invoice:
+                    normalize = lambda value: re.sub(r"[^a-z0-9]", "", str(value or "").casefold())
+                    invoice_key = normalize(invoice)
+                    supplier_key = normalize(supplier_name)
+                    invoice_matches = [
+                            (purchase_row, purchase) for purchase_row, purchase in purchase_candidates
+                            if normalize(
+                                purchase.get("supplierInvoice")
+                                or purchase.get("invoiceNumber")
+                                or purchase.get("factura")
+                            ) == invoice_key
+                            and (
+                                not supplier_key
+                                or normalize(purchase.get("supplierName") or purchase.get("supplier_name")) == supplier_key
+                            )
+                    ]
+                    if len(invoice_matches) == 1:
+                            linked_purchases = invoice_matches
+                for account_row, account in linked_payables:
+                    database.execute(
+                            "DELETE FROM domain_records WHERE tenant_id = ? AND collection = ? AND id = ?",
+                            (tenant, account_row["collection"], account_row["id"]),
+                    )
+                    database.execute(
+                            "INSERT INTO audit_events (user_id, action, collection, record_id, data_json) VALUES (?, ?, ?, ?, ?)",
+                            (user["id"], "DELETE", account_row["collection"], account_row["id"], account_row["data_json"]),
+                    )
+                for purchase_row, purchase in linked_purchases:
+                    database.execute(
+                            "DELETE FROM domain_records WHERE tenant_id = ? AND collection = 'purchases' AND id = ?",
+                            (tenant, purchase_row["id"]),
+                    )
+                    database.execute(
+                            "INSERT INTO audit_events (user_id, action, collection, record_id, data_json) VALUES (?, ?, ?, ?, ?)",
+                            (user["id"], "DELETE", "purchases", purchase_row["id"], purchase_row["data_json"]),
+                    )
                 for line in lines:
                     database.execute("UPDATE inventarios SET cantidad = cantidad - %s, actualizado = CURRENT_TIMESTAMP WHERE local = %s AND codigo = %s", (line["cantidad"], movement["local_origen"], line["codigo"]))
                 database.execute("DELETE FROM movimiento_productos WHERE movimiento_id = %s", (identifier,))
                 database.execute("DELETE FROM movimientos WHERE id = %s", (identifier,))
-            self.send_json(200, {"ok": True, "deleted": True})
+            self.send_json(200, {"ok": True, "deleted": True, "deletedAccountsPayable": len(linked_payables), "deletedPurchases": len(linked_purchases)})
             return
         if path.startswith("/api/catalog/store/"):
             user = authenticated_user(self)
@@ -4120,20 +4509,261 @@ class AppHandler(SimpleHTTPRequestHandler):
                         if not entry:
                             self.send_json(404, {"error": "Entrada no encontrada"})
                             return
+                        account_updates = []
+                        purchase_updates = []
                         entry.update({key: payload[key] for key in ("estado", "local", "supplier_name", "vendedor", "factura", "referencia", "observacion") if key in payload})
+                        if "items" in payload:
+                            new_items = payload.get("items")
+                            if not isinstance(new_items, list) or not new_items:
+                                raise ValueError("La compra debe tener al menos un producto")
+                            normalized_items = []
+                            for item in new_items:
+                                product_id = str(item.get("productId") or item.get("code") or "").strip()
+                                quantity = int(float(item.get("quantity") or 0))
+                                unit_cost = float(item.get("unitCost", item.get("cost", 0)) or 0)
+                                if not product_id or quantity <= 0 or not math.isfinite(unit_cost) or unit_cost < 0:
+                                    raise ValueError("Producto, cantidad y costo de entrada invalidos")
+                                normalized_items.append({**item, "productId": product_id, "quantity": quantity, "unitCost": unit_cost, "subtotal": quantity * unit_cost})
+                            entry["items"] = normalized_items
+                            entry["total"] = sum(item["subtotal"] for item in normalized_items)
+                            total = entry["total"]
+                            supplier_id = str(payload.get("supplierId") or payload.get("supplier_id") or payload.get("proveedor_id") or "")
+                            supplier_name = str(payload.get("supplierName") or payload.get("supplier_name") or payload.get("empleado") or entry.get("supplier_name") or "")
+                            invoice = str(payload.get("supplierInvoice") or payload.get("factura") or entry.get("factura") or "")
+                            references = {identifier, str(entry.get("referencia") or ""), str(payload.get("referencia") or "")}
+                            references.discard("")
+                            account_rows = database.execute(
+                                "SELECT collection, id, data_json FROM domain_records WHERE tenant_id = ? AND collection IN ('accountsPayable', 'accounts-payable')",
+                                (tenant_id(self, payload),),
+                            ).fetchall()
+                            accounts = [(account_row, json.loads(account_row["data_json"] or "{}")) for account_row in account_rows]
+                            linked_accounts = match_purchase_payables(accounts, references, invoice, supplier_name)
+                            for account_row, account in linked_accounts:
+                                update_purchase_payable(
+                                    account,
+                                    total,
+                                    supplier_id,
+                                    supplier_name,
+                                    str(payload.get("local") or entry.get("local") or ""),
+                                    invoice,
+                                )
+                                database.execute(
+                                    "UPDATE domain_records SET data_json = ?, version = version + 1, updated_at = CURRENT_TIMESTAMP WHERE tenant_id = ? AND collection = ? AND id = ?",
+                                    (json.dumps(account, ensure_ascii=False, separators=(",", ":")), tenant_id(self, payload), account_row["collection"], account_row["id"]),
+                                )
+                                account_updates.append(account)
+
+                            purchase_ids = references | {
+                                str(account.get("purchaseId") or "")
+                                for _, account in linked_accounts
+                                if account.get("purchaseId")
+                            }
+                            purchase_rows = database.execute(
+                                "SELECT id, data_json FROM domain_records WHERE tenant_id = ? AND collection = 'purchases'",
+                                (tenant_id(self, payload),),
+                            ).fetchall()
+                            purchase_candidates = [(purchase_row, json.loads(purchase_row["data_json"] or "{}")) for purchase_row in purchase_rows]
+                            linked_purchases = [
+                                (purchase_row, purchase) for purchase_row, purchase in purchase_candidates
+                                if str(purchase.get("id") or purchase_row["id"]) in purchase_ids
+                            ]
+                            if not linked_purchases and invoice:
+                                normalize = lambda value: re.sub(r"[^a-z0-9]", "", str(value or "").casefold())
+                                invoice_key = normalize(invoice)
+                                supplier_key = normalize(supplier_name)
+                                invoice_matches = [
+                                    (purchase_row, purchase) for purchase_row, purchase in purchase_candidates
+                                    if normalize(
+                                        purchase.get("supplierInvoice")
+                                        or purchase.get("invoiceNumber")
+                                        or purchase.get("factura")
+                                    ) == invoice_key
+                                    and (
+                                        not supplier_key
+                                        or normalize(purchase.get("supplierName") or purchase.get("supplier_name")) == supplier_key
+                                    )
+                                ]
+                                if len(invoice_matches) == 1:
+                                    linked_purchases = invoice_matches
+                            for purchase_row, purchase in linked_purchases:
+                                purchase.update({
+                                    "supplierId": supplier_id or purchase.get("supplierId", ""),
+                                    "supplierName": supplier_name or purchase.get("supplierName", ""),
+                                    "supplier_name": supplier_name or purchase.get("supplier_name", ""),
+                                    "storeId": str(payload.get("local") or entry.get("local") or ""),
+                                    "supplierInvoice": invoice or purchase.get("supplierInvoice", ""),
+                                    "factura": invoice or purchase.get("factura", ""),
+                                    "items": normalized_items,
+                                    "total": total,
+                                    "amount": total,
+                                    "updatedAt": datetime.now(timezone.utc).isoformat(),
+                                })
+                                database.execute(
+                                    "UPDATE domain_records SET data_json = ?, version = version + 1, updated_at = CURRENT_TIMESTAMP WHERE tenant_id = ? AND collection = 'purchases' AND id = ?",
+                                    (json.dumps(purchase, ensure_ascii=False, separators=(",", ":")), tenant_id(self, payload), purchase_row["id"]),
+                                )
+                                purchase_updates.append(purchase)
                         database.execute("UPDATE tenant_states SET state_json = ?, updated_at = CURRENT_TIMESTAMP WHERE tenant_id = ?", (json.dumps(state, ensure_ascii=False), tenant_id(self)))
-                    self.send_json(200, {"ok": True, "id": identifier, "updated": True})
+                    self.send_json(200, {"ok": True, "id": identifier, "updated": True, "total": entry.get("total", 0), "accountsPayable": account_updates, "purchases": purchase_updates})
                     return
                 with connection() as database:
-                    movement = database.execute("SELECT id, tipo FROM movimientos WHERE id = %s FOR UPDATE", (identifier,)).fetchone()
+                    movement = database.execute("SELECT id, tipo, estado, local_origen, empleado, vendedor, factura, referencia, observacion FROM movimientos WHERE id = %s FOR UPDATE", (identifier,)).fetchone()
                     if not movement or str(movement["tipo"] or "").upper() != "ENTRADA":
                         self.send_json(404, {"error": "Entrada no encontrada"})
                         return
+                    total = None
+                    account_updates = []
+                    purchase_updates = []
+                    if "items" in payload:
+                        items = payload.get("items")
+                        if not isinstance(items, list) or not items:
+                            raise ValueError("La compra debe tener al menos un producto")
+                        normalized = []
+                        new_quantities = {}
+                        for item in items:
+                            code = str(item.get("productId") or item.get("code") or "").strip()
+                            try:
+                                quantity_value = float(item.get("quantity", 0))
+                                unit_cost_value = float(item.get("unitCost", item.get("cost", 0)) or 0)
+                            except (TypeError, ValueError) as error:
+                                raise ValueError("Cantidad o costo de entrada invalido") from error
+                            if not code or not math.isfinite(quantity_value) or not quantity_value.is_integer() or quantity_value <= 0 or not math.isfinite(unit_cost_value) or unit_cost_value < 0:
+                                raise ValueError("Producto, cantidad y costo de entrada invalidos")
+                            quantity = int(quantity_value)
+                            unit_cost = int(round(unit_cost_value))
+                            product = database.execute("SELECT nombre_producto FROM productos WHERE codigo = %s", (code,)).fetchone()
+                            if not product:
+                                raise ValueError(f"El producto {code} no existe")
+                            normalized.append((code, str(product["nombre_producto"] or code), quantity, unit_cost))
+                            new_quantities[code] = new_quantities.get(code, 0) + quantity
+                        old_lines = database.execute("SELECT codigo, cantidad FROM movimiento_productos WHERE movimiento_id = %s FOR UPDATE", (identifier,)).fetchall()
+                        old_quantities = {}
+                        for line in old_lines:
+                            code = str(line["codigo"] or "")
+                            old_quantities[code] = old_quantities.get(code, 0) + int(line["cantidad"] or 0)
+                        store_id = str(movement["local_origen"] or "")
+                        enforce_user_store_proxy(user, store_id)
+                        for code in set(old_quantities) | set(new_quantities):
+                            difference = new_quantities.get(code, 0) - old_quantities.get(code, 0)
+                            if difference < 0:
+                                stock = database.execute("SELECT cantidad FROM inventarios WHERE local = %s AND codigo = %s FOR UPDATE", (store_id, code)).fetchone()
+                                if not stock or float(stock["cantidad"] or 0) < -difference:
+                                    raise ValueError(f"No hay existencias suficientes para reducir la cantidad de {code}")
+                        for code in set(old_quantities) | set(new_quantities):
+                            difference = new_quantities.get(code, 0) - old_quantities.get(code, 0)
+                            if difference:
+                                database.execute(
+                                    "INSERT INTO inventarios (local, codigo, descripcion, cantidad) SELECT %s, %s, nombre_producto, %s FROM productos WHERE codigo = %s ON CONFLICT (local, codigo) DO UPDATE SET cantidad = inventarios.cantidad + EXCLUDED.cantidad, actualizado = CURRENT_TIMESTAMP",
+                                    (store_id, code, difference, code),
+                                )
+                        database.execute("DELETE FROM movimiento_productos WHERE movimiento_id = %s", (identifier,))
+                        total = 0
+                        for code, description, quantity, unit_cost in normalized:
+                            subtotal = quantity * unit_cost
+                            total += subtotal
+                            database.execute(
+                                "INSERT INTO movimiento_productos (movimiento_id, codigo, descripcion, cantidad, precio_unitario, precio_total, entrada, salida) VALUES (%s, %s, %s, %s, %s, %s, %s, 0)",
+                                (identifier, code, description, quantity, unit_cost, subtotal, quantity),
+                            )
                     updated = database.execute(
                         "UPDATE movimientos SET estado = %s, local_origen = %s, empleado = %s, vendedor = %s, factura = %s, referencia = %s, observacion = %s WHERE id = %s",
                         (str(payload.get("estado") or payload.get("status") or "COMPLETADO"), str(payload.get("local") or payload.get("local_origen") or ""), str(payload.get("supplier_name") or payload.get("supplierName") or payload.get("empleado") or ""), str(payload.get("vendedor") or ""), str(payload.get("factura") or payload.get("supplierInvoice") or ""), str(payload.get("referencia") or ""), str(payload.get("observacion") or payload.get("notes") or ""), identifier),
                     ).rowcount
-                self.send_json(200, {"ok": True, "id": identifier, "updated": bool(updated)})
+                    if total is not None:
+                        purchase_references = {identifier}
+                        if movement["referencia"]:
+                            purchase_references.add(str(movement["referencia"]))
+                        if payload.get("referencia"):
+                            purchase_references.add(str(payload["referencia"]))
+                        account_rows = database.execute(
+                            "SELECT collection, id, data_json FROM domain_records WHERE tenant_id = ? AND collection IN ('accountsPayable', 'accounts-payable') FOR UPDATE",
+                            (tenant_id(self, payload),),
+                        ).fetchall()
+                        supplier_id = str(payload.get("supplierId") or payload.get("supplier_id") or payload.get("proveedor_id") or "")
+                        supplier_name = str(payload.get("supplierName") or payload.get("supplier_name") or payload.get("empleado") or movement["empleado"] or "")
+                        invoice = str(payload.get("supplierInvoice") or payload.get("factura") or movement["factura"] or "")
+                        accounts = [(row, json.loads(row["data_json"] or "{}")) for row in account_rows]
+                        linked_accounts = match_purchase_payables(
+                            accounts, purchase_references, invoice, supplier_name
+                        )
+                        linked_purchase_ids = purchase_references | {
+                            str(account.get("purchaseId") or "")
+                            for _, account in linked_accounts
+                            if account.get("purchaseId")
+                        }
+                        for account_row, account in linked_accounts:
+                            update_purchase_payable(
+                                account,
+                                total,
+                                supplier_id,
+                                supplier_name,
+                                str(payload.get("local") or payload.get("local_origen") or movement["local_origen"] or ""),
+                                invoice,
+                            )
+                            database.execute(
+                                "UPDATE domain_records SET data_json = ?, version = version + 1, updated_at = CURRENT_TIMESTAMP WHERE tenant_id = ? AND collection = ? AND id = ?",
+                                (json.dumps(account, ensure_ascii=False, separators=(",", ":")), tenant_id(self, payload), account_row["collection"], account_row["id"]),
+                            )
+                            account_updates.append(account)
+                        purchase_rows = database.execute(
+                            "SELECT id, data_json FROM domain_records WHERE tenant_id = ? AND collection = 'purchases' FOR UPDATE",
+                            (tenant_id(self, payload),),
+                        ).fetchall()
+                        purchase_candidates = [
+                            (row, json.loads(row["data_json"] or "{}"))
+                            for row in purchase_rows
+                        ]
+                        linked_purchases = [
+                            (row, purchase) for row, purchase in purchase_candidates
+                            if str(purchase.get("id") or row["id"]) in linked_purchase_ids
+                        ]
+                        if not linked_purchases and invoice:
+                            invoice_key = re.sub(r"[^a-z0-9]", "", invoice.casefold())
+                            supplier_key = re.sub(r"[^a-z0-9]", "", supplier_name.casefold())
+                            invoice_matches = [
+                                (row, purchase) for row, purchase in purchase_candidates
+                                if re.sub(r"[^a-z0-9]", "", str(
+                                    purchase.get("supplierInvoice")
+                                    or purchase.get("invoiceNumber")
+                                    or purchase.get("factura")
+                                    or ""
+                                ).casefold()) == invoice_key
+                                and (
+                                    not supplier_key
+                                    or re.sub(r"[^a-z0-9]", "", str(
+                                        purchase.get("supplierName")
+                                        or purchase.get("supplier_name")
+                                        or ""
+                                    ).casefold()) == supplier_key
+                                )
+                            ]
+                            if len(invoice_matches) == 1:
+                                linked_purchases = invoice_matches
+                        if "items" in payload:
+                            for purchase_row, purchase in linked_purchases:
+                                purchase.update({
+                                    "supplierId": supplier_id or purchase.get("supplierId", ""),
+                                    "supplierName": supplier_name or purchase.get("supplierName", ""),
+                                    "supplier_name": supplier_name or purchase.get("supplier_name", ""),
+                                    "storeId": str(movement["local_origen"] or ""),
+                                    "supplierInvoice": invoice or purchase.get("supplierInvoice", ""),
+                                    "factura": invoice or purchase.get("factura", ""),
+                                    "items": items,
+                                    "total": total,
+                                    "amount": total,
+                                    "updatedAt": datetime.now(timezone.utc).isoformat(),
+                                })
+                                database.execute(
+                                    "UPDATE domain_records SET data_json = ?, version = version + 1, "
+                                    "updated_at = CURRENT_TIMESTAMP WHERE tenant_id = ? AND collection = 'purchases' AND id = ?",
+                                    (
+                                        json.dumps(purchase, ensure_ascii=False, separators=(",", ":")),
+                                        tenant_id(self, payload),
+                                        purchase_row["id"],
+                                    ),
+                                )
+                                purchase_updates.append(purchase)
+                self.send_json(200, {"ok": True, "id": identifier, "updated": bool(updated), "total": total, "accountsPayable": account_updates, "purchases": purchase_updates})
                 return
             if path == "/api/catalog/sale":
                 current_user = authenticated_user(self)

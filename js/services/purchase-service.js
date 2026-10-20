@@ -6,6 +6,39 @@ import { notifyCreation } from './notification-service.js';
 export const purchaseStatuses = ['BORRADOR', 'ORDENADA', 'RECIBIDA', 'CANCELADA'];
 const CENTRAL_TALONARIO_STORE = 'INV CRR 5 3 26';
 
+export function nextPurchaseId(records = []) {
+  const highest = records.flatMap(record => [
+    record?.id,
+    record?.purchaseId,
+    record?.purchase_id,
+    record?.compra_id,
+    record?.referencia,
+    record?.referenceId,
+  ]).reduce((max, id) => {
+    const match = String(id || '').match(/^COM-(\d+)$/i);
+    return match ? Math.max(max, Number(match[1])) : max;
+  }, 0);
+  return `COM-${String(highest + 1).padStart(5, '0')}`;
+}
+
+export function nextPurchaseEntryId(records = []) {
+  const highest = records.reduce((max, record) => {
+    const id = String(record?.id || '').trim();
+    return /^\d+$/.test(id) ? Math.max(max, Number(id)) : max;
+  }, 0);
+  return String(highest + 1);
+}
+
+export function validatePurchaseDueDate(paymentMethod, value) {
+  const isCreditPurchase = String(paymentMethod || '').toLocaleLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').includes('credito');
+  const dueDate = String(value || '').slice(0, 10);
+  if (!isCreditPurchase) return '';
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dueDate)) throw new Error('La fecha de vencimiento es obligatoria para compras a credito.');
+  const parsed = new Date(`${dueDate}T00:00:00.000Z`);
+  if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== dueDate) throw new Error('La fecha de vencimiento no es valida.');
+  return dueDate;
+}
+
 function findPurchaseRecord(state, purchaseId) {
   return (state.purchases || []).find(item => String(item.id) === String(purchaseId))
     || (state.entries || []).find(item => String(item.id) === String(purchaseId)
@@ -14,13 +47,29 @@ function findPurchaseRecord(state, purchaseId) {
 }
 
 export function createPurchase(state, values) {
+  const suppliers = Array.isArray(state.suppliers) ? state.suppliers : [];
+  const stores = Array.isArray(state.stores) ? state.stores : [];
+  const products = Array.isArray(state.products) ? state.products : [];
   if (!values.supplierId || !values.storeId) throw new Error('Proveedor y local destino son obligatorios.');
-  if (!values.items?.length) throw new Error('La compra debe tener productos.');
-  if (!state.suppliers.some(supplier => supplier.id === values.supplierId)) throw new Error('El proveedor de la compra no existe.');
-  if (!state.stores.some(store => store.id === values.storeId)) throw new Error('El local destino de la compra no existe.');
-  if (values.items.some(item => !state.products.some(product => product.id === item.productId))) throw new Error('La compra contiene un producto inexistente.');
-  const purchase = { id:generateId('COM', state.purchases), supplierId:values.supplierId, storeId:values.storeId, supplierInvoice:String(values.supplierInvoice || ''), paymentMethod:String(values.paymentMethod || 'Credito'), notes:String(values.notes || ''), createdAt:new Date().toISOString(), receivedAt:null, createdBy:values.createdBy || 'USR-00001', status:'BORRADOR', items:values.items.map(item=>({ productId:item.productId, quantity:Number(item.quantity), unitCost:Number(item.unitCost), iva:Number(item.iva || 0), discount:Number(item.discount || 0) })) };
-  if (purchase.items.some(item=>!item.productId || !Number.isInteger(item.quantity) || item.quantity <= 0 || !Number.isFinite(item.unitCost) || item.unitCost < 0)) throw new Error('Productos, cantidades y costos deben ser validos.');
+  if (!Array.isArray(values.items) || !values.items.length) throw new Error('La compra debe tener productos.');
+  if (!suppliers.some(supplier => String(supplier.id) === String(values.supplierId))) throw new Error('El proveedor de la compra no existe.');
+  if (!stores.some(store => String(store.id) === String(values.storeId))) throw new Error('El local destino de la compra no existe.');
+  if (values.items.some(item => !products.some(product => String(product.id) === String(item.productId)))) throw new Error('La compra contiene un producto inexistente.');
+  const paymentMethod = String(values.paymentMethod || 'Credito');
+  const dueDate = validatePurchaseDueDate(paymentMethod, values.dueDate);
+  const items = values.items.map(item => ({
+    productId: String(item.productId || ''),
+    quantity: Number(item.quantity),
+    unitCost: Number(item.unitCost),
+    iva: Number(item.iva ?? 0),
+    discount: Number(item.discount ?? 0),
+  }));
+  if (items.some(item => !item.productId || !Number.isInteger(item.quantity) || item.quantity <= 0 || !Number.isFinite(item.unitCost) || item.unitCost < 0 || !Number.isFinite(item.iva) || item.iva < 0 || !Number.isFinite(item.discount) || item.discount < 0 || item.discount > item.quantity * item.unitCost)) {
+    throw new Error('Productos, cantidades, costos, IVA y descuentos deben ser validos.');
+  }
+  const purchases = Array.isArray(state.purchases) ? state.purchases : [];
+  const purchase = { id:String(values.id || generateId('COM', purchases)), supplierId:String(values.supplierId), supplierName:suppliers.find(supplier => String(supplier.id) === String(values.supplierId))?.name || '', storeId:String(values.storeId), supplierInvoice:String(values.supplierInvoice || ''), paymentMethod, dueDate, notes:String(values.notes || ''), createdAt:new Date().toISOString(), receivedAt:null, createdBy:values.createdBy || 'USR-00001', status:'BORRADOR', items };
+  if (!Array.isArray(state.purchases)) state.purchases = purchases;
   state.purchases.push(purchase);
   notifyCreation(state, 'purchases', purchase);
   return purchase;
@@ -31,7 +80,8 @@ export function purchaseTotal(state, purchase) { const totals=purchaseTotals(sta
 
 export function generateTalonariosFromPurchase(state, purchase) {
   if (!purchase || purchase.purchaseType !== 'TALONARIOS') throw new Error('La compra no corresponde a talonarios.');
-  if (purchase.status !== 'ORDENADA') throw new Error('Solo una compra ordenada puede recibirse.');
+  if (!['BORRADOR', 'ORDENADA'].includes(purchase.status)) throw new Error('La compra de talonarios ya fue recibida o no se puede recibir.');
+  if (!Array.isArray(state.talonarios)) state.talonarios = [];
   const type = String(purchase.talonarioType || '').toUpperCase();
   const count = Number(purchase.talonarioCount);
   const startNumber = Number(purchase.talonarioStart);
@@ -76,19 +126,23 @@ export function receiveTalonarioPurchase(state, purchaseId) {
   const purchase = findPurchaseRecord(state, purchaseId);
   if (!purchase) throw new Error('Compra no encontrada.');
   if (purchase.purchaseType !== 'TALONARIOS') throw new Error('La compra no corresponde a talonarios.');
-  if (purchase.status !== 'ORDENADA') throw new Error('Solo una compra ordenada puede recibirse.');
+  if (!['BORRADOR', 'ORDENADA'].includes(purchase.status)) throw new Error('La compra de talonarios ya fue recibida o no se puede recibir.');
+  if (!Array.isArray(state.accountsPayable)) state.accountsPayable = [];
+  if (!Array.isArray(state.auditLog)) state.auditLog = [];
   const records = generateTalonariosFromPurchase(state, purchase);
-  createAccountPayable(state, purchase, { totalAmount: purchaseTotal(state, purchase), paymentTerms: purchase.paymentMethod });
+  createAccountPayable(state, purchase, { totalAmount: purchaseTotal(state, purchase), paymentTerms: purchase.paymentMethod, dueDate: purchase.dueDate });
   return { purchase, records };
 }
 
 export function receivePurchase(state, purchaseId) {
   const purchase=findPurchaseRecord(state,purchaseId);
   if (!purchase) throw new Error('Compra no encontrada.');
-  if (purchase.status !== 'ORDENADA') throw new Error('Solo una compra ordenada puede recibirse.');
+  if (!['BORRADOR', 'ORDENADA'].includes(purchase.status)) throw new Error('La compra ya fue recibida o no se puede recibir.');
+  if (!Array.isArray(state.accountsPayable)) state.accountsPayable = [];
+  if (!Array.isArray(state.auditLog)) state.auditLog = [];
   if (!state.stores.some(store => store.id === purchase.storeId)) throw new Error('El local destino de la compra no existe.');
   if (purchase.items.some(item => !state.products.some(product => product.id === item.productId))) throw new Error('La compra contiene un producto inexistente.');
-  runTransaction(state,()=>{ purchase.items.forEach(item=>{ increaseStock(state,item.productId,purchase.storeId,item.quantity,purchase.id,'COMPRA_ENTRADA','Recepcion de compra'); const product=state.products.find(candidate=>candidate.id===item.productId); if(product) product.cost=item.unitCost; }); purchase.status='RECIBIDA'; purchase.receivedAt=new Date().toISOString(); createAccountPayable(state,purchase,{totalAmount:purchaseTotal(state,purchase),paymentTerms:purchase.paymentMethod}); });
+  runTransaction(state,()=>{ purchase.items.forEach(item=>{ increaseStock(state,item.productId,purchase.storeId,item.quantity,purchase.id,'COMPRA_ENTRADA','Recepcion de compra'); const product=state.products.find(candidate=>candidate.id===item.productId); if(product) product.cost=item.unitCost; }); purchase.status='RECIBIDA'; purchase.receivedAt=new Date().toISOString(); createAccountPayable(state,purchase,{totalAmount:purchaseTotal(state,purchase),paymentTerms:purchase.paymentMethod,dueDate:purchase.dueDate}); });
   return purchase;
 }
 
