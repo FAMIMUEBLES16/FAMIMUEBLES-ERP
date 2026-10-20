@@ -61,11 +61,26 @@
             window.location.reload();
           }, { once: true });
 
-          const registration = await navigator.serviceWorker.register('./service-worker.js?v=20261020-current-sistecredito-screen-v1', {
+          const registration = await navigator.serviceWorker.register('./service-worker.js?v=20261020-current-sistecredito-screen-v2', {
             scope: './',
             updateViaCache: 'none'
           });
 
+          const activateInstalledWorker = worker => {
+            if (!worker) return;
+            const activate = () => {
+              if (worker.state === 'installed' && navigator.serviceWorker.controller) {
+                worker.postMessage({ type: 'SKIP_WAITING' });
+              }
+            };
+            worker.addEventListener('statechange', activate);
+            activate();
+          };
+
+          registration.addEventListener('updatefound', () => {
+            activateInstalledWorker(registration.installing);
+          });
+          activateInstalledWorker(registration.installing);
           await registration.update();
           if (registration.waiting) {
             registration.waiting.postMessage({ type: 'SKIP_WAITING' });
