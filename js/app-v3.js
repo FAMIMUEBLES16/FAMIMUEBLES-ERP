@@ -12,7 +12,7 @@ import { showToast } from './components/toast.js';
 import { table } from './components/tables.js';
 import { renderNotifications } from './components/notifications.js';
 import { renderDashboard } from './modules/dashboard-v3.js?v=20261019-sistecredito-card-v1';
-import { canonicalSellerName, renderVentas, salesTable, salesSummary, normalizeSales, salesMonthKey, saleTimestamp, filterSales, salesSellers, findMatchingSaleCustomer } from './modules/ventas.js?v=20261019-sales-user-filter-v1';
+import { canonicalSellerName, renderVentas, salesTable, salesSummary, normalizeSales, salesWithAnnulledTalonarios, salesMonthKey, saleTimestamp, filterSales, salesSellers, findMatchingSaleCustomer } from './modules/ventas.js?v=20261021-talonario-annulments-v1';
 import { renderFacturacion, cartTotal, productResults, customerResults } from './modules/facturacion.js?v=20261019-sistecredito-server-guard-v1';
 import { renderProductos, productTable, productMatches } from './modules/productos.js?v=22';
 import { renderInventario, inventoryContent } from './modules/inventario.js?v=20';
@@ -28,8 +28,8 @@ import { renderGastos } from './modules/gastos.js?v=19';
 import { renderGasolina } from './modules/gasolina.js?v=20261011-fuel-user-delete-v1';
 import { mergeUserSources, renderUsuarios } from './modules/usuarios.js?v=24';
 import { renderDescansos } from './modules/descansos.js?v=20261015-dom-guard-v1';
-import { renderAuditoria, resetAuditFilters, setAuditFilters } from './modules/auditoria.js?v=27';
-import { renderTalonarios, talonarioModal, setTalonarioFilters, currentTalonarioNumber, normalizeActiveTalonarios, availableCentralTalonarios, nextAvailableCentralTalonario, configuredTalonarioOwnerLabel, configuredTalonarioOwnerMatches, talonarioSalesDocuments } from './modules/talonarios.js?v=24';
+import { renderAuditoria, resetAuditFilters, setAuditFilters } from './modules/auditoria.js?v=28';
+import { renderTalonarios, talonarioModal, setTalonarioFilters, currentTalonarioNumber, normalizeActiveTalonarios, availableCentralTalonarios, nextAvailableCentralTalonario, configuredTalonarioOwnerLabel, configuredTalonarioOwnerMatches, talonarioSalesDocuments } from './modules/talonarios.js?v=25';
 import { historicalTalonarios, historicalRecibos, storedTalonarios } from './modules/talonarios-historial.js?v=1';
 import { renderApartados } from './modules/apartados.js?v=20261015-finance-identifiers-v1';
 import { createApartado, decreaseSaleInventory, runTransaction, addMovement } from './modules/finanzas.js?v=18';
@@ -1348,12 +1348,13 @@ function filterPayables(){const query=$('[data-filter="payables"]')?.value||'',s
 function escapeSalesOption(value){return String(value??'').replace(/[&<>"']/g,character=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[character]));}
 function applySalesFilters(){
 	const allSales=normalizeSales(store.collection.sales||store.collection.ventas||[]);
+	const displaySales=salesWithAnnulledTalonarios(store.collection,allSales);
 	const users=store.collection.users||[];
 	const sellerValues=salesSellers(allSales,users);
 	const sellerSelect=$('[data-sales-seller]');
 	if(sellerSelect)sellerSelect.innerHTML='<option value="all">Todos los usuarios</option>'+sellerValues.map(seller=>`<option value="${escapeSalesOption(seller.value)}">${escapeSalesOption(seller.name)}</option>`).join('');
 	if(sellerSelect){sellerSelect.value=salesViewState.seller;if(sellerSelect.value!==salesViewState.seller)salesViewState.seller='all';}
-	const sales=filterSales(allSales,{...salesViewState,stores:store.collection.stores,users}).sort((left,right)=>{
+	const sales=filterSales(displaySales,{...salesViewState,stores:store.collection.stores,users}).sort((left,right)=>{
 		const leftTime=saleTimestamp(left.date);
 		const rightTime=saleTimestamp(right.date);
 		return rightTime-leftTime;

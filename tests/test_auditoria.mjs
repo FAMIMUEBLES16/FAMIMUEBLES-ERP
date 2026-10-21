@@ -32,6 +32,16 @@ assert.doesNotMatch(html, /<script>alert\(1\)<\/script>/);
 assert.match(html, /Filtros de ediciones de movimientos desde Telegram/);
 assert.match(html, /Corrección autorizada/);
 
+const annulledAuditHtml = renderAuditoria({
+  products: [],
+  stores: [{ id: 'INV CRR 5 5 56', name: 'INV CRR 5 5 56' }],
+  users: [],
+  talonarios: [{ id: 'CRR5556-16001', type: 'REMISION', startNumber: 16001, endNumber: 16050, storeId: 'INV CRR 5 5 56', destinationName: 'INV CRR 5 5 56' }],
+  talonarioJustifications: [{ id: 'JUST-16009', talonarioId: 'CRR5556-16001', number: 16009, reason: 'ANULADA', notes: 'Factura anulada', status: 'JUSTIFICADA', createdAt: '2026-10-20' }],
+});
+assert.match(annulledAuditHtml, /Factura de talonario ANULADA/);
+assert.match(annulledAuditHtml, /16009/);
+
 const state = {
   products: [],
   stores: [{ id: 'LOC-1', name: 'Local Norte' }],

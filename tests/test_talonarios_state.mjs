@@ -49,6 +49,49 @@ assert.deepEqual(
   'invoice 15820 recorded at another local should count as used without changing the current local invoice'
 );
 assert.equal(currentTalonarioNumber(cr26Talonario, cr26Sales), 15821);
+const crr5556Talonario = {
+  id: 'CRR5556-16001',
+  type: 'REMISION',
+  startNumber: 16001,
+  endNumber: 16050,
+  currentNumber: 16011,
+  consecutiveBaseline: 16008,
+  storeId: 'INV CRR 5 5 56',
+  destinationName: 'INV CRR 5 5 56',
+  status: 'EN_USO',
+};
+const crr5556Sales = [
+  ...Array.from({ length: 8 }, (_, index) => ({
+    invoiceNumber: String(16001 + index),
+    documentType: 'REMISION',
+    storeId: 'INV CRR 5 5 56',
+  })),
+  { invoiceNumber: '16010', documentType: 'REMISION', storeId: 'INV CRR 5 5 56' },
+  { invoiceNumber: '16011', documentType: 'REMISION', storeId: 'INV CRR 5 5 56' },
+];
+assert.deepEqual(
+  missingTalonarioNumbers(crr5556Talonario, crr5556Sales),
+  [16009],
+  'a stale consecutive baseline must not hide an unregistered invoice before the current number'
+);
+const annulled16009 = {
+  id: 'JUST-16009',
+  talonarioId: crr5556Talonario.id,
+  number: 16009,
+  reason: 'ANULADA',
+  notes: 'Prueba de anulacion',
+  status: 'JUSTIFICADA',
+};
+assert.deepEqual(
+  missingTalonarioNumbers(crr5556Talonario, crr5556Sales, [annulled16009]),
+  [],
+  'an annulled invoice should no longer be treated as an unexplained gap'
+);
+assert.match(
+  renderTalonarios({ talonarios: [crr5556Talonario], sales: crr5556Sales, talonarioJustifications: [annulled16009] }),
+  /16\.?009\s*·\s*Anulada/,
+  'the talonario summary should keep the annulled invoice visible with its number and status after it is justified'
+);
 assert.deepEqual(
   missingTalonarioNumbersForLocal(
     { ...manablancaTalonario, startNumber: 15851, endNumber: 15900, storeId: 'INV CARTAGENITA II', destinationName: 'INV CARTAGENITA II' },

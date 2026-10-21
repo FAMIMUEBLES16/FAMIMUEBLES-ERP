@@ -1,4 +1,5 @@
 import { money, page, table, badge, recordSummary } from '../components/tables.js?v=20261010-record-summary-v1';
+import { justifiedTalonarioDocuments } from './talonarios.js?v=25';
 
 function parseRemoteRow(item = {}) {
   const raw = item?.data_json;
@@ -200,19 +201,40 @@ export function normalizeSales(items = []) {
   });
 }
 
-export function salesTable(data, sales = normalizeSales(data.sales || data.ventas || [])) {
+export function salesWithAnnulledTalonarios(data, sales = normalizeSales(data.sales || data.ventas || [])) {
+  const annulled = justifiedTalonarioDocuments(data.talonarios || [], data.talonarioJustifications || [])
+    .filter(document => document.reason.toUpperCase() === 'ANULADA')
+    .map(document => ({
+      id: `TAL-${document.number}`,
+      invoiceNumber: document.number,
+      storeId: document.storeId,
+      customer: '—',
+      seller: 'Sin vendedor',
+      date: document.date,
+      paymentMethod: '—',
+      total: 0,
+      status: 'ANULADA',
+      isTalonarioJustification: true,
+      justificationNotes: document.notes,
+    }));
+  return [...sales, ...annulled];
+}
+
+export function salesTable(data, sales = salesWithAnnulledTalonarios(data)) {
   const isAdmin = String(JSON.parse(localStorage.getItem('famimuebles-user') || '{}').role || '').toUpperCase() === 'ADMINISTRADOR';
   const orderedSales = [...sales].sort((left, right) => saleTimestamp(right.date) - saleTimestamp(left.date));
-  return table(['Factura','Factura física','Cliente','Fecha','Metodo de pago','Total','Estado','Acciones'], orderedSales.map(sale => `<tr><td><strong>${sale.id}</strong></td><td>${sale.invoiceNumber || '-'}</td><td>${sale.customer}</td><td>${sale.date}</td><td>${sale.paymentMethod}</td><td><strong>${money(sale.total)}</strong></td><td>${badge(sale.status)}</td><td><button class="table-action" data-action="sale-detail" data-sale-id="${sale.id}">Ver</button>${isAdmin ? `<button class="table-action" data-action="edit-sale" data-sale-id="${sale.id}">Editar</button><button class="table-action danger-text" data-action="delete-sale" data-sale-id="${sale.id}">Eliminar</button>` : ''}</td></tr>`));
+  return table(['Factura','Factura física','Cliente','Fecha','Metodo de pago','Total','Estado','Acciones'], orderedSales.map(sale => `<tr><td><strong>${sale.id}</strong></td><td>${sale.invoiceNumber || '-'}</td><td>${sale.customer}</td><td>${sale.date}</td><td>${sale.paymentMethod}</td><td><strong>${money(sale.total)}</strong></td><td>${badge(sale.status)}</td><td>${sale.isTalonarioJustification ? '<span class="muted">—</span>' : `<button class="table-action" data-action="sale-detail" data-sale-id="${sale.id}">Ver</button>${isAdmin ? `<button class="table-action" data-action="edit-sale" data-sale-id="${sale.id}">Editar</button><button class="table-action danger-text" data-action="delete-sale" data-sale-id="${sale.id}">Eliminar</button>` : ''}`}</td></tr>`));
 }
 
 export function salesSummary(sales) {
-  const total = sales.reduce((sum, sale) => sum + Number(sale.total || 0), 0);
-  return recordSummary(sales.length, 'Resumen de ventas', total);
+  const registeredSales = sales.filter(sale => !sale.isTalonarioJustification);
+  const total = registeredSales.reduce((sum, sale) => sum + Number(sale.total || 0), 0);
+  return recordSummary(registeredSales.length, 'Resumen de ventas', total);
 }
 
 export function renderVentas(data) {
   const sales = normalizeSales(data.sales || data.ventas || []);
+  const displayedSales = salesWithAnnulledTalonarios(data, sales);
   const storeOptions = (data.stores || []).map(store => `<option value="${store.id}">${store.name}</option>`).join('');
   const sellerOptions = salesSellers(sales, data.users || [])
     .map(seller => `<option value="${escapeOptionText(seller.value)}">${escapeOptionText(seller.name)}</option>`).join('');
@@ -222,6 +244,6 @@ export function renderVentas(data) {
      'OPERACION',
      'Ventas',
      '<button class="primary" data-action="new-sale">＋ Nueva venta</button>',
-    `<div class="toolbar"><label class="input-label">Buscar ventas<input class="field" data-filter="sales" placeholder="Buscar factura o cliente..."></label><label class="input-label">Local<select class="field" data-sales-store><option value="all">Todos los locales</option>${storeOptions}</select></label><label class="input-label">Mes de ventas<input class="field" type="month" data-sales-month value="${currentMonth}"></label><label class="input-label">Usuario<select class="field" data-sales-seller><option value="all">Todos los usuarios</option>${sellerOptions}</select></label></div><div data-sales-summary>${salesSummary(sales)}</div><div data-sales-table>${salesTable(data, sales)}</div>`
+    `<div class="toolbar"><label class="input-label">Buscar ventas<input class="field" data-filter="sales" placeholder="Buscar factura o cliente..."></label><label class="input-label">Local<select class="field" data-sales-store><option value="all">Todos los locales</option>${storeOptions}</select></label><label class="input-label">Mes de ventas<input class="field" type="month" data-sales-month value="${currentMonth}"></label><label class="input-label">Usuario<select class="field" data-sales-seller><option value="all">Todos los usuarios</option>${sellerOptions}</select></label></div><div data-sales-summary>${salesSummary(sales)}</div><div data-sales-table>${salesTable(data, displayedSales)}</div>`
   );
 }

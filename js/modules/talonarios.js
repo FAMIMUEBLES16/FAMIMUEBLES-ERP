@@ -301,6 +301,28 @@ export function talonarioSalesDocuments(talonario, sales = [], options = {}) {
     return Number.isInteger(number) && number >= start && number <= end && (!documentType || documentType === type) && sameLocal;
   }).map(sale => saleNumber(sale, talonario));
 }
+export function justifiedTalonarioDocuments(talonarios = [], justifications = []) {
+  const talonariosById = new Map((Array.isArray(talonarios) ? talonarios : []).map(item => [String(item.id), item]));
+  return (Array.isArray(justifications) ? justifications : []).flatMap(justification => {
+    if (String(justification.status || 'JUSTIFICADA').toUpperCase() !== 'JUSTIFICADA') return [];
+    const talonarioId = String(justification.talonarioId || '');
+    const talonario = talonariosById.get(talonarioId);
+    const number = Number(justification.number);
+    if (!talonario || !Number.isInteger(number) || number < Number(talonario.startNumber) || number > Number(talonario.endNumber)) return [];
+    return [{
+      id: String(justification.id || `${talonarioId}-${number}`),
+      talonarioId,
+      number,
+      type: String(talonario.type || 'REMISION').toUpperCase(),
+      storeId: String(talonario.destinationName || talonario.storeId || ''),
+      startNumber: Number(talonario.startNumber),
+      endNumber: Number(talonario.endNumber),
+      reason: String(justification.reason || ''),
+      notes: String(justification.notes || ''),
+      date: String(justification.createdAt || justification.date || ''),
+    }];
+  });
+}
 export function deduplicateTalonarioHistory(items = []) {
   const statusPriority = { EN_USO: 3, ENVIADO: 2, TERMINADO: 1 };
   const unique = new Map();
@@ -340,13 +362,13 @@ export function missingTalonarioNumbers(talonario, sales = [], justifications = 
   const end = Number(talonario.endNumber);
   const documents = talonarioSalesDocuments(talonario, sales);
   const registeredDocuments = talonarioSalesDocuments(talonario, sales, { includeOtherStores: true });
-  const baseline = Number(talonario.consecutiveBaseline ?? currentTalonarioNumber(talonario, sales));
+  const baseline = Number.isFinite(Number(talonario.consecutiveBaseline)) ? Number(talonario.consecutiveBaseline) : start - 1;
   const latest = Math.max(currentTalonarioNumber(talonario, sales), ...documents, start);
   if (latest <= baseline) return [];
   const used = new Set(registeredDocuments);
   const justified = new Set(justifications.filter(item => String(item.talonarioId)===String(talonario.id) && String(item.status || 'JUSTIFICADA').toUpperCase()==='JUSTIFICADA').map(item => Number(item.number)));
   const missing=[];
-  for(let number=Math.max(start, baseline + 1);number<=latest;number+=1)if(!used.has(number)&&!justified.has(number))missing.push(number);
+  for(let number=Math.max(start, baseline + 1);number<=Math.min(latest, end);number+=1)if(!used.has(number)&&!justified.has(number))missing.push(number);
   return missing;
 }
 export function missingTalonarioNumbersForLocal(talonario, talonarios = [], sales = [], justifications = []) {
@@ -404,13 +426,13 @@ export function renderTalonarios(state) {
   const central = filteredItems.filter(item => isCentralStore(item) && String(item.status || 'ALMACENADO') === 'ALMACENADO');
   const activeItems = items.filter(item => String(item.type || '').toUpperCase() === 'REMISION' && String(item.status || '').toUpperCase() === 'EN_USO' && isCurrentActiveRange(item, items));
   const sales = state?.sales || state?.ventas || [];
+  const justifications = state?.talonarioJustifications || [];
   const summaryMap = new Map();
   activeItems.forEach(item => {
     const key = localGroupKey(item);
     const previous = summaryMap.get(key);
     if (!previous || isCurrentActiveRange(item, items) && !isCurrentActiveRange(previous, items)) summaryMap.set(key, item);
   });
-  const justifications = state?.talonarioJustifications || [];
   const summaryRows = [...summaryMap.values()].sort((left, right) => localLabel(left).localeCompare(localLabel(right), 'es') || String(left.type).localeCompare(String(right.type))).map(item => {
     const activeRanges = activeTalonariosFor(item, items);
     const activeRange = activeRanges[0] || item;
@@ -418,7 +440,15 @@ export function renderTalonarios(state) {
     const remaining = Math.max(0, Number(activeRange.endNumber) - current);
     const missing = missingTalonarioNumbersForLocal(item, items, sales, justifications);
     const missingHtml = missing.length ? `<div class="talonario-missing-list">${missing.map(number => `<button type="button" class="table-action danger-text" data-action="justify-talonario-number" data-talonario-id="${item.id}" data-talonario-number="${number}">${numberLabel(number)}</button>`).join(' ')}</div>` : '<span class="muted">Ninguna</span>';
-    return `<tr class="${missing.length ? 'talonario-row-missing' : ''}"><td><strong>${localLabel(item)}</strong></td><td>${labelType(item.type)}</td><td>${range(activeRange)}</td><td>${current}</td><td><strong>${remaining}</strong></td><td>${missingHtml}</td></tr>`;
+    const annulled = justifiedTalonarioDocuments(items, justifications).filter(document =>
+      document.reason.toUpperCase() === 'ANULADA'
+      && document.type === String(item.type || 'REMISION').toUpperCase()
+      && localIdentity(document.storeId, document.type) === localIdentity(localLabel(item), document.type)
+    );
+    const annulledHtml = annulled.length
+      ? `<div class="talonario-missing-list">${[...new Set(annulled.map(document => document.number))].sort((left, right) => left - right).map(number => `<span class="badge terminado">${numberLabel(number)} · Anulada</span>`).join(' ')}</div>`
+      : '<span class="muted">Ninguna</span>';
+    return `<tr class="${missing.length ? 'talonario-row-missing' : ''}"><td><strong>${localLabel(item)}</strong></td><td>${labelType(item.type)}</td><td>${range(activeRange)}</td><td>${current}</td><td><strong>${remaining}</strong></td><td>${missingHtml}</td><td>${annulledHtml}</td></tr>`;
   });
   const byStore = new Map();
   filteredItems.filter(item => !isCentralStore(item)).forEach(item => {
@@ -429,7 +459,7 @@ export function renderTalonarios(state) {
   const centralRows = central.map(item => `<tr><td>${labelType(item.type)}</td><td><strong>${range(item)}</strong></td><td>${item.supplierName || 'MISELANEA PAPELERIA'}</td><td>${badge(item.status || 'ALMACENADO')}</td><td><button class="table-action" data-action="send-talonario" data-talonario-id="${item.id}">Enviar</button></td></tr>`);
   const localRows = deduplicateTalonarioHistory(filteredItems.filter(item => !isCentralStore(item) && String(item.status || '').toUpperCase() !== 'ALMACENADO')).sort((left, right) => Number(right.startNumber || 0) - Number(left.startNumber || 0)).map(item => { const storeId=String(item.destinationName || item.storeId || 'Sin local'); return `<tr><td>${dateLabel(item)}</td><td>${storeNames.get(storeId) || storeId}</td><td>${labelType(item.type)}</td><td><strong>${range(item)}</strong></td><td>${currentTalonarioNumber(item, sales)}</td><td>${badge(item.status || 'EN_USO')}</td></tr>`; });
   const storeOptions = [...new Set([CENTRAL, ...items.filter(item => String(item.storeId || '') !== CENTRAL).map(item => String(item.destinationName || item.storeId || '')).filter(Boolean)])].sort((left, right) => left.localeCompare(right, 'es')).map(store => `<option value="${store}" ${talonarioFilters.store === store ? 'selected' : ''}>${store}</option>`).join('');
-  return page('ADMINISTRACION', 'Talonarios', '<button class="primary" data-action="new-talonario">＋ Registrar talonario</button>', `<section class="panel talonarios-summary"><h3>Facturas disponibles por local</h3><p class="muted">Resumen del talonario actualmente en uso.</p>${table(['Local','Tipo','Talonario','Ultima factura','Le quedan','No registradas'], summaryRows.length ? summaryRows : '<tr><td colspan="6" class="muted">No hay talonarios en uso registrados.</td></tr>')}</section><div class="talonarios-filters"><input class="field" data-talonario-filter="query" value="${talonarioFilters.query}" placeholder="Buscar rango o local"><select class="field" data-talonario-filter="type"><option value="all">Todos los tipos</option><option value="REMISION" ${talonarioFilters.type === 'REMISION' ? 'selected' : ''}>Remisiones</option><option value="RECIBO" ${talonarioFilters.type === 'RECIBO' ? 'selected' : ''}>Recibos</option></select><select class="field" data-talonario-filter="store"><option value="all">Todos los locales</option>${storeOptions}</select><select class="field" data-talonario-filter="status"><option value="all">Todos los estados</option><option value="ALMACENADO" ${talonarioFilters.status === 'ALMACENADO' ? 'selected' : ''}>Almacenados</option><option value="EN_USO" ${talonarioFilters.status === 'EN_USO' ? 'selected' : ''}>En uso</option><option value="ENVIADO" ${talonarioFilters.status === 'ENVIADO' ? 'selected' : ''}>Enviados</option><option value="TERMINADO" ${talonarioFilters.status === 'TERMINADO' ? 'selected' : ''}>Terminados</option></select></div><div class="talonarios-layout">
+  return page('ADMINISTRACION', 'Talonarios', '<button class="primary" data-action="new-talonario">＋ Registrar talonario</button>', `<section class="panel talonarios-summary"><h3>Facturas disponibles por local</h3><p class="muted">Resumen del talonario actualmente en uso.</p>${table(['Local','Tipo','Talonario','Ultima factura','Le quedan','No registradas','Anuladas'], summaryRows.length ? summaryRows : '<tr><td colspan="7" class="muted">No hay talonarios en uso registrados.</td></tr>')}</section><div class="talonarios-filters"><input class="field" data-talonario-filter="query" value="${talonarioFilters.query}" placeholder="Buscar rango o local"><select class="field" data-talonario-filter="type"><option value="all">Todos los tipos</option><option value="REMISION" ${talonarioFilters.type === 'REMISION' ? 'selected' : ''}>Remisiones</option><option value="RECIBO" ${talonarioFilters.type === 'RECIBO' ? 'selected' : ''}>Recibos</option></select><select class="field" data-talonario-filter="store"><option value="all">Todos los locales</option>${storeOptions}</select><select class="field" data-talonario-filter="status"><option value="all">Todos los estados</option><option value="ALMACENADO" ${talonarioFilters.status === 'ALMACENADO' ? 'selected' : ''}>Almacenados</option><option value="EN_USO" ${talonarioFilters.status === 'EN_USO' ? 'selected' : ''}>En uso</option><option value="ENVIADO" ${talonarioFilters.status === 'ENVIADO' ? 'selected' : ''}>Enviados</option><option value="TERMINADO" ${talonarioFilters.status === 'TERMINADO' ? 'selected' : ''}>Terminados</option></select></div><div class="talonarios-layout">
     <section class="panel"><h3>Historial por local</h3><p class="muted">Los consecutivos mas recientes aparecen primero.</p><div class="talonarios-history-scroll">${table(['Fecha','Local','Tipo','Rango','Usando','Estado'], localRows.length ? localRows : '<tr><td colspan="6" class="muted">Aun no hay envios registrados.</td></tr>')}</div></section>
     <section class="panel"><h3>Almacen central · ${CENTRAL}</h3><p class="muted">Talonarios disponibles para enviar a los locales.</p>${table(['Tipo','Consecutivo','Proveedor','Estado','Acciones'], centralRows.length ? centralRows : '<tr><td colspan="5" class="muted">No hay talonarios almacenados.</td></tr>')}</section>
   </div>`);

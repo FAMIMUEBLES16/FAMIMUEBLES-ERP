@@ -1,5 +1,6 @@
 import { formatCurrency } from '../utils/currency.js';
 import { page, table } from '../components/tables.js';
+import { justifiedTalonarioDocuments } from './talonarios.js?v=25';
 
 const filterDefaults = {
 	movements: { query: '', type: '', store: '', from: '', to: '' },
@@ -163,7 +164,19 @@ export function renderAuditoria(state) {
 		return `<tr><td>${escapeHtml(itemDate(item) || '-')}</td><td>${escapeHtml(`${label} ${reference || '-'}`)}</td><td>${escapeHtml(item.numero_recibo || item.receiptNumber)}</td><td>${formatCurrency(item.valor_abono ?? item.amount ?? 0)}</td><td>${escapeHtml(item.metodo_pago || item.method)}</td><td>${formatCurrency(item.saldo_anterior ?? item.previousBalance ?? 0)}</td><td>${formatCurrency(item.saldo_nuevo ?? item.newBalance ?? 0)}</td><td>${escapeHtml(item.usuario || item.user || item.vendedor)}</td><td>${escapeHtml(itemStore(stores, item.local || item.storeId))}</td></tr>`;
 	});
 
-	const auditLog = state.auditLog || [];
+	const auditLog = [
+		...(state.auditLog || []),
+		...justifiedTalonarioDocuments(state.talonarios || [], state.talonarioJustifications || [])
+			.filter(document => document.reason.toUpperCase() === 'ANULADA')
+			.map(document => ({
+				id: `TAL-${document.id}`,
+				createdAt: document.date,
+				action: 'Factura de talonario ANULADA',
+				saleId: document.number,
+				storeId: document.storeId,
+				detail: `Talonario ${document.startNumber} - ${document.endNumber} · ${document.notes}`,
+			})),
+	];
 	const auditFiltersForLog = auditFilters.actions;
 	const auditAction = item => String(valueOf(item, 'accion', 'action') || '').trim();
 	const auditUser = item => {

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { filterSales, findMatchingSaleCustomer, salesSellers } from '../js/modules/ventas.js';
+import { filterSales, findMatchingSaleCustomer, salesSellers, salesSummary, salesTable, salesWithAnnulledTalonarios } from '../js/modules/ventas.js';
 
 const sales = [
   { id: 'SEP-1', date: '2026-09-15', storeId: 'Local Norte', paymentMethod: 'Efectivo', seller: 'USR-1', status: 'Completada' },
@@ -74,6 +74,24 @@ assert.equal(
   'Samara Alzate',
   'a canonical customer ID should match the existing customer'
 );
+
+const annulledData = {
+  sales: [{ id: 'SALE-16010', invoiceNumber: '16010', storeId: 'INV CRR 5 5 56', date: '2026-10-20', total: 25000 }],
+  talonarios: [{ id: 'CRR5556-16001', type: 'REMISION', startNumber: 16001, endNumber: 16050, storeId: 'INV CRR 5 5 56', destinationName: 'INV CRR 5 5 56' }],
+  talonarioJustifications: [{ id: 'JUST-16009', talonarioId: 'CRR5556-16001', number: 16009, reason: 'ANULADA', notes: 'Factura anulada', status: 'JUSTIFICADA', createdAt: '2026-10-20' }],
+};
+const salesWithAnnulled = salesWithAnnulledTalonarios(annulledData);
+assert.equal(salesWithAnnulled.find(sale => sale.isTalonarioJustification)?.invoiceNumber, 16009);
+assert.deepEqual(
+  filterSales(salesWithAnnulled, { query: '16009' }).map(sale => sale.invoiceNumber),
+  [16009],
+  'an annulled talonario number should be searchable in sales'
+);
+globalThis.localStorage = { getItem: () => null };
+assert.match(salesTable(annulledData, salesWithAnnulled), /16009/);
+assert.match(salesTable(annulledData, salesWithAnnulled), /ANULADA/);
+assert.match(salesSummary(salesWithAnnulled), /1/);
+assert.doesNotMatch(salesTable(annulledData, salesWithAnnulled), /data-sale-id="TAL-16009"/);
 
 assert.equal(
   findMatchingSaleCustomer({ customerId: 'Cliente histórico', customer: 'Cliente histórico' }, customers),
