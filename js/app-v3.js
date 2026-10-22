@@ -11,7 +11,7 @@ import { navItems, navGroups } from './components/sidebar.js?v=23';
 import { showToast } from './components/toast.js';
 import { table } from './components/tables.js';
 import { renderNotifications } from './components/notifications.js';
-import { renderDashboard } from './modules/dashboard-v3.js?v=20261019-sistecredito-card-v1';
+import { renderDashboard } from './modules/dashboard-v3.js?v=20261022-sistecredito-refresh-v1';
 import { canonicalSellerName, renderVentas, salesTable, salesSummary, normalizeSales, salesWithAnnulledTalonarios, salesMonthKey, saleTimestamp, filterSales, salesSellers, findMatchingSaleCustomer } from './modules/ventas.js?v=20261021-talonario-annulments-v1';
 import { renderFacturacion, cartTotal, productResults, customerResults } from './modules/facturacion.js?v=20261019-sistecredito-server-guard-v1';
 import { renderProductos, productTable, productMatches } from './modules/productos.js?v=22';
