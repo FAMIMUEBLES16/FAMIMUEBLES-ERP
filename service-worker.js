@@ -1,4 +1,4 @@
-const CACHE = 'famimuebles-erp-v20261020-purchase-entry-sequence-v1';
+const CACHE = 'famimuebles-erp-v20261022-sistecredito-refresh-v1';
 const CORE = ['./', './index.html?v=public-summary-20260926', './css/main.css?v=20261007101229-long-finance-lists-v1', './css/attendance.css?v=3', './css/parity-report-fixes.css?v=20261019-sistecredito-ledger-v1', './js/app-v3.js?v=20261019-preserve-supplier-history-v1', './js/modules/usuarios.js?v=24', './js/modules/descansos.js?v=20261015-dom-guard-v1', './js/modules/ventas.js?v=25', './js/modules/compras.js?v=20261019-preserve-supplier-history-v1', './js/modules/paridad.js?v=4', './js/modules/talonarios.js?v=22', './js/modules/gasolina.js?v=22', './js/modules/operaciones.js?v=3', './js/components/tables.js?v=1', './js/modules/dashboard-v3.js?v=27', './js/modules/facturacion.js?v=23', './js/services/product-service.js?v=18', './js/data/storage.js?v=18', './js/data/store.js?v=18', './js/router.js?v=18', './js/modules/proveedores.js?v=20261019-preserve-supplier-history-v1', './js/services/purchase-service.js?v=18', './js/services/accounts-payable-service.js?v=20261019-preserve-supplier-history-v1', './js/modules/cuentas-por-pagar.js?v=20261019-preserve-supplier-history-v1', './js/modules/accounts-payable-detail.js?v=20261019-preserve-supplier-history-v1', './js/data/demo-data.js?v=18', './js/modules/cartera.js?v=25', './js/modules/creditos.js?v=20261015-finance-identifiers-v1', './js/modules/apartados.js?v=20261015-finance-identifiers-v1', './js/utils/ids.js', './js/services/api-client.js?v=20261007101229', './js/config.js?v=20261015-runtime-config-v1', './manifest.json', './offline.html', './Logo Famimuebles.png', './assets/icons/icon-192.png', './assets/icons/apple-touch-icon.png'];
 CORE.push('./js/app-v3.js?v=95', './js/components/sidebar.js?v=24', './js/services/accounts-payable-service.js?v=17', './js/modules/talonarios.js?v=15', './js/router.js?v=20', './js/modules/ventas.js?v=26');
 CORE.push('./js/app-v3.js?v=96', './js/modules/talonarios.js?v=16', './js/modules/talonarios.js?v=17');
@@ -26,7 +26,6 @@ CORE.push('./css/attendance.css?v=3', './js/app-v3.js?v=20261015-finance-identif
 CORE.unshift('./js/app-v3.js?v=20261020-sistecredito-hydrate-before-render-v1', './js/modules/dashboard-v3.js?v=20261019-sistecredito-card-v1', './js/modules/paridad.js?v=20261019-credinet-reconciliation-v1', './js/modules/facturacion.js?v=20261019-sistecredito-server-guard-v1', './js/modules/sistecredito-ledger.js?v=20261019-credinet-reconciliation-v1');
 CORE.push('./css/parity-report-fixes.css?v=20261019-sistecredito-ledger-v1', './js/modules/dashboard-v3.js?v=20261019-sistecredito-card-v1');
 CORE.unshift('./js/app-v3.js?v=20261020-purchase-entry-sequence-v1', './js/services/purchase-service.js?v=20261020-purchase-entry-sequence-v2', './js/modules/compras.js?v=20261020-purchase-entry-sequence-v1');
-const UNIQUE_CORE = [...new Map(CORE.map(path => [new URL(path, self.location.href).pathname, path])).values()];
 CORE.push('./js/app-v3.js?v=20261005195117','./js/modules/dashboard-v3.js?v=20261005195117');
 CORE.push('./js/app-v3.js?v=20261006101055','./js/modules/dashboard-v3.js?v=20261006101055');
 CORE.push('./js/app-v3.js?v=20261006180509','./js/modules/dashboard-v3.js?v=20261006180509');
@@ -35,6 +34,8 @@ CORE.push('./js/app-v3.js?v=20261006185326','./js/modules/dashboard-v3.js?v=2026
 CORE.push('./js/app-v3.js?v=20261006191847','./js/modules/dashboard-v3.js?v=20261006191847');
 CORE.push('./js/app-v3.js?v=20261007101229','./js/modules/dashboard-v3.js?v=20261007101229');
 CORE.push('./js/app-v3.js?v=20261019-preserve-supplier-history-v1','./js/modules/talonarios.js?v=24','./js/data/storage.js?v=29');
+CORE.push('./js/app-v3.js?v=20261022-sistecredito-refresh-v1', './js/modules/dashboard-v3.js?v=20261022-sistecredito-refresh-v1', './js/modules/sistecredito-ledger.js?v=20261022-sistecredito-refresh-v1');
+const UNIQUE_CORE = [...new Map(CORE.map(path => [new URL(path, self.location.href).pathname, path])).values()];
 self.addEventListener('install', event => {
   event.waitUntil(
     caches.open(CACHE)
@@ -55,6 +56,25 @@ self.addEventListener('fetch', event => {
   if (event.request.method !== 'GET') return;
   const url = new URL(event.request.url);
   if (url.origin === self.location.origin && url.pathname.startsWith('/api/')) return;
+  if (url.origin === self.location.origin && url.pathname.endsWith('/tunnel-url.json')) {
+    const cacheKey = new Request(new URL('./tunnel-url.json', self.location.href).href);
+    event.respondWith(
+      fetch(new Request(event.request, { cache: 'no-store' }))
+        .then(async response => {
+          if (response.ok) {
+            caches.open(CACHE).then(cache => cache.put(cacheKey, response.clone())).catch(() => {});
+            return response;
+          }
+          return (await caches.match(cacheKey)) || response;
+        })
+        .catch(async error => {
+          const cached = await caches.match(cacheKey);
+          if (cached) return cached;
+          throw error;
+        })
+    );
+    return;
+  }
   if (url.origin === self.location.origin && (url.pathname.endsWith('/index.html') || url.pathname.endsWith('/') || url.pathname.includes('/js/') || url.pathname.includes('/css/'))) {
     const isVersionedAsset = url.pathname.includes('/js/') || url.pathname.includes('/css/');
     if (url.pathname.endsWith('/js/config.js')) {
