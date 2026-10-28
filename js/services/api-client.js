@@ -8,6 +8,15 @@ function canRetryRequest(path, method) {
     (method === 'POST' && /\/auth\/login\/?$/.test(String(path).split('?')[0]));
 }
 
+function getRequestTimeout(path, requestedTimeout) {
+  const timeout = Number(requestedTimeout) || REQUEST_TIMEOUT_MS;
+  const endpoint = String(path).split('?')[0].replace(/\/+$/, '');
+  if (endpoint === '/api/health' || endpoint === '/api/catalog') {
+    return Math.max(timeout, 20000);
+  }
+  return timeout;
+}
+
 function buildUrl(path) {
   if (/^https?:\/\//i.test(path)) return path;
   if (!API_BASE_URL) throw new Error('Servidor FAMIMUEBLES no configurado para este sitio.');
@@ -47,7 +56,7 @@ async function parseResponse(response) {
 
 export async function apiRequest(path, options = {}) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), options.timeout || REQUEST_TIMEOUT_MS);
+  const timeout = setTimeout(() => controller.abort(), getRequestTimeout(path, options.timeout));
   const method = String(options.method || 'GET').toUpperCase();
   const headers = { Accept: 'application/json', 'ngrok-skip-browser-warning': 'true', ...authHeaders(), ...(options.headers || {}) };
   const tenantId = localStorage.getItem('famimuebles-tenant-id') || 'tenant-default';
