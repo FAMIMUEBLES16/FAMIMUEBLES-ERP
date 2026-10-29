@@ -7,10 +7,110 @@ from decimal import Decimal
 from unittest.mock import patch
 
 import server
-from server import _create_shared_credit_record, _create_shared_sale, _sistecredito_sale_amount_record, _shared_domain_items, canonical_request_hash, password_hash, password_matches, specialized_xlsx
+from server import _create_shared_credit_record, _create_shared_sale, _sistecredito_sale_amount_record, _shared_domain_items, canonical_request_hash, password_hash, password_matches, specialized_xlsx, sync_shared_entry_payable
 
 
 class BackendSafetyTests(unittest.TestCase):
+    def test_editing_shared_entry_as_credit_creates_payable(self):
+        class FakeResult:
+            def __init__(self, row=None, rows=None):
+                self.row = row
+                self.rows = rows or []
+
+            def fetchone(self):
+                return self.row
+
+            def fetchall(self):
+                return self.rows
+
+        class FakeDatabase:
+            def __init__(self):
+                self.inserted = []
+
+            def execute(self, query, params=()):
+                if "SELECT collection, id, data_json FROM domain_records" in query:
+                    return FakeResult(rows=[])
+                if "UPDATE domain_sequences" in query:
+                    return FakeResult(row={"last_value": 1})
+                if "INSERT INTO domain_records" in query:
+                    self.inserted.append(params)
+                return FakeResult()
+
+        database = FakeDatabase()
+        updates, linked = sync_shared_entry_payable(
+            database,
+            "tenant-default",
+            "1582",
+            "",
+            {
+                "paymentMethod": "Credito",
+                "dueDate": "2026-11-27",
+                "supplierId": "SUP-MEICO",
+                "supplierName": "MEICO SA",
+                "supplierInvoice": "BV1O3501353",
+            },
+            1250000,
+            "INV CRR 5 3 26",
+            "Contado",
+            "2026-10-28",
+        )
+
+        self.assertEqual(len(updates), 1)
+        self.assertEqual(linked, [])
+        self.assertEqual(updates[0]["id"], "CXP-00001")
+        self.assertEqual(updates[0]["purchaseId"], "1582")
+        self.assertEqual(updates[0]["supplierName"], "MEICO SA")
+        self.assertEqual(updates[0]["invoiceNumber"], "BV1O3501353")
+        self.assertEqual(updates[0]["totalAmount"], 1250000)
+        self.assertEqual(updates[0]["balance"], 1250000)
+        self.assertEqual(updates[0]["status"], "PENDIENTE")
+        self.assertEqual(updates[0]["dueDate"], "2026-11-27")
+        self.assertEqual(len(database.inserted), 1)
+
+    def test_editing_shared_entry_does_not_remove_payable_with_payments(self):
+        account = {
+            "id": "CXP-00001",
+            "purchaseId": "1582",
+            "invoiceNumber": "BV1O3501353",
+            "supplierName": "MEICO SA",
+            "paidAmount": 100,
+            "totalAmount": 1000,
+            "status": "PARCIAL",
+        }
+
+        class FakeResult:
+            def __init__(self, rows=None):
+                self.rows = rows or []
+
+            def fetchall(self):
+                return self.rows
+
+        class FakeDatabase:
+            def execute(self, query, params=()):
+                if "SELECT collection, id, data_json FROM domain_records" in query:
+                    return FakeResult(rows=[{
+                        "collection": "accountsPayable",
+                        "id": account["id"],
+                        "data_json": json.dumps(account),
+                    }])
+                if "supplierPayments" in query:
+                    return FakeResult()
+                raise AssertionError(f"Unexpected query: {query}")
+
+        with self.assertRaisesRegex(ValueError, "abonos registrados"):
+            sync_shared_entry_payable(
+                FakeDatabase(),
+                "tenant-default",
+                "1582",
+                "",
+                {"paymentMethod": "Contado", "supplierInvoice": "BV1O3501353", "supplierName": "MEICO SA"},
+                1000,
+                "INV CRR 5 3 26",
+                "Credito",
+                "2026-10-28",
+            )
+
+        self.assertEqual(account["status"], "PARCIAL")
     def test_sistecredito_sale_amount_is_validated_and_bound_to_sale(self):
         direct_record = _sistecredito_sale_amount_record(
             {"paymentMethod": "Sistecrédito", "sistecreditoAmount": 250000},
@@ -1167,6 +1267,29 @@ class BackendSafetyTests(unittest.TestCase):
             "Samara Alzate",
         )
         self.assertEqual(database.params, ("tenant-default", "CLI-15566", "CLI-15566"))
+
+    def test_delete_shared_entry_rejects_non_numeric_id_before_database_access(self):
+        class FakeHandler:
+            headers = {}
+
+            def __init__(self, identifier):
+                self.path = f"/api/shared-entry/{identifier}"
+
+            def send_json(self, status, payload):
+                self.response = (status, payload)
+
+        for identifier in ("COM-00001", "0", "2147483648", "１２"):
+            with self.subTest(identifier=identifier):
+                handler = FakeHandler(identifier)
+                with patch.object(server, "authenticated_user", return_value={"role": "ADMINISTRADOR"}), \
+                     patch.object(server, "requested_tenant_allowed", return_value=True), \
+                     patch.object(server, "can_access", return_value=True), \
+                     patch.object(server, "_postgres_enabled", return_value=True), \
+                     patch.object(server, "connection") as open_database:
+                    server.AppHandler.do_DELETE(handler)
+
+                self.assertEqual(handler.response, (404, {"error": "Entrada no encontrada"}))
+                open_database.assert_not_called()
 
 
 if __name__ == "__main__":

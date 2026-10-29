@@ -15,7 +15,7 @@ Set-ExecutionPolicy -Scope Process Bypass
 
 La tarea `FAMIMUEBLES ERP Server` reinicia el servidor si PostgreSQL aun no esta listo o si el proceso se detiene; usa ambos disparadores `AtStartup` y `AtLogOn`. El log queda en `logs\server-autostart.log`.
 
-El acceso publico usa `https://crouch-untitled-harness.ngrok-free.dev`. El dominio solo responde cuando ngrok esta instalado, autenticado con tu cuenta y ejecutando `start-erp-ngrok.cmd`; ese tunel publica el backend local en el puerto `8024`.
+La vista publica esta en `https://famimuebles16.github.io/FAMIMUEBLES-ERP/`. Su API depende del tunel Cloudflare que publica el backend local en el puerto `8024`; para iniciar o reparar el arranque automatico, inicia sesion con Git Credential Manager para GitHub o configura `FAMIMUEBLES_GITHUB_TOKEN` como variable de usuario, y ejecuta una vez `.\install-cloudflared-autostart.ps1`. El instalador crea la tarea programada y un acceso directo de inicio de sesion como respaldo; el supervisor espera al servidor, reintenta si la red/DNS falla, comprueba la salud publica y actualiza en GitHub la URL del tunel. El acceso al sitio estatico sigue disponible aunque el computador o el tunel esten apagados, pero las funciones que requieren el backend solo operan cuando el tunel esta activo.
 
 ### PostgreSQL compartido con el bot
 
