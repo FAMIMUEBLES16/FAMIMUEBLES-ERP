@@ -2,7 +2,7 @@ import { money, page } from '../components/tables.js';
 import { icons } from '../components/sidebar.js';
 import { calendarDate, formatDate, shiftCalendarDate } from '../utils/dates.js';
 import { canonicalSellerName, filterSales, normalizeSales } from './ventas.js';
-import { calculateSistecreditoLedger, SISTECREDITO_DEFAULT_OPENING_BALANCE } from './sistecredito-ledger.js';
+import { calculateSistecreditoLedger, SISTECREDITO_DEFAULT_OPENING_BALANCE } from './sistecredito-ledger.js?v=20261022-sistecredito-refresh-v1';
 
 const CHART_COLORS = [
   '#2563EB', '#10B981', '#F59E0B', '#EF4444',

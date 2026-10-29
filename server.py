@@ -700,6 +700,107 @@ def update_purchase_payable(account, total, supplier_id, supplier_name, store_id
     return account
 
 
+def sync_shared_entry_payable(database, tenant, identifier, previous_reference, payload, total, store_id, existing_payment_method, created_at):
+    payment_method = str(payload.get("paymentMethod") or payload.get("metodo_pago") or existing_payment_method or "")
+    payment_method_key = "".join(
+        character for character in unicodedata.normalize("NFD", payment_method.casefold())
+        if not unicodedata.combining(character)
+    )
+    is_credit = "credito" in payment_method_key
+    due_date = str(payload.get("dueDate") or payload.get("due_date") or "").strip()[:10]
+    if is_credit:
+        if total <= 0:
+            raise ValueError("El total debe ser mayor que cero para crear una cuenta por pagar")
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", due_date):
+            raise ValueError("La fecha de vencimiento es obligatoria para compras a credito")
+        try:
+            datetime.strptime(due_date, "%Y-%m-%d")
+        except ValueError as exc:
+            raise ValueError("La fecha de vencimiento no es valida") from exc
+
+    references = {str(identifier), str(previous_reference or ""), str(payload.get("referencia") or "")}
+    references.discard("")
+    supplier_id = str(payload.get("supplierId") or payload.get("supplier_id") or payload.get("proveedor_id") or "")
+    supplier_name = str(payload.get("supplierName") or payload.get("supplier_name") or payload.get("empleado") or "")
+    invoice = str(payload.get("supplierInvoice") or payload.get("factura") or "")
+    lock_clause = " FOR UPDATE" if _postgres_enabled() else ""
+    account_rows = database.execute(
+        "SELECT collection, id, data_json FROM domain_records WHERE tenant_id = ? "
+        "AND collection IN ('accountsPayable', 'accounts-payable')" + lock_clause,
+        (tenant,),
+    ).fetchall()
+    accounts = [(row, json.loads(row["data_json"] or "{}")) for row in account_rows]
+    linked_accounts = match_purchase_payables(accounts, references, invoice, supplier_name)
+    account_updates = []
+
+    if is_credit:
+        normalize = lambda value: re.sub(r"[^a-z0-9]", "", str(value or "").casefold())
+        invoice_matches = [
+            (row, account) for row, account in accounts
+            if normalize(account.get("invoiceNumber")) == normalize(invoice)
+        ] if invoice else []
+        if not linked_accounts and invoice_matches:
+            raise ValueError("Ya existe una cuenta por pagar con esa factura y no se puede asociar de forma segura.")
+        if linked_accounts:
+            for account_row, account in linked_accounts:
+                update_purchase_payable(account, total, supplier_id, supplier_name, store_id, invoice)
+                paid = float(account.get("paidAmount") or 0)
+                account["status"] = "PAGADA" if paid >= total else "PARCIAL" if paid > 0 else "PENDIENTE"
+                account["dueDate"] = due_date
+                account["paymentTerms"] = payment_method
+                database.execute(
+                    "UPDATE domain_records SET data_json = ?, version = version + 1, updated_at = CURRENT_TIMESTAMP "
+                    "WHERE tenant_id = ? AND collection = ? AND id = ?",
+                    (json.dumps(account, ensure_ascii=False, separators=(",", ":")), tenant, account_row["collection"], account_row["id"]),
+                )
+                account_updates.append(account)
+        else:
+            account_id = f"CXP-{_reserve_domain_sequence(database, tenant, 'CXP', [row['id'] for row in account_rows]):05d}"
+            purchase = {
+                "id": str(identifier),
+                "supplierId": supplier_id,
+                "supplierName": supplier_name,
+                "storeId": store_id,
+                "supplierInvoice": invoice,
+                "paymentMethod": payment_method,
+                "createdAt": created_at or datetime.now(timezone.utc).isoformat(),
+            }
+            account = _build_purchase_payable(account_id, purchase, total, due_date)
+            database.execute(
+                "INSERT INTO domain_records (tenant_id, collection, id, data_json, version) "
+                "VALUES (?, 'accountsPayable', ?, ?, 1)",
+                (tenant, account_id, json.dumps(account, ensure_ascii=False, separators=(",", ":"))),
+            )
+            account_updates.append(account)
+    else:
+        active_accounts = [
+            (row, account) for row, account in linked_accounts
+            if str(account.get("status") or "").upper() != "ANULADA"
+        ]
+        if active_accounts:
+            payment_rows = database.execute(
+                "SELECT data_json FROM domain_records WHERE tenant_id = ? "
+                "AND collection IN ('supplierPayments', 'supplier-payments')",
+                (tenant,),
+            ).fetchall()
+            payment_account_ids = {
+                str(json.loads(row["data_json"] or "{}").get("accountId") or "")
+                for row in payment_rows
+            }
+            for account_row, account in active_accounts:
+                if float(account.get("paidAmount") or 0) > 0 or str(account.get("id") or account_row["id"]) in payment_account_ids:
+                    raise ValueError("No se puede desactivar la cuenta por pagar porque tiene abonos registrados.")
+                account.update({"status": "ANULADA", "balance": max(0, float(account.get("totalAmount") or 0)), "updatedAt": datetime.now(timezone.utc).isoformat()})
+                database.execute(
+                    "UPDATE domain_records SET data_json = ?, version = version + 1, updated_at = CURRENT_TIMESTAMP "
+                    "WHERE tenant_id = ? AND collection = ? AND id = ?",
+                    (json.dumps(account, ensure_ascii=False, separators=(",", ":")), tenant, account_row["collection"], account_row["id"]),
+                )
+                account_updates.append(account)
+
+    return account_updates, linked_accounts
+
+
 def _sequence_number(identifier, prefix):
     match = re.fullmatch(rf"{re.escape(prefix)}-(\d+)", str(identifier or "").strip(), re.IGNORECASE)
     return int(match.group(1)) if match else 0
@@ -714,9 +815,9 @@ def _reserve_domain_sequence(database, tenant, sequence_name, existing_ids):
         (tenant, prefix, highest_existing),
     )
     row = database.execute(
-        "UPDATE domain_sequences SET last_value = GREATEST(last_value, ?) + 1 "
+        "UPDATE domain_sequences SET last_value = CASE WHEN last_value < ? THEN ? ELSE last_value END + 1 "
         "WHERE tenant_id = ? AND sequence_name = ? RETURNING last_value",
-        (highest_existing, tenant, prefix),
+        (highest_existing, highest_existing, tenant, prefix),
     ).fetchone()
     if not row:
         raise RuntimeError(f"No se pudo reservar el consecutivo {prefix}")
@@ -4204,12 +4305,22 @@ class AppHandler(SimpleHTTPRequestHandler):
                     database.execute("UPDATE tenant_states SET state_json = ?, updated_at = CURRENT_TIMESTAMP WHERE tenant_id = ?", (serialized, tenant_id(self)))
                 self.send_json(200, {"ok": True, "deleted": True, "deletedAccountsPayable": len(linked_payables), "deletedPurchases": len(linked_purchases)})
                 return
+            if (
+                len(identifier) > 10
+                or not identifier.isascii()
+                or not identifier.isdigit()
+                or int(identifier) < 1
+                or int(identifier) > 2_147_483_647
+            ):
+                self.send_json(404, {"error": "Entrada no encontrada"})
+                return
+            movement_id = int(identifier)
             with connection() as database:
-                movement = database.execute("SELECT id, local_origen, tipo, empleado, factura, referencia FROM movimientos WHERE id = %s FOR UPDATE", (identifier,)).fetchone()
+                movement = database.execute("SELECT id, local_origen, tipo, empleado, factura, referencia FROM movimientos WHERE id = %s FOR UPDATE", (movement_id,)).fetchone()
                 if not movement or str(movement["tipo"] or "").upper() != "ENTRADA":
                     self.send_json(404, {"error": "Entrada no encontrada"})
                     return
-                lines = database.execute("SELECT codigo, cantidad FROM movimiento_productos WHERE movimiento_id = %s", (identifier,)).fetchall()
+                lines = database.execute("SELECT codigo, cantidad FROM movimiento_productos WHERE movimiento_id = %s", (movement_id,)).fetchall()
                 for line in lines:
                     stock = database.execute("SELECT cantidad FROM inventarios WHERE local = %s AND codigo = %s FOR UPDATE", (movement["local_origen"], line["codigo"])).fetchone()
                     if not stock or float(stock["cantidad"] or 0) < float(line["cantidad"] or 0):
@@ -4289,8 +4400,8 @@ class AppHandler(SimpleHTTPRequestHandler):
                     )
                 for line in lines:
                     database.execute("UPDATE inventarios SET cantidad = cantidad - %s, actualizado = CURRENT_TIMESTAMP WHERE local = %s AND codigo = %s", (line["cantidad"], movement["local_origen"], line["codigo"]))
-                database.execute("DELETE FROM movimiento_productos WHERE movimiento_id = %s", (identifier,))
-                database.execute("DELETE FROM movimientos WHERE id = %s", (identifier,))
+                database.execute("DELETE FROM movimiento_productos WHERE movimiento_id = %s", (movement_id,))
+                database.execute("DELETE FROM movimientos WHERE id = %s", (movement_id,))
             self.send_json(200, {"ok": True, "deleted": True, "deletedAccountsPayable": len(linked_payables), "deletedPurchases": len(linked_purchases)})
             return
         if path.startswith("/api/catalog/store/"):
@@ -4511,7 +4622,7 @@ class AppHandler(SimpleHTTPRequestHandler):
                             return
                         account_updates = []
                         purchase_updates = []
-                        entry.update({key: payload[key] for key in ("estado", "local", "supplier_name", "vendedor", "factura", "referencia", "observacion") if key in payload})
+                        entry.update({key: payload[key] for key in ("estado", "local", "supplier_name", "vendedor", "factura", "referencia", "observacion", "paymentMethod", "metodo_pago", "dueDate") if key in payload})
                         if "items" in payload:
                             new_items = payload.get("items")
                             if not isinstance(new_items, list) or not new_items:
@@ -4532,26 +4643,17 @@ class AppHandler(SimpleHTTPRequestHandler):
                             invoice = str(payload.get("supplierInvoice") or payload.get("factura") or entry.get("factura") or "")
                             references = {identifier, str(entry.get("referencia") or ""), str(payload.get("referencia") or "")}
                             references.discard("")
-                            account_rows = database.execute(
-                                "SELECT collection, id, data_json FROM domain_records WHERE tenant_id = ? AND collection IN ('accountsPayable', 'accounts-payable')",
-                                (tenant_id(self, payload),),
-                            ).fetchall()
-                            accounts = [(account_row, json.loads(account_row["data_json"] or "{}")) for account_row in account_rows]
-                            linked_accounts = match_purchase_payables(accounts, references, invoice, supplier_name)
-                            for account_row, account in linked_accounts:
-                                update_purchase_payable(
-                                    account,
-                                    total,
-                                    supplier_id,
-                                    supplier_name,
-                                    str(payload.get("local") or entry.get("local") or ""),
-                                    invoice,
-                                )
-                                database.execute(
-                                    "UPDATE domain_records SET data_json = ?, version = version + 1, updated_at = CURRENT_TIMESTAMP WHERE tenant_id = ? AND collection = ? AND id = ?",
-                                    (json.dumps(account, ensure_ascii=False, separators=(",", ":")), tenant_id(self, payload), account_row["collection"], account_row["id"]),
-                                )
-                                account_updates.append(account)
+                            account_updates, linked_accounts = sync_shared_entry_payable(
+                                database,
+                                tenant_id(self, payload),
+                                identifier,
+                                entry.get("referencia"),
+                                payload,
+                                total,
+                                str(payload.get("local") or entry.get("local") or ""),
+                                entry.get("paymentMethod") or entry.get("metodo_pago") or "",
+                                entry.get("fecha") or entry.get("createdAt") or entry.get("created_at"),
+                            )
 
                             purchase_ids = references | {
                                 str(account.get("purchaseId") or "")
@@ -4596,6 +4698,8 @@ class AppHandler(SimpleHTTPRequestHandler):
                                     "items": normalized_items,
                                     "total": total,
                                     "amount": total,
+                                    "paymentMethod": str(payload.get("paymentMethod") or payload.get("metodo_pago") or purchase.get("paymentMethod") or ""),
+                                    "dueDate": str(payload.get("dueDate") or purchase.get("dueDate") or ""),
                                     "updatedAt": datetime.now(timezone.utc).isoformat(),
                                 })
                                 database.execute(
@@ -4607,7 +4711,7 @@ class AppHandler(SimpleHTTPRequestHandler):
                     self.send_json(200, {"ok": True, "id": identifier, "updated": True, "total": entry.get("total", 0), "accountsPayable": account_updates, "purchases": purchase_updates})
                     return
                 with connection() as database:
-                    movement = database.execute("SELECT id, tipo, estado, local_origen, empleado, vendedor, factura, referencia, observacion FROM movimientos WHERE id = %s FOR UPDATE", (identifier,)).fetchone()
+                    movement = database.execute("SELECT id, tipo, estado, local_origen, empleado, vendedor, factura, referencia, observacion, metodo_pago, fecha FROM movimientos WHERE id = %s FOR UPDATE", (identifier,)).fetchone()
                     if not movement or str(movement["tipo"] or "").upper() != "ENTRADA":
                         self.send_json(404, {"error": "Entrada no encontrada"})
                         return
@@ -4666,8 +4770,8 @@ class AppHandler(SimpleHTTPRequestHandler):
                                 (identifier, code, description, quantity, unit_cost, subtotal, quantity),
                             )
                     updated = database.execute(
-                        "UPDATE movimientos SET estado = %s, local_origen = %s, empleado = %s, vendedor = %s, factura = %s, referencia = %s, observacion = %s WHERE id = %s",
-                        (str(payload.get("estado") or payload.get("status") or "COMPLETADO"), str(payload.get("local") or payload.get("local_origen") or ""), str(payload.get("supplier_name") or payload.get("supplierName") or payload.get("empleado") or ""), str(payload.get("vendedor") or ""), str(payload.get("factura") or payload.get("supplierInvoice") or ""), str(payload.get("referencia") or ""), str(payload.get("observacion") or payload.get("notes") or ""), identifier),
+                        "UPDATE movimientos SET estado = %s, local_origen = %s, empleado = %s, vendedor = %s, factura = %s, referencia = %s, observacion = %s, metodo_pago = %s WHERE id = %s",
+                        (str(payload.get("estado") or payload.get("status") or "COMPLETADO"), str(payload.get("local") or payload.get("local_origen") or ""), str(payload.get("supplier_name") or payload.get("supplierName") or payload.get("empleado") or ""), str(payload.get("vendedor") or ""), str(payload.get("factura") or payload.get("supplierInvoice") or ""), str(payload.get("referencia") or ""), str(payload.get("observacion") or payload.get("notes") or ""), str(payload.get("paymentMethod") or payload.get("metodo_pago") or movement["metodo_pago"] or ""), identifier),
                     ).rowcount
                     if total is not None:
                         purchase_references = {identifier}
@@ -4675,36 +4779,25 @@ class AppHandler(SimpleHTTPRequestHandler):
                             purchase_references.add(str(movement["referencia"]))
                         if payload.get("referencia"):
                             purchase_references.add(str(payload["referencia"]))
-                        account_rows = database.execute(
-                            "SELECT collection, id, data_json FROM domain_records WHERE tenant_id = ? AND collection IN ('accountsPayable', 'accounts-payable') FOR UPDATE",
-                            (tenant_id(self, payload),),
-                        ).fetchall()
                         supplier_id = str(payload.get("supplierId") or payload.get("supplier_id") or payload.get("proveedor_id") or "")
                         supplier_name = str(payload.get("supplierName") or payload.get("supplier_name") or payload.get("empleado") or movement["empleado"] or "")
                         invoice = str(payload.get("supplierInvoice") or payload.get("factura") or movement["factura"] or "")
-                        accounts = [(row, json.loads(row["data_json"] or "{}")) for row in account_rows]
-                        linked_accounts = match_purchase_payables(
-                            accounts, purchase_references, invoice, supplier_name
+                        account_updates, linked_accounts = sync_shared_entry_payable(
+                            database,
+                            tenant_id(self, payload),
+                            identifier,
+                            movement["referencia"],
+                            payload,
+                            total,
+                            str(payload.get("local") or payload.get("local_origen") or movement["local_origen"] or ""),
+                            movement["metodo_pago"],
+                            movement.get("fecha") or "",
                         )
                         linked_purchase_ids = purchase_references | {
                             str(account.get("purchaseId") or "")
                             for _, account in linked_accounts
                             if account.get("purchaseId")
                         }
-                        for account_row, account in linked_accounts:
-                            update_purchase_payable(
-                                account,
-                                total,
-                                supplier_id,
-                                supplier_name,
-                                str(payload.get("local") or payload.get("local_origen") or movement["local_origen"] or ""),
-                                invoice,
-                            )
-                            database.execute(
-                                "UPDATE domain_records SET data_json = ?, version = version + 1, updated_at = CURRENT_TIMESTAMP WHERE tenant_id = ? AND collection = ? AND id = ?",
-                                (json.dumps(account, ensure_ascii=False, separators=(",", ":")), tenant_id(self, payload), account_row["collection"], account_row["id"]),
-                            )
-                            account_updates.append(account)
                         purchase_rows = database.execute(
                             "SELECT id, data_json FROM domain_records WHERE tenant_id = ? AND collection = 'purchases' FOR UPDATE",
                             (tenant_id(self, payload),),
@@ -4751,6 +4844,8 @@ class AppHandler(SimpleHTTPRequestHandler):
                                     "items": items,
                                     "total": total,
                                     "amount": total,
+                                    "paymentMethod": str(payload.get("paymentMethod") or payload.get("metodo_pago") or purchase.get("paymentMethod") or ""),
+                                    "dueDate": str(payload.get("dueDate") or purchase.get("dueDate") or ""),
                                     "updatedAt": datetime.now(timezone.utc).isoformat(),
                                 })
                                 database.execute(

@@ -11,7 +11,7 @@ import { navItems, navGroups } from './components/sidebar.js?v=23';
 import { showToast } from './components/toast.js';
 import { table } from './components/tables.js';
 import { renderNotifications } from './components/notifications.js';
-import { renderDashboard } from './modules/dashboard-v3.js?v=20261019-sistecredito-card-v1';
+import { renderDashboard } from './modules/dashboard-v3.js?v=20261022-sistecredito-refresh-v1';
 import { canonicalSellerName, renderVentas, salesTable, salesSummary, normalizeSales, salesWithAnnulledTalonarios, salesMonthKey, saleTimestamp, filterSales, salesSellers, findMatchingSaleCustomer } from './modules/ventas.js?v=20261021-talonario-annulments-v1';
 import { renderFacturacion, cartTotal, productResults, customerResults } from './modules/facturacion.js?v=20261019-sistecredito-server-guard-v1';
 import { renderProductos, productTable, productMatches } from './modules/productos.js?v=22';
@@ -970,8 +970,12 @@ function openPurchaseEditModal(purchase,targetCollection='purchases'){
 	const destination=stores.find(item=>String(item.id)===String(storeId))?.name||storeId||'Sin local';
 	const items=Array.isArray(purchase.items)?purchase.items:[];
 	const total=Number(purchase.total ?? purchase.amount ?? purchase.valor_total ?? purchase.valor ?? items.reduce((sum,item)=>sum+Number(item.quantity||0)*Number(item.unitCost??item.price??0),0));
-	const dueDate=String(purchase.dueDate||'').slice(0,10);
-	const paymentFields=targetCollection==='entries'?'':`<label class="input-label">Forma de pago<select class="field" name="paymentMethod"><option value="Contado" ${String(purchase.paymentMethod).toLowerCase()==='contado'?'selected':''}>Contado</option><option value="Credito" ${String(purchase.paymentMethod).toLowerCase().includes('credito')?'selected':''}>Crédito</option><option value="Transferencia" ${String(purchase.paymentMethod).toLowerCase()==='transferencia'?'selected':''}>Transferencia</option></select></label><label class="input-label">Vencimiento de la cuenta<input class="field" name="dueDate" type="date" value="${dueDate}"></label>`;
+	const paymentMethod=String(purchase.paymentMethod||purchase.metodo_pago||'Contado');
+	const purchaseDate=String(purchase.createdAt||purchase.created_at||purchase.fecha||new Date().toISOString()).slice(0,10);
+	const parsedPurchaseDate=new Date(`${purchaseDate}T00:00:00`);
+	const defaultDueDate=(Number.isNaN(parsedPurchaseDate.getTime())?Date.now():parsedPurchaseDate.getTime())+30*86400000;
+	const dueDate=String(purchase.dueDate||'').slice(0,10)||new Date(defaultDueDate).toISOString().slice(0,10);
+	const paymentFields=`<label class="input-label">Forma de pago<select class="field" name="paymentMethod"><option value="Contado" ${paymentMethod.toLowerCase()==='contado'?'selected':''}>Contado</option><option value="Credito" ${paymentMethod.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').includes('credito')?'selected':''}>Crédito (crear cuenta por pagar)</option><option value="Transferencia" ${paymentMethod.toLowerCase()==='transferencia'?'selected':''}>Transferencia</option></select></label><label class="input-label">Vencimiento de la cuenta<input class="field" name="dueDate" type="date" value="${dueDate}"></label>`;
 	const productRows=items.map((item,index)=>{
 		const productId=String(item.productId||item.code||item.codigo||'');
 		const productOptions=(store.collection.products||[]).map(product=>{
@@ -984,6 +988,13 @@ function openPurchaseEditModal(purchase,targetCollection='purchases'){
 	$('#modal-root').innerHTML=`<div class="modal-backdrop"><form class="modal" id="purchase-edit-form"><button type="button" class="modal-close">×</button><p class="eyebrow">ABASTECIMIENTO</p><h2>Editar compra ${purchase.id}</h2><label class="input-label">Proveedor<select class="field" name="supplierId" required><option value="">Seleccionar proveedor</option>${supplierOptions}</select></label><p class="muted">Local destino: ${destination} · Estado: ${purchase.status||purchase.estado||'RECIBIDA'}</p><label class="input-label">Factura proveedor<input class="field" name="supplierInvoice" value="${purchase.supplierInvoice||purchase.factura||purchase.numero_factura||''}"></label><h3>Productos y cantidades</h3><div data-purchase-edit-lines>${productRows}</div>${addLineButton}<label class="input-label">Total de la compra<input class="field" name="total" type="number" min="0" step="0.01" value="${total}" readonly required></label>${paymentFields}<p class="muted">Al guardar se actualizarán los productos, el inventario y la cuenta por pagar vinculada.</p><button class="primary wide">Guardar cambios</button></form></div>`;
 	$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';
 	const form=$('#purchase-edit-form');
+	const updatePaymentFields=()=>{
+		const isCredit=String(form.elements.paymentMethod.value||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').includes('credito');
+		form.elements.dueDate.required=isCredit;
+		form.elements.dueDate.disabled=!isCredit;
+	};
+	form.elements.paymentMethod.addEventListener('change',updatePaymentFields);
+	updatePaymentFields();
 	const updateTotal=()=>{
 		const lines=[...form.querySelectorAll('[data-purchase-edit-line]')];
 		const amount=lines.reduce((sum,line)=>{
@@ -1035,7 +1046,7 @@ function openPurchaseEditModal(purchase,targetCollection='purchases'){
 				return sum+base+base*item.iva/100;
 			},0);
 			if(!Number.isFinite(amount)||amount<0)throw new Error('El total debe ser un valor válido.');
-			const updated={...purchase,supplierId:supplier.id,supplierName:supplier.name,supplier_name:supplier.name,storeId,local:purchase.local||storeId,supplierInvoice:String(values.supplierInvoice||''),factura:String(values.supplierInvoice||''),paymentMethod:values.paymentMethod||purchase.paymentMethod||purchase.metodo_pago||'',items:updatedItems,total:amount,amount,status:purchase.status||purchase.estado||'RECIBIDA',updatedAt:new Date().toISOString()};
+			const updated={...purchase,supplierId:supplier.id,supplierName:supplier.name,supplier_name:supplier.name,storeId,local:purchase.local||storeId,supplierInvoice:String(values.supplierInvoice||''),factura:String(values.supplierInvoice||''),paymentMethod:values.paymentMethod||purchase.paymentMethod||purchase.metodo_pago||'',metodo_pago:values.paymentMethod||purchase.paymentMethod||purchase.metodo_pago||'',dueDate:values.dueDate||purchase.dueDate||'',items:updatedItems,total:amount,amount,status:purchase.status||purchase.estado||'RECIBIDA',updatedAt:new Date().toISOString()};
 			const source=store.collection[targetCollection]||[];
 			const purchaseReferences=new Set([purchase.id,purchase.referencia,purchase.purchaseId].filter(Boolean).map(String));
 			const existing=(store.collection.accountsPayable||[]).find(account=>purchaseReferences.has(String(account.purchaseId||'')));
