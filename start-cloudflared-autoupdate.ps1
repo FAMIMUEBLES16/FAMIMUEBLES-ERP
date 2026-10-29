@@ -81,7 +81,7 @@ function Start-PublicTunnel {
     try {
         $process = Start-Process -FilePath $cloudflared -ArgumentList @('tunnel', '--protocol', 'http2', '--url', 'http://127.0.0.1:8024') -WorkingDirectory $root -RedirectStandardOutput $runLogPath -RedirectStandardError $runErrorLogPath -WindowStyle Hidden -PassThru
         $tunnelUrl = $null
-        for ($attempt = 0; $attempt -lt 60 -and -not $tunnelUrl; $attempt++) {
+        for ($attempt = 0; $attempt -lt 120 -and -not $tunnelUrl; $attempt++) {
             if ($process.HasExited) { break }
             Start-Sleep -Seconds 1
             foreach ($outputPath in @($runLogPath, $runErrorLogPath)) {
