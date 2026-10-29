@@ -119,6 +119,7 @@ function Start-PublicTunnel {
         }
 
         $failedHealthChecks = 0
+        $lastHealthError = $null
         while (-not $process.HasExited) {
             Start-Sleep -Seconds 15
             try {
@@ -128,10 +129,12 @@ function Start-PublicTunnel {
                     throw 'La API publica no reporto el backend PostgreSQL.'
                 }
                 $failedHealthChecks = 0
+                $lastHealthError = $null
             } catch {
                 $failedHealthChecks++
-                if ($failedHealthChecks -ge 3) {
-                    throw "La API publica fallo $failedHealthChecks comprobaciones consecutivas. Se reiniciara el tunel."
+                $lastHealthError = $_.Exception.Message
+                if ($failedHealthChecks -ge 8) {
+                    throw "La API publica fallo $failedHealthChecks comprobaciones consecutivas. Ultimo error: $lastHealthError. Se reiniciara el tunel."
                 }
             }
             if (-not $published) {
