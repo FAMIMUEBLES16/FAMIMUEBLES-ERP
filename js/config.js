@@ -1,5 +1,5 @@
 const LOCAL_API_URL = 'http://127.0.0.1:8024/api';
-const PUBLIC_API_URL = 'https://addresses-legs-end-command.trycloudflare.com/api';
+const PUBLIC_API_URL = 'https://facial-soap-sixth-indicated.trycloudflare.com/api';
 
 const configuredApiBase = String(
   globalThis.FAMIMUEBLES_API_BASE_URL ||
