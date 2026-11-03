@@ -960,6 +960,79 @@ def validate_talonario_assignment(database, tenant: str, identifier: str, item: 
             raise ValueError(f"El rango {start_number}-{end_number} ya fue enviado a {previous.get('destinationStoreId') or previous.get('destinationName') or previous.get('storeId') or 'otro local'}")
 
 
+def send_talonario(database, tenant: str, source_id: str, destination_store_id: str, destination_name: str, sent_at: str, user_id: str = "") -> tuple[dict, dict]:
+    source_id = str(source_id or "").strip()
+    destination_store_id = str(destination_store_id or "").strip()
+    destination_name = str(destination_name or "").strip()
+    if not source_id or not destination_store_id or not destination_name:
+        raise ValueError("Falta el talonario o el local de destino")
+
+    source_row = database.execute(
+        "SELECT data_json FROM domain_records WHERE tenant_id = ? AND collection = 'talonarios' AND id = ? FOR UPDATE",
+        (tenant, source_id),
+    ).fetchone()
+    if not source_row:
+        raise ValueError("El talonario ya no existe en el almacen central")
+    source = json.loads(source_row[0])
+    if str(source.get("id") or "") != source_id:
+        raise ValueError("El talonario de origen no es valido")
+
+    destination_id = f"TAL-{source_id}-{talonario_local_key(destination_store_id)}"
+    status = str(source.get("status") or "").upper()
+    if status == "ENVIADO":
+        if talonario_local_key(source.get("destinationStoreId")) != talonario_local_key(destination_store_id):
+            raise ValueError("El talonario ya fue enviado a otro local")
+        existing_row = database.execute(
+            "SELECT data_json FROM domain_records WHERE tenant_id = ? AND collection = 'talonarios' AND id = ?",
+            (tenant, destination_id),
+        ).fetchone()
+        if existing_row:
+            return source, json.loads(existing_row[0])
+    elif status != "ALMACENADO":
+        raise ValueError("El talonario ya no esta disponible en el almacen central")
+
+    source_store = source.get("storeId") or source.get("destinationName") or "INV CRR 5 3 26"
+    if talonario_local_key(source_store) != talonario_local_key("INV CRR 5 3 26"):
+        raise ValueError("El talonario no pertenece al almacen central")
+    try:
+        start_number = int(source.get("startNumber"))
+        end_number = int(source.get("endNumber"))
+    except (TypeError, ValueError):
+        raise ValueError("El talonario requiere un rango numerico valido") from None
+    if end_number < start_number:
+        raise ValueError("El rango del talonario no es valido")
+
+    timestamp = str(sent_at or "").strip() or datetime.now(timezone.utc).isoformat()
+    source_update = {
+        **source,
+        "status": "ENVIADO",
+        "sentAt": timestamp,
+        "destinationStoreId": destination_store_id,
+    }
+    destination = {
+        **source_update,
+        "id": destination_id,
+        "storeId": destination_store_id,
+        "destinationName": destination_name,
+        "status": "EN_USO",
+        "currentNumber": start_number,
+        "sentFrom": source_store,
+    }
+    validate_talonario_assignment(database, tenant, destination_id, destination)
+
+    for item in (destination, source_update):
+        database.execute(
+            "INSERT INTO domain_records (tenant_id, collection, id, data_json, version) VALUES (?, 'talonarios', ?, ?, 1) "
+            "ON CONFLICT(tenant_id, collection, id) DO UPDATE SET data_json = excluded.data_json, version = domain_records.version + 1, updated_at = CURRENT_TIMESTAMP",
+            (tenant, item["id"], json.dumps(item, ensure_ascii=False, separators=(",", ":"))),
+        )
+    database.execute(
+        "INSERT INTO audit_events (user_id, action, collection, record_id, data_json) VALUES (?, ?, ?, ?, ?)",
+        (user_id or None, "SEND", "talonarios", destination_id, json.dumps({"sourceId": source_id, "destination": destination_store_id}, ensure_ascii=False)),
+    )
+    return source_update, destination
+
+
 def has_meaningful_domain_payload(payload: dict) -> bool:
     ignored_keys = {
         "id",
@@ -3811,6 +3884,19 @@ class AppHandler(SimpleHTTPRequestHandler):
                 self.send_json(200, response)
                 return
             if path.startswith("/api/domain/"):
+                if path == "/api/domain/talonarios/send":
+                    with connection() as database:
+                        source, destination = send_talonario(
+                            database,
+                            tenant_id(self, payload),
+                            str(payload.get("sourceId") or ""),
+                            str(payload.get("destinationStoreId") or ""),
+                            str(payload.get("destinationName") or ""),
+                            str(payload.get("sentAt") or ""),
+                            str(authenticated_user(self).get("id") or ""),
+                        )
+                    self.send_json(201, {"ok": True, "source": source, "destination": destination})
+                    return
                 warranty_action_match = re.fullmatch(r"/api/domain/warranties/([^/]+)/action", path)
                 if warranty_action_match:
                     warranty_id = unquote(warranty_action_match.group(1)).strip()

@@ -29,7 +29,7 @@ import { renderGasolina } from './modules/gasolina.js?v=20261011-fuel-user-delet
 import { mergeUserSources, renderUsuarios } from './modules/usuarios.js?v=24';
 import { renderDescansos } from './modules/descansos.js?v=20261015-dom-guard-v1';
 import { renderAuditoria, resetAuditFilters, setAuditFilters } from './modules/auditoria.js?v=28';
-import { renderTalonarios, talonarioModal, setTalonarioFilters, currentTalonarioNumber, normalizeActiveTalonarios, availableCentralTalonarios, nextAvailableCentralTalonario, configuredTalonarioOwnerLabel, configuredTalonarioOwnerMatches, talonarioSalesDocuments } from './modules/talonarios.js?v=25';
+import { renderTalonarios, talonarioModal, setTalonarioFilters, currentTalonarioNumber, normalizeActiveTalonarios, availableCentralTalonarios, nextAvailableCentralTalonario, configuredTalonarioOwnerLabel, configuredTalonarioOwnerMatches, talonarioSalesDocuments } from './modules/talonarios.js?v=27';
 import { historicalTalonarios, historicalRecibos, storedTalonarios } from './modules/talonarios-historial.js?v=1';
 import { renderApartados } from './modules/apartados.js?v=20261015-finance-identifiers-v1';
 import { createApartado, decreaseSaleInventory, runTransaction, addMovement } from './modules/finanzas.js?v=18';
@@ -284,19 +284,12 @@ async function saveTalonarioForm(form){
 		const destinationId=String(destinationOption?.value||'').trim();
 		const destinationName=String(destinationOption?.textContent||'').replace(/\s+·.*$/,'').trim();
 		if(!destinationId||!destinationName)throw new Error('Selecciona un local destino valido.');
-		const destinationKey=talonarioNameKey(destinationId);
 		validateLocalTalonarioAssignment(source.type,source.startNumber,source.endNumber,destinationId,destinationName);
 		const sentAt=new Date().toISOString();
-		const sourceUpdate={...source,status:'ENVIADO',sentAt,destinationStoreId:destinationId};
-		const destination={...sourceUpdate,id:`TAL-${source.id}-${destinationKey}`,storeId:destinationId,destinationName,status:'EN_USO',currentNumber:source.startNumber,sentFrom:'INV CRR 5 3 26',sentAt};
-		delete destination.destinationStoreId;
-		await persistDomainRecord('talonarios',destination);
-		try{
-			await persistDomainRecord('talonarios',sourceUpdate);
-		}catch(error){
-			try{await api.delete(`/api/domain/talonarios/${encodeURIComponent(destination.id)}`,{}, {headers:{'X-Tenant-ID':activeTenantId()}});}catch(rollbackError){console.warn('No se pudo retirar el envio incompleto:',rollbackError.message);}
-			throw error;
-		}
+		const result=await persistCatalogRecord('/api/domain/talonarios/send',{sourceId:String(source.id),destinationStoreId:destinationId,destinationName,sentAt});
+		const sourceUpdate=result?.source;
+		const destination=result?.destination;
+		if(!sourceUpdate?.id||!destination?.id)throw new Error('El servidor no confirmo el envio del talonario.');
 		Object.assign(source,sourceUpdate);
 		const destinationIndex=store.collection.talonarios.findIndex(item=>String(item.id)===String(destination.id));
 		if(destinationIndex<0)store.collection.talonarios.push(destination);

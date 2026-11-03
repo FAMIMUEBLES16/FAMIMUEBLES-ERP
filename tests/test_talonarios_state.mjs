@@ -87,11 +87,57 @@ assert.deepEqual(
   [],
   'an annulled invoice should no longer be treated as an unexplained gap'
 );
+const historicalTalonario = {
+  id: 'HISTORICAL-2001',
+  type: 'REMISION',
+  startNumber: 2001,
+  endNumber: 2050,
+  currentNumber: 2008,
+  storeId: 'INV FUTURO',
+  destinationName: 'INV FUTURO',
+  status: 'TERMINADO',
+};
+const historicalSales = [2001, 2003, 2006].map(invoiceNumber => ({
+  invoiceNumber: String(invoiceNumber),
+  documentType: 'REMISION',
+  storeId: 'INV FUTURO',
+}));
+const historicalJustifications = [{
+  id: 'JUST-HIST-2004',
+  talonarioId: historicalTalonario.id,
+  number: 2004,
+  reason: 'ANULADA',
+  status: 'JUSTIFICADA',
+}];
+assert.deepEqual(
+  missingTalonarioNumbersForLocal(historicalTalonario, [historicalTalonario], historicalSales, historicalJustifications),
+  [2002, 2005, 2007, 2008],
+  'all historical gaps should be listed while justified numbers are excluded'
+);
 assert.match(
   renderTalonarios({ talonarios: [crr5556Talonario], sales: crr5556Sales, talonarioJustifications: [annulled16009] }),
   /16\.?009\s*·\s*Anulada/,
   'the talonario summary should keep the annulled invoice visible with its number and status after it is justified'
 );
+const receiptTalonario = {
+  id: 'RECEIPT-ACTIVE',
+  type: 'RECIBO',
+  startNumber: 7001,
+  endNumber: 7050,
+  currentNumber: 7002,
+  storeId: 'INV FUTURO',
+  destinationName: 'INV FUTURO',
+  status: 'EN_USO',
+};
+const renderedTalonarios = renderTalonarios({
+  talonarios: [receiptTalonario, historicalTalonario],
+  sales: [
+    { invoiceNumber: '7001', documentType: 'RECIBO', storeId: 'INV FUTURO' },
+    ...historicalSales,
+  ],
+});
+assert.match(renderedTalonarios, /Recibos/, 'the active summary should include receipt talonarios');
+assert.match(renderedTalonarios, /data-talonario-id="HISTORICAL-2001" data-talonario-number="2002"/, 'historical missing invoices should link to the talonario they belong to');
 assert.deepEqual(
   missingTalonarioNumbersForLocal(
     { ...manablancaTalonario, startNumber: 15851, endNumber: 15900, storeId: 'INV CARTAGENITA II', destinationName: 'INV CARTAGENITA II' },
@@ -288,6 +334,44 @@ assert.equal(
   normalized.find((item) => item.id === 'FUTURE-NEXT')?.status,
   'EN_USO',
   'the rotation should activate any newer started range'
+);
+
+const centralLabelLocalSend = normalizeActiveTalonarios([
+  {
+    id: 'TAL-STOCK-REMISION-16051',
+    type: 'REMISION',
+    startNumber: 16051,
+    endNumber: 16100,
+    currentNumber: 16051,
+    storeId: 'INV CRR 5 3 26',
+    destinationName: 'INV CRR 5 3 26',
+    destinationStoreId: 'INV CRR 5 3 26',
+    status: 'ENVIADO',
+    sentAt: '2026-11-03T20:00:00.000Z',
+  },
+  {
+    id: 'TAL-TAL-STOCK-REMISION-16051-INVCRR5326',
+    type: 'REMISION',
+    startNumber: 16051,
+    endNumber: 16100,
+    currentNumber: 16051,
+    storeId: 'INV CRR 5 3 26',
+    destinationName: 'INV CRR 5 3 26',
+    destinationStoreId: 'INV CRR 5 3 26',
+    sentFrom: 'INV CRR 5 3 26',
+    status: 'EN_USO',
+    sentAt: '2026-11-03T20:00:00.000Z',
+  },
+]);
+assert.equal(
+  availableCentralTalonarios(centralLabelLocalSend, 'REMISION').some((item) => item.startNumber === 16051),
+  false,
+  'a sent range remains assigned when its local name matches the central warehouse label'
+);
+assert.match(
+  renderTalonarios({ talonarios: centralLabelLocalSend }),
+  /16051\s*-\s*16100/,
+  'a sent range with the central warehouse label remains visible in local history after normalization'
 );
 
 const reportedTalonarios = [

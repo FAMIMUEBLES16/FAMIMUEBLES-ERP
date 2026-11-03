@@ -556,6 +556,96 @@ class BackendSafetyTests(unittest.TestCase):
             "storeId": "INV CRR 5 3 26",
         })
 
+    def test_talonario_send_persists_source_and_destination_atomically(self):
+        source = {
+            "id": "TAL-STOCK-REMISION-16051",
+            "type": "REMISION",
+            "startNumber": 16051,
+            "endNumber": 16100,
+            "currentNumber": 16051,
+            "storeId": "INV CRR 5 3 26",
+            "destinationName": "INV CRR 5 3 26",
+            "status": "ALMACENADO",
+        }
+
+        class FakeResult:
+            def __init__(self, row=None):
+                self.row = row
+
+            def fetchone(self):
+                return self.row
+
+        class FakeDatabase:
+            def __init__(self, fail_on_source_update=False):
+                self.records = {source["id"]: source.copy()}
+                self.writes = []
+                self.fail_on_source_update = fail_on_source_update
+                self.snapshot = None
+
+            def __enter__(self):
+                self.snapshot = {key: value.copy() for key, value in self.records.items()}
+                return self
+
+            def __exit__(self, error_type, error, traceback):
+                if error_type:
+                    self.records = self.snapshot
+                return False
+
+            def execute(self, query, params=()):
+                if query.startswith("SELECT data_json FROM domain_records"):
+                    item = self.records.get(params[1])
+                    return FakeResult((json.dumps(item),) if item else None)
+                if query.startswith("INSERT INTO domain_records"):
+                    tenant, identifier, serialized = params
+                    item = json.loads(serialized)
+                    if self.fail_on_source_update and identifier == source["id"] and item["status"] == "ENVIADO":
+                        raise RuntimeError("fallo simulado al actualizar el origen")
+                    self.records[identifier] = item
+                    self.writes.append(identifier)
+                return FakeResult()
+
+        def make_handler(database):
+            payload = {
+                "sourceId": source["id"],
+                "destinationStoreId": "INV CRR 5 3 26",
+                "destinationName": "INV CRR 5 3 26",
+                "sentAt": "2026-11-03T20:00:00.000Z",
+                "tenantId": "tenant-default",
+            }
+
+            class FakeHandler:
+                path = "/api/domain/talonarios/send"
+                headers = {"Content-Length": str(len(json.dumps(payload).encode("utf-8")))}
+                rfile = io.BytesIO(json.dumps(payload).encode("utf-8"))
+
+                def send_json(self, status, response):
+                    self.response = (status, response)
+
+            handler = FakeHandler()
+            with patch.object(server, "authenticated_user", return_value={"id": "USR-1", "role": "ADMINISTRADOR"}), \
+                 patch.object(server, "requested_tenant_allowed", return_value=True), \
+                 patch.object(server, "can_access", return_value=True), \
+                 patch.object(server, "tenant_id", return_value="tenant-default"), \
+                 patch.object(server, "connection", return_value=database), \
+                 patch.object(server, "validate_talonario_assignment"):
+                server.AppHandler.do_POST(handler)
+            return handler
+
+        database = FakeDatabase()
+        handler = make_handler(database)
+        destination_id = f"TAL-{source['id']}-INVCRR5326"
+        self.assertEqual(handler.response[0], 201, handler.response[1])
+        self.assertEqual(database.writes, [destination_id, source["id"]])
+        self.assertEqual(database.records[destination_id]["status"], "EN_USO")
+        self.assertEqual(database.records[destination_id]["startNumber"], 16051)
+        self.assertEqual(database.records[destination_id]["destinationStoreId"], "INV CRR 5 3 26")
+        self.assertEqual(database.records[source["id"]]["status"], "ENVIADO")
+
+        failing_database = FakeDatabase(fail_on_source_update=True)
+        failed_handler = make_handler(failing_database)
+        self.assertEqual(failed_handler.response[0], 500)
+        self.assertEqual(failing_database.records, {source["id"]: source})
+
     def test_talonario_allows_configured_owner_aliases_to_share_a_range(self):
         class FakeResult:
             def __init__(self, rows=()):
