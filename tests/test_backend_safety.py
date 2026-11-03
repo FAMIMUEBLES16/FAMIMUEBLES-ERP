@@ -181,7 +181,7 @@ class BackendSafetyTests(unittest.TestCase):
         self.assertFalse(compressed)
         self.assertEqual(json.loads(body), {"ok": True})
 
-    def test_bootstrap_shared_state_skips_remote_collections_and_preserves_local_state(self):
+    def test_bootstrap_shared_state_skips_remote_collections_and_sales(self):
         class FakeResult:
             def fetchone(self):
                 return {"state_json": json.dumps({
@@ -199,17 +199,38 @@ class BackendSafetyTests(unittest.TestCase):
         catalog = {
             "products": [],
             "stores": [],
-            "sales": [{"id": "fresh-sale"}],
+            "sales": [],
             "inventory": [],
         }
-        with patch("server._shared_catalog", return_value=catalog), patch("server._shared_domain_items") as load_domain:
-            state = server._shared_state(FakeDatabase(), bootstrap=True)
+        database = FakeDatabase()
+        with patch("server._shared_catalog", return_value=catalog) as load_catalog, patch("server._shared_domain_items") as load_domain:
+            state = server._shared_state(database, bootstrap=True)
 
+        load_catalog.assert_called_once_with(database, include_sales=False)
         load_domain.assert_not_called()
-        self.assertEqual(state["sales"], [{"id": "fresh-sale"}])
+        self.assertEqual(state["sales"], [])
         self.assertEqual(state["notifications"], [{"id": "notice-1"}])
         self.assertEqual(state["fuelRecords"], [{"id": "fuel-1"}])
         self.assertNotIn("talonarios", state)
+
+    def test_shared_catalog_skips_historical_sales_query_when_requested(self):
+        class FakeResult:
+            def fetchall(self):
+                return []
+
+        class FakeDatabase:
+            def __init__(self):
+                self.queries = []
+
+            def execute(self, query, params=()):
+                self.queries.append(query)
+                return FakeResult()
+
+        database = FakeDatabase()
+        catalog = server._shared_catalog(database, include_sales=False)
+
+        self.assertEqual(catalog["sales"], [])
+        self.assertFalse(any(query.lstrip().startswith("SELECT m.id, m.fecha") for query in database.queries))
 
     def test_shared_transfer_moves_inventory_and_records_completed_movement(self):
         class FakeResult:

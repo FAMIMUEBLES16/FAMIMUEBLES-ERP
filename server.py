@@ -1565,8 +1565,8 @@ def sync_catalog_state(database: sqlite3.Connection, tenant: str, state: dict) -
                 database.execute("INSERT INTO domain_records (tenant_id, collection, id, data_json) VALUES (?, ?, ?, ?) ON CONFLICT(tenant_id, collection, id) DO UPDATE SET data_json=excluded.data_json, updated_at=CURRENT_TIMESTAMP", (tenant, collection, str(item["id"]), json.dumps(item, ensure_ascii=False, separators=(",", ":"))))
 
 
-def _shared_catalog(database: _PostgresConnection) -> dict:
-    """Lee catalogo, existencias y ventas desde el esquema operativo del bot."""
+def _shared_catalog(database: _PostgresConnection, include_sales: bool = True) -> dict:
+    """Lee catalogo y existencias; carga ventas historicas solo cuando se solicitan."""
     stores = [
         {"id": row["nombre"], "code": str(row["id"]), "name": row["nombre"], "address": row["direccion"] or "", "phone": row["telefono"] or "", "active": str(row["activo"] or "SI").upper() != "NO"}
         for row in database.execute("SELECT id, nombre, activo, direccion, telefono FROM locales ORDER BY nombre").fetchall()
@@ -1595,24 +1595,27 @@ def _shared_catalog(database: _PostgresConnection) -> dict:
         {"productId": product_id, "storeId": store_id, "quantity": quantity, "reservedQuantity": 0, "minimumQuantity": 3}
         for (store_id, product_id), quantity in sorted(inventory_by_key.items())
     ]
-    sales_by_id = {}
-    rows = database.execute(
-        """
-        SELECT m.id, m.fecha, COALESCE(m.local_origen, l.nombre) AS local, m.vendedor, m.cliente, m.telefono,
-               m.factura, m.metodo_pago, mp.codigo, mp.descripcion, mp.cantidad,
-               mp.precio_unitario, mp.precio_total
-        FROM movimientos m
-        LEFT JOIN locales l ON l.id = m.local_id
-        JOIN movimiento_productos mp ON mp.movimiento_id = m.id
-        WHERE UPPER(COALESCE(m.tipo, '')) = 'VENTA'
-        ORDER BY m.fecha
-        """
-    ).fetchall()
-    for row in rows:
-        sale = sales_by_id.setdefault(row["id"], {"id": row["id"], "storeId": row["local"], "customerId": row["cliente"], "customer": row["cliente"], "phone": row["telefono"] or "", "invoiceNumber": row["factura"], "paymentMethod": row["metodo_pago"], "date": row["fecha"], "vendedor": row["vendedor"] or "", "total": 0, "items": []})
-        sale["total"] += float(row["precio_total"] or 0)
-        sale["items"].append({"productId": row["codigo"], "quantity": row["cantidad"], "unitPrice": row["precio_unitario"], "price": row["precio_unitario"], "name": row["descripcion"]})
-    return {"stores": stores, "products": products, "inventory": inventory, "sales": list(sales_by_id.values())}
+    sales = []
+    if include_sales:
+        sales_by_id = {}
+        rows = database.execute(
+            """
+            SELECT m.id, m.fecha, COALESCE(m.local_origen, l.nombre) AS local, m.vendedor, m.cliente, m.telefono,
+                   m.factura, m.metodo_pago, mp.codigo, mp.descripcion, mp.cantidad,
+                   mp.precio_unitario, mp.precio_total
+            FROM movimientos m
+            LEFT JOIN locales l ON l.id = m.local_id
+            JOIN movimiento_productos mp ON mp.movimiento_id = m.id
+            WHERE UPPER(COALESCE(m.tipo, '')) = 'VENTA'
+            ORDER BY m.fecha
+            """
+        ).fetchall()
+        for row in rows:
+            sale = sales_by_id.setdefault(row["id"], {"id": row["id"], "storeId": row["local"], "customerId": row["cliente"], "customer": row["cliente"], "phone": row["telefono"] or "", "invoiceNumber": row["factura"], "paymentMethod": row["metodo_pago"], "date": row["fecha"], "vendedor": row["vendedor"] or "", "total": 0, "items": []})
+            sale["total"] += float(row["precio_total"] or 0)
+            sale["items"].append({"productId": row["codigo"], "quantity": row["cantidad"], "unitPrice": row["precio_unitario"], "price": row["precio_unitario"], "name": row["descripcion"]})
+        sales = list(sales_by_id.values())
+    return {"stores": stores, "products": products, "inventory": inventory, "sales": sales}
 
 
 def _with_frontend_aliases(row: dict) -> dict:
@@ -2191,7 +2194,7 @@ def _shared_domain_items(database: _PostgresConnection, collection: str) -> list
 
 
 def _shared_state(database: _PostgresConnection, bootstrap: bool = False) -> dict:
-    catalog = _shared_catalog(database)
+    catalog = _shared_catalog(database, include_sales=not bootstrap)
     state = {
         **catalog,
         "inventoryByStore": catalog["inventory"],
