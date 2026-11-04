@@ -6,14 +6,14 @@ Frontend empresarial de demostracion para ventas, facturacion, productos, invent
 
 Requiere Python 3.8 o superior y PostgreSQL 14 o superior. El frontend local usa `http://127.0.0.1:8024`; ejecuta `.venv\Scripts\python.exe server.py` desde esta carpeta. PostgreSQL es el unico backend soportado.
 
-Para registrar el arranque automatico al iniciar sesion y al encender Windows, ejecuta una vez PowerShell como el usuario que usara el ERP:
+Para registrar el arranque automatico al iniciar sesion en Windows, ejecuta una vez PowerShell como administrador, usando la cuenta que usara el ERP:
 
 ```powershell
 Set-ExecutionPolicy -Scope Process Bypass
 .\install-erp-autostart.ps1
 ```
 
-La tarea `FAMIMUEBLES ERP Server` reinicia el servidor si PostgreSQL aun no esta listo o si el proceso se detiene; usa ambos disparadores `AtStartup` y `AtLogOn`. El log queda en `logs\server-autostart.log`.
+La tarea `FAMIMUEBLES ERP Server` inicia el servidor sin abrir VS Code y lo reinicia si PostgreSQL aun no esta listo o si el proceso se detiene al iniciar sesion. El instalador elimina el acceso directo antiguo del ERP para evitar lanzar una segunda copia. Los registros del servidor quedan en `logs\server-headless.log`.
 
 La vista publica esta en `https://famimuebles16.github.io/FAMIMUEBLES-ERP/`. Su API depende del tunel Cloudflare que publica el backend local en el puerto `8024`; para iniciar o reparar el arranque automatico, inicia sesion con Git Credential Manager para GitHub o configura `FAMIMUEBLES_GITHUB_TOKEN` como variable de usuario, y ejecuta una vez `.\install-cloudflared-autostart.ps1`. El instalador crea la tarea programada y un acceso directo de inicio de sesion como respaldo; el supervisor espera al servidor, reintenta si la red/DNS falla, comprueba la salud publica y actualiza en GitHub la URL del tunel. El acceso al sitio estatico sigue disponible aunque el computador o el tunel esten apagados, pero las funciones que requieren el backend solo operan cuando el tunel esta activo.
 
