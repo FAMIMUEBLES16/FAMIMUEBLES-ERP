@@ -201,6 +201,15 @@ export function normalizeSales(items = []) {
   });
 }
 
+export function upsertSaleRecord(sales, sale) {
+  const id = String(sale?.id ?? '').trim();
+  if (!id) throw new Error('La venta confirmada requiere un identificador.');
+  const records = Array.isArray(sales) ? sales : [];
+  const index = records.findIndex(item => String(item.id ?? '') === id);
+  if (index < 0) return [...records, sale];
+  return records.map((item, itemIndex) => itemIndex === index ? { ...item, ...sale } : item);
+}
+
 export function salesWithAnnulledTalonarios(data, sales = normalizeSales(data.sales || data.ventas || [])) {
   const annulled = justifiedTalonarioDocuments(data.talonarios || [], data.talonarioJustifications || [])
     .filter(document => document.reason.toUpperCase() === 'ANULADA')

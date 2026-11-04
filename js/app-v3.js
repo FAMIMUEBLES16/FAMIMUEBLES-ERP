@@ -12,7 +12,7 @@ import { showToast } from './components/toast.js';
 import { table } from './components/tables.js';
 import { renderNotifications } from './components/notifications.js';
 import { renderDashboard } from './modules/dashboard-v3.js?v=20261022-sistecredito-refresh-v1';
-import { canonicalSellerName, renderVentas, salesTable, salesSummary, normalizeSales, salesWithAnnulledTalonarios, salesMonthKey, saleTimestamp, filterSales, salesSellers, findMatchingSaleCustomer } from './modules/ventas.js?v=20261021-talonario-annulments-v1';
+import { canonicalSellerName, renderVentas, salesTable, salesSummary, normalizeSales, salesWithAnnulledTalonarios, salesMonthKey, saleTimestamp, filterSales, salesSellers, findMatchingSaleCustomer, upsertSaleRecord } from './modules/ventas.js?v=20261104-sale-submit-recovery-v1';
 import { renderFacturacion, cartTotal, productResults, customerResults } from './modules/facturacion.js?v=20261019-sistecredito-server-guard-v1';
 import { renderProductos, productTable, productMatches } from './modules/productos.js?v=22';
 import { renderInventario, inventoryContent } from './modules/inventario.js?v=20';
@@ -29,7 +29,7 @@ import { renderGasolina } from './modules/gasolina.js?v=20261011-fuel-user-delet
 import { mergeUserSources, renderUsuarios } from './modules/usuarios.js?v=24';
 import { renderDescansos } from './modules/descansos.js?v=20261015-dom-guard-v1';
 import { renderAuditoria, resetAuditFilters, setAuditFilters } from './modules/auditoria.js?v=28';
-import { renderTalonarios, talonarioModal, setTalonarioFilters, currentTalonarioNumber, normalizeActiveTalonarios, availableCentralTalonarios, nextAvailableCentralTalonario, configuredTalonarioOwnerLabel, configuredTalonarioOwnerMatches, talonarioSalesDocuments } from './modules/talonarios.js?v=27';
+import { renderTalonarios, talonarioModal, setTalonarioFilters, currentTalonarioNumber, normalizeActiveTalonarios, availableCentralTalonarios, nextAvailableCentralTalonario, configuredTalonarioOwnerLabel, configuredTalonarioOwnerMatches, talonarioSalesDocuments } from './modules/talonarios.js?v=28';
 import { historicalTalonarios, historicalRecibos, storedTalonarios } from './modules/talonarios-historial.js?v=1';
 import { renderApartados } from './modules/apartados.js?v=20261015-finance-identifiers-v1';
 import { createApartado, decreaseSaleInventory, runTransaction, addMovement } from './modules/finanzas.js?v=18';
@@ -60,7 +60,9 @@ let automaticSharedRefreshEnabled = false;
 let automaticRefreshFailureNotified = false;
 let initialDomainHydrationStarted = false;
 let initialDomainHydrationTimer = null;
-const automaticSharedRefreshIntervalMs = 120000;
+let saleSubmissionInFlight = false;
+let pendingSaleSubmission = null;
+const automaticSharedRefreshIntervalMs = 30000;
 let lastAutomaticSharedRefreshAt = 0;
 let inventoryViewState = { store:'all', query:'', active:'active', status:'all', sort:'name', version:0 };
 let creditViewState = { filter:'all', query:'', page:1, pageSize:20, overdueInstallments:[] };
@@ -515,7 +517,7 @@ async function refreshSharedState(automatic=false){
 			await hydrateDomainCollections(normalized,false,false,false,true);
 			await hydrateSecondaryDomainCollections(normalized,false,false,true);
 			await hydrateUsers(normalized);
-			if(document.querySelector('.modal-backdrop') || document.activeElement?.matches('input,select,textarea'))return true;
+			if(document.querySelector('.modal-backdrop'))return true;
 			store.state=normalized;
 			replacedState=true;
 		}else{
@@ -551,8 +553,8 @@ async function refreshSharedState(automatic=false){
 			if(statusSelect)statusSelect.value=currentFilters.status;
 			if(sortSelect)sortSelect.value=currentFilters.sort;
 			if($('#inventory-content'))$('#inventory-content').innerHTML=inventoryContent(store.collection,currentFilters.store,currentFilters.query,currentFilters.active,currentFilters.status,currentFilters.sort);
-		} else if(salesFilters && currentRoute()==='ventas'){
-			if(salesViewState.version===salesVersion)salesViewState=salesFilters;
+		} else if(currentRoute()==='ventas'){
+			if(salesFilters && salesViewState.version===salesVersion)salesViewState=salesFilters;
 			applySalesFilters();
 		} else if(productFilters && currentRoute()==='productos'){
 			if(productViewState.version===productVersion)productViewState=productFilters;
@@ -564,6 +566,7 @@ async function refreshSharedState(automatic=false){
 			refreshProducts();
 		} else {
 			if(automatic&&currentRoute()==='gasolina'&&!fuelRecordsChanged)return true;
+			if(automatic&&document.activeElement?.matches('input,select,textarea'))return true;
 			const viewSnapshot=captureViewState();
 			render();
 			restoreViewState(viewSnapshot);
@@ -581,12 +584,10 @@ async function refreshSharedState(automatic=false){
 		sharedRefreshInFlight=false;
 	}
 }
-async function runAutomaticSharedRefresh(){
+async function runAutomaticSharedRefresh(force=false){
 	if(!automaticSharedRefreshEnabled || document.hidden || navigator.onLine===false || document.querySelector('.modal-backdrop') || sharedRefreshInFlight)return;
 	if(currentRoute()==='gasolina')return;
-	if(Date.now()-lastAutomaticSharedRefreshAt<automaticSharedRefreshIntervalMs)return;
-	const activeElement=document.activeElement;
-	if(activeElement?.matches('input,select,textarea'))return;
+	if(!force&&Date.now()-lastAutomaticSharedRefreshAt<automaticSharedRefreshIntervalMs)return;
 	lastAutomaticSharedRefreshAt=Date.now();
 	const refreshed=await refreshSharedState(true);
 	if(!refreshed){
@@ -608,9 +609,10 @@ function startAutomaticSharedRefresh(){
 	lastAutomaticSharedRefreshAt=Date.now();
 	sharedRefreshTimer=setInterval(runAutomaticSharedRefresh,automaticSharedRefreshIntervalMs);
 	document.addEventListener('visibilitychange',()=>{
-		if(!document.hidden)runAutomaticSharedRefresh();
+		if(!document.hidden)runAutomaticSharedRefresh(true);
 	});
-	window.addEventListener('online',runAutomaticSharedRefresh);
+	window.addEventListener('online',()=>runAutomaticSharedRefresh(true));
+	window.addEventListener('focus',()=>runAutomaticSharedRefresh(true));
 }
 function openUserModal(){
 	const stores=store.collection.stores.map(item=>`<option value="${item.id}">${item.name}</option>`).join('');
@@ -1213,69 +1215,105 @@ function confirmImport(){const rows=JSON.parse($('[data-action="confirm-import"]
 function addProduct(productId){ const product=store.collection.products.find(item=>item.id===productId); const row=product&&inventoryEntry(store.collection,product.id,state.storeId); if(!product||!row||row.quantity<=0)return showToast('El producto no tiene stock en este local.','error'); const item=state.cart.find(entry=>entry.id===product.id); if(item)item.quantity=Math.min(row.quantity,item.quantity+1); else state.cart.push({...product,stock:row.quantity,priceLista:product.price,priceVenta:product.price,quantity:1,quantityInvalid:false}); render(); }
 function finishSaleLegacy(){ if(!state.storeId)return showToast('Selecciona un local.','error');if(!state.cart.length)return showToast('Agrega al menos un producto.','error');if(!state.customerId)return showToast('Selecciona un cliente.','error');try{runTransaction(store.collection,()=>{state.cart.forEach(item=>{const row=inventoryEntry(store.collection,item.id,state.storeId);if(!row||item.quantityInvalid||item.quantity<=0||item.quantity>row.quantity)throw new Error(`Stock insuficiente en este local para ${item.name}.`);if(item.priceVenta<item.minimumPrice)throw new Error(`Precio minimo autorizado: ${money(item.minimumPrice)}.`);});const sale={id:generateId('VEN',store.collection.sales),invoiceId:generateId('FAC',store.collection.sales),customerId:state.customerId,customer:store.collection.customers.find(item=>item.id===state.customerId)?.name||'Cliente contado',storeId:state.storeId,items:state.cart.map(item=>({productId:item.id,quantity:item.quantity,priceLista:item.priceLista,priceVenta:item.priceVenta})),transport:state.transport,transportDestination:state.transportDestination,transportNote:state.transportNote,paymentMethod:state.payment,total:cartTotal(state.cart,state.transport),date:new Date().toISOString(),status:state.payment==='Apartado'?'Apartado':'Completada'};store.collection.sales.push(sale);if(state.payment==='Apartado')createApartado(store.collection,sale,Number($('[data-apartado-initial]')?.value||0),'Efectivo');else decreaseSaleInventory(store.collection,sale);if(state.payment.toLowerCase().includes('intern')){const credit=store.add('credits',{id:generateId('CR',store.collection.credits),customerId:sale.customerId,saleId:sale.id,total:sale.total,originalAmount:sale.total,initial:0,downPayment:0,paid:0,financedAmount:sale.total,installmentsCount:6,installmentAmount:Math.ceil(sale.total/6),next:'Pendiente',date:'Ahora',status:'Al dia'});store.add('installments',{id:generateId('CUO',store.collection.installments),creditId:credit.id,number:1,dueDate:'Pendiente',amount:credit.installmentAmount,paidAmount:0,status:'Pendiente'});}store.collection.auditLog.push({id:generateId('AUD',store.collection.auditLog),date:new Date().toISOString(),userId:'USR-00001',action:'Crear venta',saleId:sale.id,storeId:state.storeId});});store.save();state.cart=[];showToast('Venta creada y stock actualizado.');render();}catch(error){showToast(error.message,'error');}}
 async function finishSale(){
-	if(!state.storeId)return showToast('Selecciona un local.','error');
-	if(!state.cart.length)return showToast('Agrega al menos un producto.','error');
-	if(!state.customerId)return showToast('Selecciona un cliente.','error');
+	if(saleSubmissionInFlight)return;
+	saleSubmissionInFlight=true;
+	const submitButton=$('[data-action="finish-sale"]');
+	if(submitButton)submitButton.disabled=true;
+	let salePayload;
+	let createdSale;
+	let submittedTotal=0;
 	try {
-    const selectedCustomer = store.collection.customers.find(customer => String(customer.id) === String(state.customerId));
-		const saleTotal = cartTotal(state.cart, state.transport);
-		const mixedAmount = Number(state.sistecreditoMixedAmount || 0);
-	if(state.payment==='Mixto'&&!sistecreditoLedgerEnabled)throw new Error('El servidor aún no está actualizado para registrar pagos mixtos Sistecrédito. Actualiza y reinicia el servidor ERP antes de usar esta opción.');
-	if(state.payment==='Mixto'&&(!Number.isSafeInteger(mixedAmount)||mixedAmount<=0||mixedAmount>=saleTotal))throw new Error('Ingresa un valor Sistecrédito válido y deja un saldo positivo para el otro medio de pago.');
-		const sistecreditoAmount = state.payment==='Sistecrédito' ? saleTotal : state.payment==='Mixto' ? mixedAmount : null;
-		const salePaymentMethod = state.payment==='Mixto' ? `Mixto (Sistecrédito + ${state.mixedOtherMethod})` : state.payment;
-		const salePayload = {
-			id: generateId('VEN', store.collection.sales),
-			requestId: globalThis.crypto?.randomUUID ? crypto.randomUUID() : `sale-${Date.now()}-${Math.random()}`,
-      storeId: state.storeId,
-      customerId: state.customerId,
-	customer: selectedCustomer?.name || selectedCustomer?.customer || '',
-	invoiceNumber: $('[data-physical-invoice]')?.value.trim() || '',
-	documentType: $('[data-document-type]')?.value || 'REMISION',
-	date: $('[data-sale-date]')?.value || localDateValue(),
-	paymentMethod: salePaymentMethod,
-	sistecreditoAmount,
-	otherPaymentMethod: state.payment==='Mixto' ? state.mixedOtherMethod : '',
-      items: state.cart.map(item => ({
-        productId: item.id,
-        quantity: Number(item.quantity || 0),
-        unitPrice: Number(item.priceVenta ?? item.price ?? 0),
-        price: Number(item.priceVenta ?? item.price ?? 0),
-        taxRate: Number(item.iva || item.taxRate || 0)
-      })),
-      transport: Number(state.transport || 0),
-      transportDestination: state.transportDestination,
-      transportNote: state.transportNote,
-	creditInitial: Number($('[data-credit-initial]')?.value || 0),
-	creditInstallments: Number($('[data-credit-installments]')?.value || 6),
-      tenantId: activeTenantId()
-    };
-		const createdSale = await api.post('/api/catalog/sale', salePayload, { headers: { 'X-Tenant-ID': activeTenantId(), 'Idempotency-Key': salePayload.requestId } });
-		if(sistecreditoAmount!==null){
-			const amountRecord={id:String(createdSale.id),saleId:String(createdSale.id),type:'sale_payment',date:salePayload.date,amount:sistecreditoAmount,otherPaymentMethod:salePayload.otherPaymentMethod};
-			store.collection.sistecreditoSaleAmounts=[...(store.collection.sistecreditoSaleAmounts||[]).filter(item=>String(item.saleId||item.id)!==String(createdSale.id)),amountRecord];
+		if(!state.storeId)throw new Error('Selecciona un local.');
+		if(!state.cart.length)throw new Error('Agrega al menos un producto.');
+		if(!state.customerId)throw new Error('Selecciona un cliente.');
+		const selectedCustomer=store.collection.customers.find(customer=>String(customer.id)===String(state.customerId));
+		const saleTotal=cartTotal(state.cart,state.transport);
+		submittedTotal=saleTotal;
+		const mixedAmount=Number(state.sistecreditoMixedAmount||0);
+		if(state.payment==='Mixto'&&!sistecreditoLedgerEnabled)throw new Error('El servidor aún no está actualizado para registrar pagos mixtos Sistecrédito. Actualiza y reinicia el servidor ERP antes de usar esta opción.');
+		if(state.payment==='Mixto'&&(!Number.isSafeInteger(mixedAmount)||mixedAmount<=0||mixedAmount>=saleTotal))throw new Error('Ingresa un valor Sistecrédito válido y deja un saldo positivo para el otro medio de pago.');
+		const sistecreditoAmount=state.payment==='Sistecrédito'?saleTotal:state.payment==='Mixto'?mixedAmount:null;
+		const salePaymentMethod=state.payment==='Mixto'?`Mixto (Sistecrédito + ${state.mixedOtherMethod})`:state.payment;
+		salePayload={
+			storeId:state.storeId,
+			customerId:state.customerId,
+			customer:selectedCustomer?.name||selectedCustomer?.customer||'',
+			invoiceNumber:$('[data-physical-invoice]')?.value.trim()||'',
+			documentType:$('[data-document-type]')?.value||'REMISION',
+			date:$('[data-sale-date]')?.value||localDateValue(),
+			paymentMethod:salePaymentMethod,
+			sistecreditoAmount,
+			otherPaymentMethod:state.payment==='Mixto'?state.mixedOtherMethod:'',
+			items:state.cart.map(item=>({
+				productId:item.id,
+				quantity:Number(item.quantity||0),
+				unitPrice:Number(item.priceVenta??item.price??0),
+				price:Number(item.priceVenta??item.price??0),
+				taxRate:Number(item.iva||item.taxRate||0)
+			})),
+			transport:Number(state.transport||0),
+			transportDestination:state.transportDestination,
+			transportNote:state.transportNote,
+			creditInitial:Number($('[data-credit-initial]')?.value||0),
+			creditInstallments:Number($('[data-credit-installments]')?.value||6),
+			tenantId:activeTenantId()
+		};
+		const fingerprint=JSON.stringify(salePayload);
+		if(!pendingSaleSubmission||pendingSaleSubmission.fingerprint!==fingerprint){
+			pendingSaleSubmission={
+				fingerprint,
+				id:generateId('VEN',store.collection.sales),
+				requestId:globalThis.crypto?.randomUUID?crypto.randomUUID():`sale-${Date.now()}-${Math.random()}`
+			};
 		}
+		salePayload.id=pendingSaleSubmission.id;
+		salePayload.requestId=pendingSaleSubmission.requestId;
+		createdSale=await api.post('/api/catalog/sale',salePayload,{headers:{'X-Tenant-ID':activeTenantId(),'Idempotency-Key':salePayload.requestId}});
+	}catch(error){
+		saleSubmissionInFlight=false;
+		if(submitButton?.isConnected)submitButton.disabled=false;
+		showToast(error.message,'error');
+		return;
+	}
+	pendingSaleSubmission=null;
+	const registeredSale={
+		...salePayload,
+		...createdSale,
+		id:String(createdSale.id??salePayload.id),
+		total:Number(createdSale.total??submittedTotal),
+		date:salePayload.date,
+		status:'Completada'
+	};
+	store.collection.sales=upsertSaleRecord(store.collection.sales,registeredSale);
+	if(salePayload.sistecreditoAmount!==null){
+		const amountRecord={id:registeredSale.id,saleId:registeredSale.id,type:'sale_payment',date:salePayload.date,amount:salePayload.sistecreditoAmount,otherPaymentMethod:salePayload.otherPaymentMethod};
+		store.collection.sistecreditoSaleAmounts=[...(store.collection.sistecreditoSaleAmounts||[]).filter(item=>String(item.saleId||item.id)!==registeredSale.id),amountRecord];
+	}
+	state.cart=[];
+	state.customerId='';
+	state.payment='Efectivo';
+	state.sistecreditoMixedAmount=0;
+	state.mixedOtherMethod='Efectivo';
+	state.transport=0;
+	state.transportDestination='';
+	state.transportNote='';
+	saleSubmissionInFlight=false;
+	if(currentRoute()==='facturacion')render();
+	else if(currentRoute()==='ventas')applySalesFilters();
+	showToast('Venta creada correctamente con el backend transaccional.');
+	try{
 		await registerTalonarioSale(salePayload);
-    state.cart = [];
-	state.customerId = '';
-	state.payment = 'Efectivo';
-	state.sistecreditoMixedAmount = 0;
-	state.mixedOtherMethod = 'Efectivo';
-	state.transport = 0;
-	state.transportDestination = '';
-	state.transportNote = '';
-	render();
-    showToast('Venta creada correctamente con el backend transaccional.');
-    const normalized = await hydrateState();
-    if (normalized) {
-      store.state = normalized;
-      await hydrateCatalog(store.state);
-      store.save();
-    }
-    render();
-  } catch (error) {
-    showToast(error.message, 'error');
-  }
+	}catch(error){
+		console.warn('La venta se registro, pero no se pudo actualizar el talonario:',error.message);
+		showToast(`La venta quedó registrada, pero no se actualizó el talonario: ${error.message}`,'error');
+	}
+	try{
+		await hydrateCatalog(store.state,false,true);
+		if(currentRoute()==='ventas')applySalesFilters();
+	}catch(error){
+		console.warn('La venta se registro, pero no se pudo actualizar el catalogo de ventas:',error.message);
+		showToast('La venta quedó registrada y el formulario se limpió, pero no se pudo actualizar la lista. Se reintentará automáticamente.','error');
+	}
 }
 function transferField(name){return document.querySelector(`.transfer-modal [data-transfer-${name}]`);} function updateTransferAvailability(){const row=inventoryEntry(store.collection,transferField('product')?.value,transferField('origin')?.value);document.querySelector('[data-transfer-origin-stock]')?.replaceChildren(String(row?.quantity||0));} function openTransfer(){transferDraft.length=0;transferRequestId=globalThis.crypto?.randomUUID?crypto.randomUUID():`transfer-${Date.now()}-${Math.random()}`;$('#modal-root').innerHTML=transferModal(store.collection);$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';const origin=transferField('origin');if(origin)origin.value=state.storeId;updateTransferAvailability();} function addTransferItem(){const origin=transferField('origin').value,destination=transferField('destination').value,productId=transferField('product').value,quantity=Number(transferField('quantity').value),row=inventoryEntry(store.collection,productId,origin);if(origin===destination)return showToast('El origen y destino deben ser diferentes.','error');if(!row||quantity<=0||quantity>row.quantity)return showToast('La cantidad supera el stock disponible.','error');transferDraft.push({productId,quantity});$('#transfer-items').innerHTML=transferDraft.map(item=>`<p>${store.collection.products.find(product=>product.id===item.productId)?.name} · ${item.quantity} unidades</p>`).join('');}
 document.addEventListener('click',event=>{const action=event.target.closest('[data-action]')?.dataset.action;if(action==='new-sale')location.hash='#facturacion';else if(action==='new-store')openStoreModal();else if(action==='edit-store')openStoreModal(event.target.closest('[data-store-id]')?.dataset.storeId);else if(action==='local-detail')showStoreDetail(event.target.closest('[data-store-id]')?.dataset.storeId);else if(action==='local-inventory'){const storeId=event.target.closest('[data-store-id]')?.dataset.storeId;if(storeId){state.storeId=storeId;location.hash='#inventario';render();}}else if(action==='local-transfer'){const storeId=event.target.closest('[data-store-id]')?.dataset.storeId;if(storeId){state.storeId=storeId;openTransfer();}}else if(action==='adjust-inventory')openAdjustment(event.target.closest('[data-product-id]')?.dataset.productId,event.target.closest('[data-store-id]')?.dataset.storeId);else if(action==='new-product')openProductEditor();else if(action==='edit-product'){const product=store.collection.products.find(item=>item.id===event.target.closest('[data-product-id]')?.dataset.productId);openProductEditor(product?.id);}else if(action==='toggle-product'){const product=store.collection.products.find(item=>item.id===event.target.closest('[data-product-id]')?.dataset.productId);if(product){setProductActive(store.collection,product.id,product.active===false);store.save();render();}}else if(action==='new-supplier')openSupplierModal();else if(action==='edit-supplier')openSupplierModal(event.target.closest('[data-supplier-id]')?.dataset.supplierId);else if(action==='new-customer')openCustomerModal();else if(action==='edit-customer')openCustomerModal(event.target.closest('[data-customer-id]')?.dataset.customerId);else if(action==='toggle-supplier'){const supplier=store.collection.suppliers.find(item=>item.id===event.target.closest('[data-supplier-id]')?.dataset.supplierId);if(supplier){supplier.active=supplier.active===false;store.save();render();}}else if(action==='product-detail'){const id=event.target.closest('[data-product-id]')?.dataset.productId;$('#modal-root').innerHTML=productDetail(store.collection,id);$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';}else if(action==='import-products')openImportModal();else if(action==='preview-import')previewImport();else if(action==='confirm-import')confirmImport();else if(['new-credit','new-expense','new-fuel','new-user'].includes(action))openModal(action.replace('new-',''));else if(action==='finish-sale')finishSaleLegacy();else if(action==='cancel-invoice'){state.cart=[];render();}else if(action==='add-product')addProduct(event.target.closest('[data-product-id]')?.dataset.productId);else if(action==='new-transfer')openTransfer();else if(action==='payment')showToast('Registra abonos desde el modulo de cartera.','info');if(event.target.dataset.productId&&!action)addProduct(event.target.dataset.productId);if(event.target.dataset.customerId){state.customerId=event.target.dataset.customerId;render();}if(event.target.dataset.payment){state.payment=event.target.dataset.payment;render();}if(event.target.closest('[data-transfer-add]'))addTransferItem();});

@@ -281,13 +281,13 @@ export function availableCentralTalonarios(items = [], type = 'REMISION') {
 export const nextAvailableCentralTalonario = (items = [], type = 'REMISION') => availableCentralTalonarios(items, type)[0] || null;
 const numberLabel = value => Number(value).toLocaleString('es-CO');
 const saleNumber = (sale, talonario = null) => {
-  const raw = Number(String(sale.invoiceNumber || sale.numero_factura || sale.invoice || '').trim());
+  const raw = Number(String(sale.invoiceNumber ?? sale.numero_factura ?? sale.numeroFactura ?? sale.factura ?? sale.invoice ?? sale.invoiceId ?? sale.invoice_id ?? '').trim());
   if (!Number.isInteger(raw) || !talonario) return raw;
   if (raw >= Number(talonario.startNumber) && raw <= Number(talonario.endNumber)) return raw;
   const shifted = raw + 10000;
   return shifted >= Number(talonario.startNumber) && shifted <= Number(talonario.endNumber) ? shifted : raw;
 };
-const saleType = sale => String(sale.documentType || sale.tipo_documento || '').toUpperCase();
+const saleType = sale => String(sale.documentType || sale.document_type || sale.tipoDocumento || sale.tipo_documento || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase();
 export function talonarioSalesDocuments(talonario, sales = [], options = {}) {
   const start = Number(talonario.startNumber);
   const end = Number(talonario.endNumber);
@@ -297,7 +297,7 @@ export function talonarioSalesDocuments(talonario, sales = [], options = {}) {
   return sales.filter(sale => {
     const number = saleNumber(sale, talonario);
     const documentType = saleType(sale);
-    const saleStore = sale.storeId || sale.store || sale.localId || sale.local;
+    const saleStore = sale.storeId || sale.store_id || sale.store || sale.localId || sale.local_id || sale.localOrigen || sale.local_origen || sale.local;
     const sameLocal = options.includeOtherStores === true || !saleStore || localIdentity(saleStore, type) === owner;
     return Number.isInteger(number) && number >= start && number <= end && (!documentType || documentType === type) && sameLocal;
   }).map(sale => saleNumber(sale, talonario));
@@ -362,14 +362,21 @@ export function missingTalonarioNumbers(talonario, sales = [], justifications = 
   const start = Number(talonario.startNumber);
   const end = Number(talonario.endNumber);
   const documents = talonarioSalesDocuments(talonario, sales);
-  const registeredDocuments = talonarioSalesDocuments(talonario, sales, { includeOtherStores: true });
-  const baseline = Number.isFinite(Number(talonario.consecutiveBaseline)) ? Number(talonario.consecutiveBaseline) : start - 1;
+  const registeredDocuments = [...new Set(talonarioSalesDocuments(talonario, sales, { includeOtherStores: true }))];
+  const hasBaseline = talonario.consecutiveBaseline !== undefined && talonario.consecutiveBaseline !== null && Number.isFinite(Number(talonario.consecutiveBaseline));
+  const baseline = hasBaseline ? Number(talonario.consecutiveBaseline) : null;
+  const firstRegistered = registeredDocuments.length ? Math.min(...registeredDocuments) : null;
+  const trackingStart = firstRegistered === null
+    ? (hasBaseline ? baseline + 1 : Number.POSITIVE_INFINITY)
+    : (hasBaseline && !registeredDocuments.some(number => number <= baseline) ? baseline + 1 : firstRegistered);
   const latest = Math.max(currentTalonarioNumber(talonario, sales), ...documents, start);
-  if (latest <= baseline) return [];
+  if (!Number.isFinite(trackingStart) || latest < trackingStart) return [];
   const used = new Set(registeredDocuments);
-  const justified = new Set(justifications.filter(item => String(item.talonarioId)===String(talonario.id) && String(item.status || 'JUSTIFICADA').toUpperCase()==='JUSTIFICADA').map(item => Number(item.number)));
+  const justified = new Set(justifications.filter(item => String(item.talonarioId) === String(talonario.id) && String(item.status || 'JUSTIFICADA').toUpperCase() === 'JUSTIFICADA').map(item => Number(item.number)));
   const missing=[];
-  for(let number=Math.max(start, baseline + 1);number<=Math.min(latest, end);number+=1)if(!used.has(number)&&!justified.has(number))missing.push(number);
+  for (let number = Math.max(start, trackingStart); number <= Math.min(latest, end); number += 1) {
+    if (!used.has(number) && !justified.has(number)) missing.push(number);
+  }
   return missing;
 }
 function missingTalonarioEntriesForLocal(talonario, talonarios = [], sales = [], justifications = []) {
