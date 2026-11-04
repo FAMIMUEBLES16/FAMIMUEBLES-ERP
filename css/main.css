@@ -11,7 +11,7 @@
 .record-summary p { margin:0; color:var(--muted); font-size:12px; }
 .talonarios-summary h3 { margin-bottom: 4px; }
 .talonarios-summary .muted { margin: 0 0 8px; }
-.talonarios-history-scroll { max-height: 214px; overflow-y: auto; }
+.talonarios-history-scroll { overflow-x: auto; }
 .talonarios-history-scroll .table-wrap { overflow: visible; }
 @media (max-width: 900px) { .talonarios-filters { grid-template-columns: 1fr 1fr; } }
 @media (max-width: 560px) { .talonarios-filters { grid-template-columns: 1fr; } }
