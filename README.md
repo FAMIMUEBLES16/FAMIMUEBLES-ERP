@@ -6,14 +6,16 @@ Frontend empresarial de demostracion para ventas, facturacion, productos, invent
 
 Requiere Python 3.8 o superior y PostgreSQL 14 o superior. El frontend local usa `http://127.0.0.1:8024`; ejecuta `.venv\Scripts\python.exe server.py` desde esta carpeta. PostgreSQL es el unico backend soportado.
 
-Para registrar el arranque automatico al iniciar sesion en Windows, ejecuta una vez PowerShell como administrador, usando la cuenta que usara el ERP:
+Las ventas compartidas se sincronizan cada 30 segundos mientras la aplicacion esta visible y al volver a la pestaña. La lista se actualiza sin recargar la pagina y sin interrumpir la escritura en sus filtros.
+
+Para registrar el arranque automatico al iniciar sesion en Windows, ejecuta una vez PowerShell con la misma cuenta que usara el ERP; no se requieren permisos de administrador:
 
 ```powershell
 Set-ExecutionPolicy -Scope Process Bypass
 .\install-erp-autostart.ps1
 ```
 
-La tarea `FAMIMUEBLES ERP Server` inicia el servidor sin abrir VS Code y lo reinicia si PostgreSQL aun no esta listo o si el proceso se detiene al iniciar sesion. El instalador elimina el acceso directo antiguo del ERP para evitar lanzar una segunda copia. Los registros del servidor quedan en `logs\server-headless.log`.
+El instalador crea un unico acceso directo en la carpeta Inicio de esa cuenta. El lanzador oculto espera a que PostgreSQL inicie, mantiene el ERP en ejecucion y reintenta cada 30 segundos si el proceso se detiene; tambien retira la tarea programada anterior del ERP cuando reconoce su accion. No requiere abrir VS Code. Los registros quedan en `logs\server-headless.log` y `logs\server-startup.log`.
 
 La vista publica esta en `https://famimuebles16.github.io/FAMIMUEBLES-ERP/`. Su API depende del tunel Cloudflare que publica el backend local en el puerto `8024`; para iniciar o reparar el arranque automatico, inicia sesion con Git Credential Manager para GitHub o configura `FAMIMUEBLES_GITHUB_TOKEN` como variable de usuario, y ejecuta una vez `.\install-cloudflared-autostart.ps1`. El instalador crea la tarea programada y un acceso directo de inicio de sesion como respaldo; el supervisor espera al servidor, reintenta si la red/DNS falla, comprueba la salud publica y actualiza en GitHub la URL del tunel. El acceso al sitio estatico sigue disponible aunque el computador o el tunel esten apagados, pero las funciones que requieren el backend solo operan cuando el tunel esta activo.
 
@@ -43,9 +45,9 @@ En Sistecrédito, la cartera se inicia con el saldo conciliado de $69.010.597 al
 
 ### Cliente API local y produccion
 
-Las llamadas del frontend pasan por `js/services/api-client.js`. La URL se configura en un unico lugar, `js/config.js`: usa automaticamente `http://127.0.0.1:8024/api` para que la interfaz local y la publicada puedan conectarse al backend que corre en este equipo. Una URL HTTPS publica debe definirse explicitamente mediante `FAMIMUEBLES_API_BASE_URL`; no se deben poner credenciales en ese archivo.
+Las llamadas del frontend pasan por `js/services/api-client.js`. La URL se configura en `js/config.js`: en local usa `http://127.0.0.1:8024/api`; en GitHub Pages consulta `tunnel-url.json` y verifica `/api/health` antes de conectar. Si el tunel no responde, la vista publica abre el modo de demostracion y no queda bloqueada en el inicio de sesion. No se deben poner credenciales en la configuracion del frontend.
 
-Para una API publicada, establece `FAMIMUEBLES_API_BASE_URL` antes de cargar `app-v3.js` o reemplaza el valor de configuracion por la URL HTTPS real del backend. En el servidor define `FAMIMUEBLES_ALLOWED_ORIGINS` con una lista separada por comas, por ejemplo `https://famimuebles16.github.io,http://127.0.0.1:8024`, y conserva `POSTGRES_PASSWORD` unicamente como secreto del entorno. PostgreSQL no debe exponerse a Internet: la API debe accederlo por red privada o mediante un tunel seguro.
+Para una API publicada, establece `FAMIMUEBLES_API_BASE_URL` antes de cargar `app-v3.js`, o actualiza `tunnel-url.json` con la URL HTTPS vigente del backend. En el servidor define `FAMIMUEBLES_ALLOWED_ORIGINS` con una lista separada por comas, por ejemplo `https://famimuebles16.github.io,http://127.0.0.1:8024`, y conserva `POSTGRES_PASSWORD` unicamente como secreto del entorno. PostgreSQL no debe exponerse a Internet: la API debe accederlo por red privada o mediante un tunel seguro.
 
 Los reportes de la pantalla Reportes se descargan como PDF mediante `/api/report-pdf/<coleccion>.pdf`. La ruta `#paridad` tambien consulta disponibilidad, inventario bajo, Sistecrédito, gastos, gasolina e historial por empleado mediante `/api/parity/report/<nombre>`. El generador usa ReportLab y el diseno de FAMIMUEBLES con encabezado, fecha, local, usuario, tarjetas de resumen, tabla con filas alternadas y pie de pagina. La dependencia esta fijada en `requirements.txt`.
 

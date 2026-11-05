@@ -74,6 +74,49 @@ assert.deepEqual(
   [16009],
   'a stale consecutive baseline must not hide an unregistered invoice before the current number'
 );
+const telegramAndErpSales = [
+  { factura: '16102', local_origen: 'INV FUTURO', origen: 'telegram' },
+  { factura: '16104', tipo_documento: 'Remisión', local_origen: 'INV FUTURO', origen: 'telegram' },
+  { invoiceNumber: '16106', documentType: 'REMISION', storeId: 'INV FUTURO', origen: 'ERP' },
+  { invoiceNumber: '16107', documentType: 'REMISION', storeId: 'INV FUTURO', origen: 'ERP' },
+];
+const telegramAndErpTalonario = {
+  id: 'TELEGRAM-ERP-16101',
+  type: 'REMISION',
+  startNumber: 16101,
+  endNumber: 16150,
+  currentNumber: 16107,
+  consecutiveBaseline: 16105,
+  storeId: 'INV FUTURO',
+  destinationName: 'INV FUTURO',
+  status: 'EN_USO',
+};
+assert.deepEqual(
+  talonarioSalesDocuments(telegramAndErpTalonario, telegramAndErpSales),
+  [16102, 16104, 16106, 16107],
+  'invoice records from Telegram and ERP field formats should be recognized for the assigned local'
+);
+assert.deepEqual(
+  missingTalonarioNumbers(telegramAndErpTalonario, telegramAndErpSales),
+  [16103, 16105],
+  'missing invoices should start from recorded movement evidence, not a stale baseline'
+);
+const trackingBoundaryTalonario = {
+  ...telegramAndErpTalonario,
+  id: 'TRACKING-BOUNDARY-16201',
+  startNumber: 16201,
+  endNumber: 16250,
+  currentNumber: 16208,
+  consecutiveBaseline: 16205,
+};
+assert.deepEqual(
+  missingTalonarioNumbers(trackingBoundaryTalonario, [
+    { factura: '16207', local_origen: 'INV FUTURO', origen: 'telegram' },
+    { invoiceNumber: '16208', storeId: 'INV FUTURO', documentType: 'REMISION', origen: 'ERP' },
+  ]),
+  [16206],
+  'when no earlier movement is recorded, missing invoices should be counted from the saved tracking boundary'
+);
 const annulled16009 = {
   id: 'JUST-16009',
   talonarioId: crr5556Talonario.id,
@@ -130,14 +173,52 @@ const receiptTalonario = {
   status: 'EN_USO',
 };
 const renderedTalonarios = renderTalonarios({
-  talonarios: [receiptTalonario, historicalTalonario],
+  talonarios: [receiptTalonario, { ...historicalTalonario, status: 'EN_USO' }],
   sales: [
     { invoiceNumber: '7001', documentType: 'RECIBO', storeId: 'INV FUTURO' },
     ...historicalSales,
   ],
 });
-assert.match(renderedTalonarios, /Recibos/, 'the active summary should include receipt talonarios');
+const availableInvoicesSummary = renderedTalonarios.match(/<section class="panel talonarios-summary">([\s\S]*?)<\/section>/)?.[1] || '';
+assert.match(availableInvoicesSummary, /Remisiones/, 'the active summary should include remision talonarios');
+assert.doesNotMatch(availableInvoicesSummary, /Recibos|RECEIPT-ACTIVE|7001/, 'the active summary should not include receipt talonarios');
+assert.match(renderedTalonarios, /Recibos/, 'receipt talonarios should remain visible in the history');
 assert.match(renderedTalonarios, /data-talonario-id="HISTORICAL-2001" data-talonario-number="2002"/, 'historical missing invoices should link to the talonario they belong to');
+const previousRange = {
+  id: 'PREVIOUS-2001',
+  type: 'REMISION',
+  startNumber: 2001,
+  endNumber: 2050,
+  currentNumber: 2008,
+  storeId: 'INV FUTURO',
+  destinationName: 'INV FUTURO',
+  status: 'TERMINADO',
+};
+const currentRange = {
+  id: 'CURRENT-2051',
+  type: 'REMISION',
+  startNumber: 2051,
+  endNumber: 2100,
+  currentNumber: 2054,
+  storeId: 'INV FUTURO',
+  destinationName: 'INV FUTURO',
+  status: 'EN_USO',
+};
+const currentOnlyMissingView = renderTalonarios({
+  talonarios: [previousRange, currentRange],
+  sales: [
+    { invoiceNumber: '2001', documentType: 'REMISION', storeId: 'INV FUTURO' },
+    { invoiceNumber: '2003', documentType: 'REMISION', storeId: 'INV FUTURO' },
+    { invoiceNumber: '2051', documentType: 'REMISION', storeId: 'INV FUTURO' },
+    { invoiceNumber: '2053', documentType: 'REMISION', storeId: 'INV FUTURO' },
+  ],
+});
+const currentOnlySummary = currentOnlyMissingView.match(/<section class="panel talonarios-summary">([\s\S]*?)<\/section>/)?.[1] || '';
+const currentOnlyHistory = currentOnlyMissingView.match(/<h3>Historial por local<\/h3>([\s\S]*?)<\/section>/)?.[1] || '';
+assert.match(currentOnlySummary, /data-talonario-id="CURRENT-2051" data-talonario-number="2052"/, 'the available-invoices summary should show missing invoices from the current range');
+assert.doesNotMatch(currentOnlySummary, /2002/, 'the available-invoices summary should not show missing invoices from a previous range');
+assert.doesNotMatch(currentOnlyHistory, /data-talonario-id="PREVIOUS-2001"/, 'the previous range should not show missing invoices in the history');
+assert.match(currentOnlyHistory, /data-talonario-id="CURRENT-2051" data-talonario-number="2052"/, 'the current range should show its missing invoices in the history');
 assert.deepEqual(
   missingTalonarioNumbersForLocal(
     { ...manablancaTalonario, startNumber: 15851, endNumber: 15900, storeId: 'INV CARTAGENITA II', destinationName: 'INV CARTAGENITA II' },

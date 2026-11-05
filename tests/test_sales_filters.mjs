@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { filterSales, findMatchingSaleCustomer, salesSellers, salesSummary, salesTable, salesWithAnnulledTalonarios } from '../js/modules/ventas.js';
+import { filterSales, findMatchingSaleCustomer, salesSellers, salesSummary, salesTable, salesWithAnnulledTalonarios, upsertSaleRecord } from '../js/modules/ventas.js';
 
 const sales = [
   { id: 'SEP-1', date: '2026-09-15', storeId: 'Local Norte', paymentMethod: 'Efectivo', seller: 'USR-1', status: 'Completada' },
@@ -22,6 +22,28 @@ assert.deepEqual(
   filterSales(sales, { month: '2026-09' }).map(sale => sale.id),
   ['SEP-1', 'SEP-2'],
   'month filter should retain sales from all locals in the selected month'
+);
+
+const registeredSale = {
+  id: 1304,
+  invoiceNumber: '16052',
+  customer: 'Cliente nuevo',
+  storeId: 'INV CRR 5 5 56',
+  date: '2026-11-04',
+  paymentMethod: 'Efectivo',
+  total: 25000,
+  status: 'Completada',
+};
+const salesAfterRegistration = upsertSaleRecord(sales, registeredSale);
+assert.deepEqual(
+  filterSales(salesAfterRegistration, { month: '2026-11' }).map(sale => String(sale.id)),
+  ['1304'],
+  'a confirmed sale should appear immediately in its month without reloading catalog state'
+);
+assert.equal(
+  upsertSaleRecord(salesAfterRegistration, { ...registeredSale, total: 26000 }).length,
+  salesAfterRegistration.length,
+  'refreshing a confirmed sale should update it without creating a duplicate row'
 );
 
 assert.deepEqual(

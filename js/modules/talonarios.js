@@ -436,7 +436,7 @@ export function renderTalonarios(state) {
     return (!talonarioFilters.query || haystack.includes(talonarioFilters.query.toLowerCase())) && (talonarioFilters.type === 'all' || type === talonarioFilters.type) && (talonarioFilters.status === 'all' || status === talonarioFilters.status) && (talonarioFilters.store === 'all' || store === talonarioFilters.store);
   });
   const central = filteredItems.filter(item => isCentralStore(item) && String(item.status || 'ALMACENADO') === 'ALMACENADO');
-  const activeItems = items.filter(item => String(item.status || '').toUpperCase() === 'EN_USO' && isCurrentActiveRange(item, items));
+  const activeItems = items.filter(item => String(item.type || '').toUpperCase() === 'REMISION' && String(item.status || '').toUpperCase() === 'EN_USO' && isCurrentActiveRange(item, items));
   const sales = state?.sales || state?.ventas || [];
   const justifications = state?.talonarioJustifications || [];
   const summaryMap = new Map();

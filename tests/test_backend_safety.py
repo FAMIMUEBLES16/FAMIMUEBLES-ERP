@@ -7,10 +7,15 @@ from decimal import Decimal
 from unittest.mock import patch
 
 import server
-from server import _create_shared_credit_record, _create_shared_sale, _sistecredito_sale_amount_record, _shared_domain_items, canonical_request_hash, password_hash, password_matches, specialized_xlsx, sync_shared_entry_payable
+from server import _create_shared_credit_record, _create_shared_sale, _sistecredito_sale_amount_record, _shared_domain_items, canonical_request_hash, optional_customer_document, password_hash, password_matches, specialized_xlsx, sync_shared_entry_payable
 
 
 class BackendSafetyTests(unittest.TestCase):
+    def test_blank_customer_documents_are_saved_as_null(self):
+        self.assertIsNone(optional_customer_document(""))
+        self.assertIsNone(optional_customer_document("   "))
+        self.assertEqual(optional_customer_document("  12345  "), "12345")
+
     def test_editing_shared_entry_as_credit_creates_payable(self):
         class FakeResult:
             def __init__(self, row=None, rows=None):

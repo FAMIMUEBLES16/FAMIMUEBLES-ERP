@@ -3,16 +3,16 @@ Option Explicit
 Dim shell
 Dim fileSystem
 Dim root
-Dim pythonw
 Dim python
 Dim server
 Dim logPath
 Dim logFile
+Dim command
+Dim exitCode
 
 Set shell = CreateObject("WScript.Shell")
 Set fileSystem = CreateObject("Scripting.FileSystemObject")
 root = fileSystem.GetParentFolderName(WScript.ScriptFullName)
-pythonw = root & "\.venv\Scripts\pythonw.exe"
 python = root & "\.venv\Scripts\python.exe"
 server = root & "\server.py"
 logPath = root & "\logs\server-startup.log"
@@ -25,20 +25,23 @@ Sub WriteLog(message)
     On Error GoTo 0
 End Sub
 
-If Not fileSystem.FileExists(pythonw) Then
-    If fileSystem.FileExists(python) Then
-        pythonw = python
-        WriteLog "pythonw.exe no existe; se usara python.exe"
-    Else
-        WriteLog "No se encontro el interprete: " & pythonw
-        WScript.Quit 0
-    End If
+If Not fileSystem.FolderExists(root & "\logs") Then
+    fileSystem.CreateFolder(root & "\logs")
+End If
+If Not fileSystem.FileExists(python) Then
+    WriteLog "No se encontro el interprete: " & python
+    WScript.Quit 2
 End If
 If Not fileSystem.FileExists(server) Then
     WriteLog "No se encontro el servidor: " & server
-    WScript.Quit 0
+    WScript.Quit 2
 End If
 
 shell.CurrentDirectory = root
-shell.Run Chr(34) & pythonw & Chr(34) & " " & Chr(34) & server & Chr(34), 0, False
-WriteLog "Servidor solicitado en segundo plano"
+command = Chr(34) & python & Chr(34) & " -u " & Chr(34) & server & Chr(34)
+Do
+    WriteLog "Iniciando servidor oculto"
+    exitCode = shell.Run(command, 0, True)
+    WriteLog "Servidor finalizo con codigo " & exitCode & "; reintentando en 30 segundos"
+    WScript.Sleep 30000
+Loop
