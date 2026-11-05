@@ -450,7 +450,8 @@ export function renderTalonarios(state) {
     const activeRange = activeRanges[0] || item;
     const current = currentTalonarioNumber(activeRange, sales);
     const remaining = Math.max(0, Number(activeRange.endNumber) - current);
-    const missing = missingTalonarioEntriesForLocal(item, items, sales, justifications);
+    const missing = missingTalonarioNumbers(activeRange, sales, justifications)
+      .map(number => ({ talonarioId: String(activeRange.id), number }));
     const missingHtml = missing.length ? `<div class="talonario-missing-list">${missing.map(({ talonarioId, number }) => `<button type="button" class="table-action danger-text" data-action="justify-talonario-number" data-talonario-id="${talonarioId}" data-talonario-number="${number}">${numberLabel(number)}</button>`).join(' ')}</div>` : '<span class="muted">Ninguna</span>';
     const annulled = justifiedTalonarioDocuments(items, justifications).filter(document =>
       document.reason.toUpperCase() === 'ANULADA'
@@ -471,7 +472,10 @@ export function renderTalonarios(state) {
   const centralRows = central.map(item => `<tr><td>${labelType(item.type)}</td><td><strong>${range(item)}</strong></td><td>${item.supplierName || 'MISELANEA PAPELERIA'}</td><td>${badge(item.status || 'ALMACENADO')}</td><td><button class="table-action" data-action="send-talonario" data-talonario-id="${item.id}">Enviar</button></td></tr>`);
   const localRows = deduplicateTalonarioHistory(filteredItems.filter(item => !isCentralStore(item) && String(item.status || '').toUpperCase() !== 'ALMACENADO')).sort((left, right) => Number(right.startNumber || 0) - Number(left.startNumber || 0)).map(item => {
     const storeId = String(item.destinationName || item.storeId || 'Sin local');
-    const missing = missingTalonarioEntriesForLocal(item, [item], sales, justifications);
+    const isActiveRange = String(item.status || '').toUpperCase() === 'EN_USO' && isCurrentActiveRange(item, items);
+    const missing = isActiveRange
+      ? missingTalonarioNumbers(item, sales, justifications).map(number => ({ talonarioId: String(item.id), number }))
+      : [];
     const missingHtml = missing.length
       ? `<div class="talonario-missing-list">${missing.map(({ talonarioId, number }) => `<button type="button" class="table-action danger-text" data-action="justify-talonario-number" data-talonario-id="${talonarioId}" data-talonario-number="${number}">${numberLabel(number)}</button>`).join(' ')}</div>`
       : '<span class="muted">Ninguna</span>';
