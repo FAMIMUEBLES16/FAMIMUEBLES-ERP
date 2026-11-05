@@ -492,12 +492,14 @@ def _initialize_postgres_schema() -> _PostgresConnection:
     database.execute("ALTER TABLE locales ADD COLUMN IF NOT EXISTS direccion TEXT NOT NULL DEFAULT ''")
     database.execute("ALTER TABLE locales ADD COLUMN IF NOT EXISTS telefono TEXT NOT NULL DEFAULT ''")
     database.execute("ALTER TABLE productos ADD COLUMN IF NOT EXISTS precio_venta BIGINT NOT NULL DEFAULT 0")
-    database.execute("CREATE TABLE IF NOT EXISTS clientes (id BIGSERIAL PRIMARY KEY, tenant_id TEXT NOT NULL DEFAULT 'tenant-default', external_id TEXT, nombre TEXT NOT NULL, documento TEXT NOT NULL DEFAULT '', telefono TEXT NOT NULL DEFAULT '', direccion TEXT NOT NULL DEFAULT '', email TEXT NOT NULL DEFAULT '', estado TEXT NOT NULL DEFAULT 'Activo', created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)")
+    database.execute("CREATE TABLE IF NOT EXISTS clientes (id BIGSERIAL PRIMARY KEY, tenant_id TEXT NOT NULL DEFAULT 'tenant-default', external_id TEXT, nombre TEXT NOT NULL, documento TEXT DEFAULT '', telefono TEXT NOT NULL DEFAULT '', direccion TEXT NOT NULL DEFAULT '', email TEXT NOT NULL DEFAULT '', estado TEXT NOT NULL DEFAULT 'Activo', created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)")
     database.execute("ALTER TABLE clientes ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT 'tenant-default'")
     database.execute("ALTER TABLE clientes ADD COLUMN IF NOT EXISTS external_id TEXT")
     database.execute("ALTER TABLE clientes ADD COLUMN IF NOT EXISTS email TEXT NOT NULL DEFAULT ''")
     database.execute("ALTER TABLE clientes ADD COLUMN IF NOT EXISTS estado TEXT NOT NULL DEFAULT 'Activo'")
     database.execute("ALTER TABLE clientes ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP")
+    database.execute("ALTER TABLE clientes ALTER COLUMN documento DROP NOT NULL")
+    database.execute("UPDATE clientes SET documento = NULL WHERE BTRIM(COALESCE(documento, '')) = ''")
     database.execute("CREATE INDEX IF NOT EXISTS idx_clientes_tenant_documento ON clientes(tenant_id, documento)")
     database.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_clientes_tenant_external ON clientes(tenant_id, external_id)")
     database.execute("""
@@ -655,6 +657,11 @@ def record_id(payload: dict) -> str:
     if not value:
         raise ValueError("El registro requiere un id")
     return value
+
+
+def optional_customer_document(value):
+    document = str(value or "").strip()
+    return document or None
 
 
 def match_purchase_payables(accounts, references, invoice, supplier_name):
@@ -1947,7 +1954,7 @@ def _shared_domain_items(database: _PostgresConnection, collection: str) -> list
     }
     if collection == "customers":
         canonical = database.execute(
-            "SELECT COALESCE(NULLIF(external_id, ''), 'CLI-' || id::text) AS id, nombre AS name, documento AS document, telefono AS phone, email, estado AS status FROM clientes WHERE tenant_id = %s ORDER BY nombre",
+            "SELECT COALESCE(NULLIF(external_id, ''), 'CLI-' || id::text) AS id, nombre AS name, COALESCE(documento, '') AS document, telefono AS phone, email, estado AS status FROM clientes WHERE tenant_id = %s ORDER BY nombre",
             (DEFAULT_TENANT,),
         ).fetchall()
         canonical_customers = [_with_frontend_aliases(dict(row)) for row in canonical]
@@ -4133,7 +4140,7 @@ class AppHandler(SimpleHTTPRequestHandler):
                         if not payload.get("closingAmount") and payload.get("closingAmount") != 0:
                             raise ValueError("El cierre de caja requiere valor de cierre")
                     if collection == "customers" and _postgres_enabled():
-                        customer_values = (str(payload.get("name") or payload.get("nombre") or "").strip(), str(payload.get("document") or payload.get("documento") or "").strip(), str(payload.get("phone") or payload.get("telefono") or "").strip(), str(payload.get("email") or "").strip(), str(payload.get("status") or payload.get("estado") or "Activo").strip())
+                        customer_values = (str(payload.get("name") or payload.get("nombre") or "").strip(), optional_customer_document(payload.get("document") or payload.get("documento")), str(payload.get("phone") or payload.get("telefono") or "").strip(), str(payload.get("email") or "").strip(), str(payload.get("status") or payload.get("estado") or "Activo").strip())
                         updated_customer = database.execute("UPDATE clientes SET nombre = %s, documento = %s, telefono = %s, email = %s, estado = %s, updated_at = CURRENT_TIMESTAMP WHERE tenant_id = %s AND external_id = %s", (*customer_values, current_tenant, identifier)).rowcount
                         if not updated_customer:
                             database.execute("INSERT INTO clientes (external_id, tenant_id, nombre, documento, telefono, email, estado) VALUES (%s, %s, %s, %s, %s, %s, %s)", (identifier, current_tenant, *customer_values))
