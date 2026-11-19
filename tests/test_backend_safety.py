@@ -603,10 +603,14 @@ class BackendSafetyTests(unittest.TestCase):
                 if query.startswith("INSERT INTO domain_records"):
                     tenant, identifier, serialized = params
                     item = json.loads(serialized)
-                    if self.fail_on_source_update and identifier == source["id"] and item["status"] == "ENVIADO":
+                    if self.fail_on_source_update and identifier != source["id"] and item["status"] == "EN_USO":
                         raise RuntimeError("fallo simulado al actualizar el origen")
                     self.records[identifier] = item
                     self.writes.append(identifier)
+                if query.startswith("DELETE FROM domain_records"):
+                    identifier = params[1]
+                    self.records.pop(identifier, None)
+                    self.writes.append(f"DELETE:{identifier}")
                 return FakeResult()
 
         def make_handler(database):
@@ -640,11 +644,11 @@ class BackendSafetyTests(unittest.TestCase):
         handler = make_handler(database)
         destination_id = f"TAL-{source['id']}-INVCRR5326"
         self.assertEqual(handler.response[0], 201, handler.response[1])
-        self.assertEqual(database.writes, [destination_id, source["id"]])
+        self.assertEqual(database.writes, [destination_id, f"DELETE:{source['id']}"])
         self.assertEqual(database.records[destination_id]["status"], "EN_USO")
         self.assertEqual(database.records[destination_id]["startNumber"], 16051)
         self.assertEqual(database.records[destination_id]["destinationStoreId"], "INV CRR 5 3 26")
-        self.assertEqual(database.records[source["id"]]["status"], "ENVIADO")
+        self.assertNotIn(source["id"], database.records)
 
         failing_database = FakeDatabase(fail_on_source_update=True)
         failed_handler = make_handler(failing_database)

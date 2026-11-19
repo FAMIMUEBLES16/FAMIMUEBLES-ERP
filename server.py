@@ -458,6 +458,36 @@ def _initialize_postgres_schema() -> _PostgresConnection:
     ]
     for statement in statements:
         database.execute(statement)
+    talonario_rows = database.execute(
+        "SELECT tenant_id, id, data_json FROM domain_records WHERE collection = 'talonarios'",
+    ).fetchall()
+    active_assignments = set()
+    sent_source_ids = []
+    for row in talonario_rows:
+        tenant = str(row["tenant_id"] if isinstance(row, dict) else row[0])
+        identifier = str(row["id"] if isinstance(row, dict) else row[1])
+        data_json = row["data_json"] if isinstance(row, dict) else row[2]
+        try:
+            item = json.loads(data_json or "{}")
+            talonario_key = (
+                tenant,
+                str(item.get("type") or "REMISION").upper(),
+                int(item.get("startNumber")),
+                int(item.get("endNumber")),
+            )
+        except (AttributeError, TypeError, ValueError, json.JSONDecodeError):
+            continue
+        status = str(item.get("status") or "").upper()
+        if status == "EN_USO":
+            active_assignments.add(talonario_key)
+        elif status == "ENVIADO":
+            sent_source_ids.append((tenant, identifier, talonario_key))
+    for tenant, identifier, talonario_key in sent_source_ids:
+        if talonario_key in active_assignments:
+            database.execute(
+                "DELETE FROM domain_records WHERE tenant_id = ? AND collection = 'talonarios' AND id = ?",
+                (tenant, identifier),
+            )
     if database.execute("SELECT to_regclass('public.gasolina')").fetchone()[0]:
         database.execute("ALTER TABLE gasolina ADD COLUMN IF NOT EXISTS local TEXT NOT NULL DEFAULT ''")
         database.execute("ALTER TABLE gasolina ADD COLUMN IF NOT EXISTS factura TEXT NOT NULL DEFAULT ''")
@@ -1028,85 +1058,15 @@ def send_talonario(database, tenant: str, source_id: str, destination_store_id: 
     }
     validate_talonario_assignment(database, tenant, destination_id, destination)
 
-    for item in (destination, source_update):
-        database.execute(
-            "INSERT INTO domain_records (tenant_id, collection, id, data_json, version) VALUES (?, 'talonarios', ?, ?, 1) "
-            "ON CONFLICT(tenant_id, collection, id) DO UPDATE SET data_json = excluded.data_json, version = domain_records.version + 1, updated_at = CURRENT_TIMESTAMP",
-            (tenant, item["id"], json.dumps(item, ensure_ascii=False, separators=(",", ":"))),
-        )
     database.execute(
-        "INSERT INTO audit_events (user_id, action, collection, record_id, data_json) VALUES (?, ?, ?, ?, ?)",
-        (user_id or None, "SEND", "talonarios", destination_id, json.dumps({"sourceId": source_id, "destination": destination_store_id}, ensure_ascii=False)),
+        "INSERT INTO domain_records (tenant_id, collection, id, data_json, version) VALUES (?, 'talonarios', ?, ?, 1) "
+        "ON CONFLICT(tenant_id, collection, id) DO UPDATE SET data_json = excluded.data_json, version = domain_records.version + 1, updated_at = CURRENT_TIMESTAMP",
+        (tenant, destination["id"], json.dumps(destination, ensure_ascii=False, separators=(",", ":"))),
     )
-    return source_update, destination
-
-
-def send_talonario(database, tenant: str, source_id: str, destination_store_id: str, destination_name: str, sent_at: str, user_id: str = "") -> tuple[dict, dict]:
-    source_id = str(source_id or "").strip()
-    destination_store_id = str(destination_store_id or "").strip()
-    destination_name = str(destination_name or "").strip()
-    if not source_id or not destination_store_id or not destination_name:
-        raise ValueError("Falta el talonario o el local de destino")
-
-    source_row = database.execute(
-        "SELECT data_json FROM domain_records WHERE tenant_id = ? AND collection = 'talonarios' AND id = ? FOR UPDATE",
+    database.execute(
+        "DELETE FROM domain_records WHERE tenant_id = ? AND collection = 'talonarios' AND id = ?",
         (tenant, source_id),
-    ).fetchone()
-    if not source_row:
-        raise ValueError("El talonario ya no existe en el almacen central")
-    source = json.loads(source_row[0])
-    if str(source.get("id") or "") != source_id:
-        raise ValueError("El talonario de origen no es valido")
-
-    destination_id = f"TAL-{source_id}-{talonario_local_key(destination_store_id)}"
-    status = str(source.get("status") or "").upper()
-    if status == "ENVIADO":
-        if talonario_local_key(source.get("destinationStoreId")) != talonario_local_key(destination_store_id):
-            raise ValueError("El talonario ya fue enviado a otro local")
-        existing_row = database.execute(
-            "SELECT data_json FROM domain_records WHERE tenant_id = ? AND collection = 'talonarios' AND id = ?",
-            (tenant, destination_id),
-        ).fetchone()
-        if existing_row:
-            return source, json.loads(existing_row[0])
-    elif status != "ALMACENADO":
-        raise ValueError("El talonario ya no esta disponible en el almacen central")
-
-    source_store = source.get("storeId") or source.get("destinationName") or "INV CRR 5 3 26"
-    if talonario_local_key(source_store) != talonario_local_key("INV CRR 5 3 26"):
-        raise ValueError("El talonario no pertenece al almacen central")
-    try:
-        start_number = int(source.get("startNumber"))
-        end_number = int(source.get("endNumber"))
-    except (TypeError, ValueError):
-        raise ValueError("El talonario requiere un rango numerico valido") from None
-    if end_number < start_number:
-        raise ValueError("El rango del talonario no es valido")
-
-    timestamp = str(sent_at or "").strip() or datetime.now(timezone.utc).isoformat()
-    source_update = {
-        **source,
-        "status": "ENVIADO",
-        "sentAt": timestamp,
-        "destinationStoreId": destination_store_id,
-    }
-    destination = {
-        **source_update,
-        "id": destination_id,
-        "storeId": destination_store_id,
-        "destinationName": destination_name,
-        "status": "EN_USO",
-        "currentNumber": start_number,
-        "sentFrom": source_store,
-    }
-    validate_talonario_assignment(database, tenant, destination_id, destination)
-
-    for item in (destination, source_update):
-        database.execute(
-            "INSERT INTO domain_records (tenant_id, collection, id, data_json, version) VALUES (?, 'talonarios', ?, ?, 1) "
-            "ON CONFLICT(tenant_id, collection, id) DO UPDATE SET data_json = excluded.data_json, version = domain_records.version + 1, updated_at = CURRENT_TIMESTAMP",
-            (tenant, item["id"], json.dumps(item, ensure_ascii=False, separators=(",", ":"))),
-        )
+    )
     database.execute(
         "INSERT INTO audit_events (user_id, action, collection, record_id, data_json) VALUES (?, ?, ?, ?, ?)",
         (user_id or None, "SEND", "talonarios", destination_id, json.dumps({"sourceId": source_id, "destination": destination_store_id}, ensure_ascii=False)),
@@ -2442,6 +2402,84 @@ def _sistecredito_sale_amount_record(payload: dict, sale_id: str, sale_date: str
     }
 
 
+def _update_talonario_for_sale(database, tenant: str, payload: dict) -> dict | None:
+    invoice_number = str(payload.get("invoiceNumber") or "").strip()
+    try:
+        document_number = int(invoice_number)
+    except (TypeError, ValueError):
+        return None
+    if document_number <= 0:
+        return None
+
+    talonario_type = "RECIBO" if str(payload.get("documentType") or "").upper() == "RECIBO" else "REMISION"
+    rows = database.execute(
+        "SELECT id, data_json FROM domain_records WHERE tenant_id = ? AND collection = 'talonarios'",
+        (tenant,),
+    ).fetchall()
+    candidates = []
+    for row in rows:
+        identifier = row["id"] if isinstance(row, dict) else row[0]
+        data_json = row["data_json"] if isinstance(row, dict) else row[1]
+        try:
+            item = json.loads(data_json) if isinstance(data_json, str) else data_json
+            start_number = int(item.get("startNumber"))
+            end_number = int(item.get("endNumber"))
+        except (AttributeError, TypeError, ValueError, json.JSONDecodeError):
+            continue
+        if (
+            str(item.get("type") or "REMISION").upper() == talonario_type
+            and str(item.get("status") or "").upper() == "EN_USO"
+            and start_number <= document_number <= end_number
+        ):
+            candidates.append((start_number, str(identifier), item))
+    if not candidates:
+        return None
+
+    _, identifier, item = max(candidates, key=lambda candidate: candidate[0])
+    if _postgres_enabled():
+        row = database.execute(
+            "SELECT data_json FROM domain_records WHERE tenant_id = ? AND collection = 'talonarios' AND id = ? FOR UPDATE",
+            (tenant, identifier),
+        ).fetchone()
+        if not row:
+            return None
+        data_json = row["data_json"] if isinstance(row, dict) else row[0]
+        item = json.loads(data_json) if isinstance(data_json, str) else data_json
+        try:
+            start_number = int(item.get("startNumber"))
+            end_number = int(item.get("endNumber"))
+        except (AttributeError, TypeError, ValueError):
+            return None
+        if (
+            str(item.get("type") or "REMISION").upper() != talonario_type
+            or str(item.get("status") or "").upper() != "EN_USO"
+            or not start_number <= document_number <= end_number
+        ):
+            return None
+
+    try:
+        previous_number = int(item.get("currentNumber") or item.get("startNumber"))
+    except (TypeError, ValueError):
+        previous_number = int(item["startNumber"])
+    if document_number > previous_number and "consecutiveBaseline" not in item:
+        item["consecutiveBaseline"] = previous_number
+    item["currentNumber"] = max(previous_number, document_number)
+    serialized = json.dumps(item, ensure_ascii=False, separators=(",", ":"))
+    if _postgres_enabled():
+        database.execute(
+            "UPDATE domain_records SET data_json = ?, version = version + 1, updated_at = CURRENT_TIMESTAMP "
+            "WHERE tenant_id = ? AND collection = 'talonarios' AND id = ?",
+            (serialized, tenant, identifier),
+        )
+    else:
+        database.execute(
+            "UPDATE domain_records SET data_json = ?, updated_at = CURRENT_TIMESTAMP "
+            "WHERE tenant_id = ? AND collection = 'talonarios' AND id = ?",
+            (serialized, tenant, identifier),
+        )
+    return item
+
+
 def _create_shared_sale(database: _PostgresConnection, payload: dict, user: dict, handler: "AppHandler") -> dict:
     """Registra una venta del ERP como movimiento del esquema del bot."""
     _, cached = claim_idempotency(database, handler, payload, "/api/catalog/sale")
@@ -2509,7 +2547,14 @@ def _create_shared_sale(database: _PostgresConnection, payload: dict, user: dict
         database.execute("INSERT INTO movimiento_productos (movimiento_id, codigo, descripcion, cantidad, precio_unitario, precio_total, entrada, salida) VALUES (%s, %s, %s, %s, %s, %s, 0, %s)", (movement_id, code, description, quantity, price, quantity * price, quantity))
     credit_record = _create_shared_credit_record(database, payload, movement_id, user, store_id, invoice_number, total)
     apartado_record = _create_shared_apartado_record(database, payload, user, store_id, invoice_number, normalized, total)
+    try:
+        has_numeric_invoice = int(invoice_number) > 0
+    except ValueError:
+        has_numeric_invoice = False
+    talonario = _update_talonario_for_sale(database, tenant_id(handler, payload), payload) if has_numeric_invoice else None
     result = {"id": movement_id, "total": total}
+    if talonario:
+        result["talonario"] = talonario
     if credit_record:
         result["creditId"] = credit_record["id"]
     if apartado_record:
@@ -3898,7 +3943,11 @@ class AppHandler(SimpleHTTPRequestHandler):
                         apart_id = f"APT-{sale_id}"
                         apart = {"id": apart_id, "saleId": sale_id, "customerId": payload.get("customerId"), "storeId": store_id, "total": total, "paid": 0, "status": "Activo", "items": items, "createdAt": payload.get("date")}
                         database.execute("INSERT INTO domain_records (tenant_id, collection, id, data_json) VALUES (?, ?, ?, ?)", (current_tenant, "apartados", apart_id, json.dumps(apart, ensure_ascii=False)))
-                self.send_json(201, {"ok": True, "id": sale_id, "total": total})
+                    talonario = _update_talonario_for_sale(database, current_tenant, payload)
+                response = {"ok": True, "id": sale_id, "total": total}
+                if talonario:
+                    response["talonario"] = talonario
+                self.send_json(201, response)
                 return
             if path == "/api/shared-payment":
                 kind = str(payload.get("kind", "")).lower()

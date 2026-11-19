@@ -328,7 +328,7 @@ export function deduplicateTalonarioHistory(items = []) {
   const statusPriority = { EN_USO: 3, ENVIADO: 2, TERMINADO: 1 };
   const unique = new Map();
   for (const item of items) {
-    const key = `${localGroupKey(item)}:${Number(item.startNumber)}:${Number(item.endNumber)}`;
+    const key = `${String(item.type || 'REMISION').toUpperCase()}:${Number(item.startNumber)}:${Number(item.endNumber)}`;
     const existing = unique.get(key);
     const priority = statusPriority[String(item.status || '').toUpperCase()] || 0;
     const existingPriority = statusPriority[String(existing?.status || '').toUpperCase()] || 0;

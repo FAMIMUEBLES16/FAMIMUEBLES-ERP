@@ -1,7 +1,8 @@
 import json
 import unittest
+from unittest.mock import patch
 
-from server import validate_talonario_assignment
+from server import _update_talonario_for_sale, validate_talonario_assignment
 
 
 class TalonarioAssignmentTests(unittest.TestCase):
@@ -71,6 +72,54 @@ class TalonarioAssignmentTests(unittest.TestCase):
         database = self.FakeDatabase([self.row(source_id, source)])
 
         validate_talonario_assignment(database, "tenant-default", destination_id, destination)
+
+    def test_sale_updates_talonario_consecutively_without_regressing(self):
+        class FakeResult:
+            def __init__(self, rows=None):
+                self.rows = rows or []
+
+            def fetchall(self):
+                return self.rows
+
+        class FakeDatabase:
+            def __init__(self, item):
+                self.item = item
+
+            def execute(self, query, params=()):
+                if query.startswith("SELECT id, data_json"):
+                    return FakeResult([(
+                        self.item["id"],
+                        json.dumps(self.item),
+                    )])
+                if query.startswith("UPDATE domain_records SET data_json"):
+                    self.item = json.loads(params[0])
+                    return FakeResult()
+                raise AssertionError(f"Unexpected query: {query}")
+
+        database = FakeDatabase({
+            "id": "TAL-90001",
+            "type": "REMISION",
+            "startNumber": 90001,
+            "endNumber": 90050,
+            "currentNumber": 90001,
+            "status": "EN_USO",
+        })
+        with patch("server._postgres_enabled", return_value=False):
+            first = _update_talonario_for_sale(
+                database,
+                "tenant-default",
+                {"invoiceNumber": "90005", "documentType": "REMISION"},
+            )
+            second = _update_talonario_for_sale(
+                database,
+                "tenant-default",
+                {"invoiceNumber": "90003", "documentType": "REMISION"},
+            )
+
+        self.assertEqual(first["currentNumber"], 90005)
+        self.assertEqual(first["consecutiveBaseline"], 90001)
+        self.assertEqual(second["currentNumber"], 90005)
+        self.assertEqual(database.item["currentNumber"], 90005)
 
 
 if __name__ == "__main__":

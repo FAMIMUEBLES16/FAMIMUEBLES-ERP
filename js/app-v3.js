@@ -331,24 +331,21 @@ function currentTalonarioFor(item, items){
 	const group=talonarioGroupKey(item);
 	return [...(items||[])].filter(candidate=>talonarioGroupKey(candidate)===group&&['EN_USO','ENVIADO'].includes(String(candidate.status||'').toUpperCase())).sort((left,right)=>Number(right.startNumber||0)-Number(left.startNumber||0))[0];
 }
-async function registerTalonarioSale(sale){
-	const documentNumber=Number(String(sale.invoiceNumber||'').trim());
-	if(!Number.isInteger(documentNumber)||documentNumber<=0)return;
-	const type=String(sale.documentType||'REMISION').toUpperCase()==='RECIBO'?'RECIBO':'REMISION';
-	const localId=String(sale.storeId||'').trim();
-	const talonario=(store.collection.talonarios||[]).filter(item=>String(item.type).toUpperCase()===type&&String(item.status||'').toUpperCase()==='EN_USO'&&documentNumber>=Number(item.startNumber)&&documentNumber<=Number(item.endNumber)).sort((left,right)=>Number(right.startNumber)-Number(left.startNumber))[0];
-	if(!talonario)return;
-	const localName=String(talonario.destinationName||talonario.storeId||localId);
-	const previousNumber=Number(talonario.currentNumber||talonario.startNumber);
-	if(documentNumber>previousNumber&&!Object.prototype.hasOwnProperty.call(talonario,'consecutiveBaseline'))talonario.consecutiveBaseline=previousNumber;
-	talonario.currentNumber=Math.max(previousNumber,documentNumber);
-	await persistDomainRecord('talonarios',talonario);
-	const remaining=Number(talonario.endNumber)-documentNumber;
+function registerTalonarioSale(talonario){
+	if(!talonario?.id)return;
+	const talonarios=store.collection.talonarios||[];
+	const index=talonarios.findIndex(item=>String(item.id)===String(talonario.id));
+	if(index<0)talonarios.push(talonario);
+	else talonarios[index]={...talonarios[index],...talonario};
+	store.collection.talonarios=talonarios;
+	const localName=String(talonario.destinationName||talonario.storeId||'Sin local');
+	const type=String(talonario.type||'REMISION').toUpperCase();
+	const remaining=Number(talonario.endNumber)-Number(talonario.currentNumber);
 	if(remaining<3&&remaining>=0){
 		if(!Array.isArray(store.collection.notifications))store.collection.notifications=[];
-			const today=localDateValue();
-			const key=`talonario-venta-bajo:${talonario.id}:${today}`;
-			if(!store.collection.notifications.some(item=>item.key===key))store.collection.notifications.push({id:`NOT-TAL-VENTA-${talonario.id}-${today}`,key,text:`Alerta: al talonario de ${type==='RECIBO'?'recibos':'remisiones'} ${talonario.startNumber} - ${talonario.endNumber} del local ${localName} le quedan ${remaining} documentos. Envia un talonario nuevo.`,type:'warning',action:'talonarios',targetId:talonario.id,createdAt:new Date().toISOString(),read:false});
+		const today=localDateValue();
+		const key=`talonario-venta-bajo:${talonario.id}:${today}`;
+		if(!store.collection.notifications.some(item=>item.key===key))store.collection.notifications.push({id:`NOT-TAL-VENTA-${talonario.id}-${today}`,key,text:`Alerta: al talonario de ${type==='RECIBO'?'recibos':'remisiones'} ${talonario.startNumber} - ${talonario.endNumber} del local ${localName} le quedan ${remaining} documentos. Envia un talonario nuevo.`,type:'warning',action:'talonarios',targetId:talonario.id,createdAt:new Date().toISOString(),read:false});
 	}
 	store.save();
 }
@@ -1301,12 +1298,7 @@ async function finishSale(){
 	if(currentRoute()==='facturacion')render();
 	else if(currentRoute()==='ventas')applySalesFilters();
 	showToast('Venta creada correctamente con el backend transaccional.');
-	try{
-		await registerTalonarioSale(salePayload);
-	}catch(error){
-		console.warn('La venta se registro, pero no se pudo actualizar el talonario:',error.message);
-		showToast(`La venta quedó registrada, pero no se actualizó el talonario: ${error.message}`,'error');
-	}
+	registerTalonarioSale(createdSale.talonario);
 	try{
 		await hydrateCatalog(store.state,false,true);
 		if(currentRoute()==='ventas')applySalesFilters();
