@@ -11,34 +11,59 @@ export function searchProducts(state, query = '') {
   return state.products.filter(product => [product.name, product.code, product.barcode, product.reference, product.category, product.categoryName, product.subcategory, product.subcategoryName, product.brand, product.supplierName].some(value => String(value || '').toLocaleLowerCase().includes(normalized)));
 }
 export function validateProduct(state, values, currentId = null) {
+  const currentProduct = currentId === null ? null : getProductById(state, currentId);
   const name = String(values.name || '').trim();
   const code = String(values.code || '').trim();
   const cost = Number(values.cost ?? 0);
   const statedPrice = Number(values.price ?? values.salePrice ?? 0);
-  const servicePrice = Number.isFinite(statedPrice) && statedPrice > 0 ? statedPrice : 0;
-  const price = Number.isFinite(servicePrice) ? servicePrice : 0;
+  const price = Number.isFinite(statedPrice) ? statedPrice : NaN;
+  const minimumPrice = Number(values.minimumPrice ?? currentProduct?.minimumPrice ?? 0);
   const minimum = Number(values.minimum ?? values.minStock ?? 0);
   const maximum = Number(values.maximum ?? values.maxStock ?? minimum * 3);
   if (!name) throw new Error('El nombre del producto es obligatorio.');
   if (!code) throw new Error('El codigo del producto es obligatorio.');
   if (state.products.some(product => product.id !== currentId && String(product.code).toLowerCase() === code.toLowerCase())) throw new Error('Ya existe un producto con ese codigo.');
-  if (!Number.isFinite(price) || price < 0 || !Number.isFinite(cost) || cost < 0) throw new Error('Costo y precio deben ser numeros validos.');
+  if (!Number.isFinite(price) || price < 0 || !Number.isFinite(cost) || cost < 0 || !Number.isFinite(minimumPrice) || minimumPrice < 0) throw new Error('Costo, precio y precio minimo deben ser numeros validos.');
+  if (price < minimumPrice) throw new Error('El precio de venta no puede ser menor al precio minimo configurado.');
   if (!Number.isInteger(minimum) || minimum < 0 || !Number.isInteger(maximum) || maximum < minimum) throw new Error('Los stocks minimo y maximo no son validos.');
   const iva = Number(values.iva ?? 0);
   if (!Number.isFinite(iva) || iva < 0 || iva > 100) throw new Error('El IVA debe estar entre 0 y 100.');
   if (Number(values.specialPrice ?? 0) < 0) throw new Error('El precio especial no puede ser negativo.');
-  return { ...values, name, code, price, salePrice:price, cost, minimum, minStock:minimum, maximum, maxStock:maximum, iva, specialPrice:Number(values.specialPrice ?? 0), minimumPrice:Math.max(price * 0.8, cost || 0) };
+  return { ...values, name, code, price, salePrice:price, cost, minimum, minStock:minimum, maximum, maxStock:maximum, iva, specialPrice:Number(values.specialPrice ?? 0), minimumPrice };
 }
 export function createProduct(state, values) {
   const code = String(values.code || '').trim() || nextProductCode(state);
   const clean = validateProduct(state, { ...values, code });
-    const product = { id:generateId('PROD', state.products), code:clean.code, barcode:String(clean.barcode || ''), reference:String(clean.reference || clean.code), name:clean.name, description:String(clean.description || ''), category:String(clean.category || categoryFromProductName(clean.name)), categoryName:String(clean.category || categoryFromProductName(clean.name)), subcategory:String(clean.subcategory || ''), subcategoryName:String(clean.subcategory || ''), brand:String(clean.brand || ''), supplierId:String(clean.supplierId || ''), supplierName:String(clean.supplierName || ''), cost:clean.cost, price:clean.price, salePrice:clean.salePrice, specialPrice:Number(clean.specialPrice || 0), iva:clean.iva, minimumPrice:clean.price, minimum:clean.minimum, minStock:clean.minStock, maximum:clean.maximum, maxStock:clean.maxStock, ideal:clean.maximum, image:String(clean.image || ''), active:clean.active !== false, activo:clean.active !== false, estado:'Activo', createdAt:new Date().toISOString(), updatedAt:new Date().toISOString(), stock:0, storeId:clean.storeId || state.stores[0]?.id };
+    const product = { id:generateId('PROD', state.products), code:clean.code, barcode:String(clean.barcode || ''), reference:String(clean.reference || clean.code), name:clean.name, description:String(clean.description || ''), category:String(clean.category || categoryFromProductName(clean.name)), categoryName:String(clean.category || categoryFromProductName(clean.name)), subcategory:String(clean.subcategory || ''), subcategoryName:String(clean.subcategory || ''), brand:String(clean.brand || ''), supplierId:String(clean.supplierId || ''), supplierName:String(clean.supplierName || ''), cost:clean.cost, price:clean.price, salePrice:clean.salePrice, specialPrice:Number(clean.specialPrice || 0), iva:clean.iva, minimumPrice:clean.minimumPrice, minimum:clean.minimum, minStock:clean.minStock, maximum:clean.maximum, maxStock:clean.maxStock, ideal:clean.maximum, image:String(clean.image || ''), active:clean.active !== false, activo:clean.active !== false, estado:'Activo', createdAt:new Date().toISOString(), updatedAt:new Date().toISOString(), stock:0, storeId:clean.storeId || state.stores[0]?.id };
   state.products.push(product);
   state.stores.forEach(store => ensureInventoryEntry(state, product.id, store.id));
   notifyCreation(state, 'products', product);
   return product;
 }
 function nextProductCode(state) { const numericCodes=state.products.map(product=>String(product.code||'').trim()).filter(code=>/^\d+$/.test(code)); if(numericCodes.length){const current=numericCodes.reduce((highest,code)=>Number(code)>highest.number?{number:Number(code),width:code.length}:highest,{number:0,width:numericCodes[0].length});return String(current.number+1).padStart(current.width,'0');} const highest=state.products.reduce((max,product)=>{const match=String(product.code||'').match(/^PROD-(\d+)$/i);return match ? Math.max(max,Number(match[1])) : max;},0); return `PROD-${String(highest + 1).padStart(5,'0')}`; }
-export function updateProduct(state, productId, values) { const product=getProductById(state,productId); if (!product) throw new Error('Producto no encontrado.'); const clean=validateProduct(state,values,productId); const active=Object.hasOwn(values,'active') ? values.active !== false : product.active !== false; Object.assign(product,clean,{categoryName:clean.category,subcategoryName:clean.subcategory,price:clean.price,salePrice:clean.salePrice,minimumPrice:clean.price,specialPrice:clean.specialPrice,updatedAt:new Date().toISOString(),active,activo:active,estado:active ? 'Activo' : 'Inactivo'}); return product; }
+function parseCopPrice(value, label) {
+  const raw = String(value ?? '').trim();
+  if (!/^(?:\d+|\d{1,3}(?:\.\d{3})+)$/.test(raw)) {
+    throw new Error(`${label} debe ser un valor válido en pesos colombianos, sin decimales ni negativos.`);
+  }
+  const amount = Number(raw.replaceAll('.', ''));
+  if (!Number.isSafeInteger(amount)) throw new Error(`${label} excede el valor permitido.`);
+  return amount;
+}
+export function updateProductPricing(state, productId, values) {
+  const product = getProductById(state, productId);
+  if (!product) throw new Error('Producto no encontrado.');
+  const price = parseCopPrice(values.price, 'El precio de venta');
+  const minimumPrice = parseCopPrice(values.minimumPrice, 'El precio mínimo');
+  if (price < minimumPrice) throw new Error('El precio de venta no puede ser menor al precio mínimo configurado.');
+  Object.assign(product, {
+    price,
+    salePrice: price,
+    minimumPrice,
+    updatedAt: new Date().toISOString(),
+  });
+  return product;
+}
+export function updateProduct(state, productId, values) { const product=getProductById(state,productId); if (!product) throw new Error('Producto no encontrado.'); const clean=validateProduct(state,values,productId); const active=Object.hasOwn(values,'active') ? values.active !== false : product.active !== false; Object.assign(product,clean,{categoryName:clean.category,subcategoryName:clean.subcategory,price:clean.price,salePrice:clean.salePrice,specialPrice:clean.specialPrice,updatedAt:new Date().toISOString(),active,activo:active,estado:active ? 'Activo' : 'Inactivo'}); return product; }
 export function setProductActive(state, productId, active) { const product=getProductById(state,productId); if (!product) throw new Error('Producto no encontrado.'); product.active=active; product.activo=active; product.estado=active?'Activo':'Inactivo'; product.updatedAt=new Date().toISOString(); return product; }
 export function generateTestProducts(state, count) { const products=[]; for (let index=0; index<count; index += 1) { const code=`TEST-${String(index + 1).padStart(5,'0')}`; if (state.products.some(product=>product.code===code)) continue; products.push(createProduct(state,{name:`Producto de prueba ${index + 1}`,code,reference:code,category:'Prueba',price:100000,cost:50000,minimum:1,maximum:5,active:true})); } return products; }

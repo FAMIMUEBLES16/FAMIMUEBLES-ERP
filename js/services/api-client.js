@@ -33,11 +33,12 @@ function authHeaders() {
 }
 
 export class ApiError extends Error {
-  constructor(message, status = 0, code = 'API_ERROR') {
+  constructor(message, status = 0, code = 'API_ERROR', details = null) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
     this.code = code;
+    this.details = details;
   }
 }
 
@@ -45,7 +46,7 @@ async function parseResponse(response) {
   const contentType = response.headers.get('content-type') || '';
   if (contentType.includes('application/json')) {
     const payload = await response.json();
-    if (!response.ok) throw new ApiError(payload.error || 'La API rechazo la solicitud.', response.status, 'HTTP_ERROR');
+    if (!response.ok) throw new ApiError(payload.error || 'La API rechazo la solicitud.', response.status, 'HTTP_ERROR', payload);
     return payload;
   }
   const text = await response.text();

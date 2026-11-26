@@ -4,10 +4,10 @@ function showTransferDetail(transferId){const transfer=transferRecord(transferId
 function editTransfer(transferId){const transfer=transferRecord(transferId);if(!transfer)return showToast('No se encontro el traslado.','error');$('#modal-root').innerHTML=`<div class="modal-backdrop"><form class="modal" id="transfer-edit-form"><button type="button" class="modal-close">×</button><p class="eyebrow">INVENTARIO</p><h2>Editar traslado</h2><textarea class="field" name="data" rows="12" required>${JSON.stringify(transfer,null,2)}</textarea><button class="primary wide">Guardar cambios</button></form></div>`;$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';$('#transfer-edit-form').onsubmit=async event=>{event.preventDefault();try{const updated=JSON.parse(new FormData(event.target).get('data'));if(String(updated.id)!==String(transfer.id))throw new Error('El ID no puede cambiarse.');await persistDomainRecord('transfers',updated);store.collection.transfers=[...(store.collection.transfers||[]).filter(item=>String(item.id)!==String(updated.id)),updated];$('#modal-root').innerHTML='';render();showToast('Traslado actualizado correctamente.');}catch(error){showToast(error.message,'error');}};}
 async function deleteTransferRemote(transferId){if(!window.confirm('¿Eliminar este traslado?'))return;try{await persistCatalogRecord(`/api/domain/transfers/${encodeURIComponent(transferId)}`,{},'DELETE');store.collection.transfers=(store.collection.transfers||[]).filter(item=>String(item.id)!==String(transferId));$('#modal-root').innerHTML='';render();showToast('Traslado eliminado correctamente.');}catch(error){showToast(error.message,'error');}}
 import { store } from './data/store.js?v=20';
-import { hydrateState, hydrateStateWithRetry, hydrateCatalog, saveState, authHeaders, activeTenantId, isStaticDeployment } from './data/storage.js?v=29';
+import { hydrateState, hydrateStateWithRetry, hydrateCatalog, saveState, authHeaders, activeTenantId, isStaticDeployment } from './data/storage.js?v=32';
 import { generateId } from './utils/ids.js';
-import { currentRoute, startRouter } from './router.js?v=18';
-import { navItems, navGroups } from './components/sidebar.js?v=23';
+import { currentRoute, startRouter } from './router.js?v=19';
+import { navItems, navGroups } from './components/sidebar.js?v=27';
 import { showToast } from './components/toast.js';
 import { table } from './components/tables.js';
 import { renderNotifications } from './components/notifications.js';
@@ -15,6 +15,9 @@ import { renderDashboard } from './modules/dashboard-v3.js?v=20261022-sistecredi
 import { canonicalSellerName, renderVentas, salesTable, salesSummary, normalizeSales, salesWithAnnulledTalonarios, salesMonthKey, saleTimestamp, filterSales, salesSellers, findMatchingSaleCustomer, upsertSaleRecord } from './modules/ventas.js?v=20261104-sale-submit-recovery-v1';
 import { renderFacturacion, cartTotal, productResults, customerResults } from './modules/facturacion.js?v=20261019-sistecredito-server-guard-v1';
 import { renderProductos, productTable, productMatches } from './modules/productos.js?v=22';
+import { buildRentabilidadBulkPricePlan, parseRentabilidadPriceCsv, parseRentabilidadPriceImport, parseRentabilidadPriceRecords, rentabilidadExportRows, rentabilidadPriceTemplateRows, renderRentabilidad, renderRentabilidadBulkPriceEditor, renderRentabilidadBulkPriceOutcome, renderRentabilidadBulkPricePreview, renderRentabilidadPriceEditor, renderRentabilidadPriceImportEditor, renderRentabilidadPriceImportPreview, renderRentabilidadPriceHistory, renderRentabilidadResults } from './modules/rentabilidad.js?v=12';
+import { pricingAnalysis } from './utils/rentabilidad-calculations.js?v=1';
+import { getProductPriceHistory, updateProductPrice, updateProductPrices } from './services/pricing-service.js?v=1';
 import { renderInventario, inventoryContent } from './modules/inventario.js?v=20';
 import { renderTraslados, transferModal, transferTable } from './modules/traslados.js?v=20';
 import { inventoryEntry, ensureInventoryEntry } from './utils/inventory.js?v=19';
@@ -29,7 +32,7 @@ import { renderGasolina } from './modules/gasolina.js?v=20261011-fuel-user-delet
 import { mergeUserSources, renderUsuarios } from './modules/usuarios.js?v=24';
 import { renderDescansos } from './modules/descansos.js?v=20261015-dom-guard-v1';
 import { renderAuditoria, resetAuditFilters, setAuditFilters } from './modules/auditoria.js?v=28';
-import { renderTalonarios, talonarioModal, setTalonarioFilters, currentTalonarioNumber, normalizeActiveTalonarios, availableCentralTalonarios, nextAvailableCentralTalonario, configuredTalonarioOwnerLabel, configuredTalonarioOwnerMatches, talonarioSalesDocuments } from './modules/talonarios.js?v=28';
+import { renderTalonarios, talonarioModal, setTalonarioFilters, currentTalonarioNumber, normalizeActiveTalonarios, availableCentralTalonarios, nextAvailableCentralTalonario, configuredTalonarioOwnerLabel, configuredTalonarioOwnerMatches, talonarioSalesDocuments, justifiedTalonarioDocumentsForLocal } from './modules/talonarios.js?v=29';
 import { historicalTalonarios, historicalRecibos, storedTalonarios } from './modules/talonarios-historial.js?v=1';
 import { renderApartados } from './modules/apartados.js?v=20261015-finance-identifiers-v1';
 import { createApartado, decreaseSaleInventory, runTransaction, addMovement } from './modules/finanzas.js?v=18';
@@ -37,7 +40,7 @@ import { formatCurrency as money } from './utils/currency.js?v=18';
 
 let appHydrating = true;
 import { adjustStock, increaseStock, decreaseStock } from './services/inventory-service.js?v=18';
-import { createProduct, updateProduct, setProductActive, generateTestProducts, searchProducts, categoryFromProductName } from './services/product-service.js?v=21';
+import { createProduct, updateProduct, updateProductPricing, setProductActive, generateTestProducts, searchProducts, categoryFromProductName } from './services/product-service.js?v=23';
 import { productDetail } from './modules/product-detail.js?v=14';
 import { importPreview, importPreviewRows, importProducts } from './modules/product-import.js?v=15';
 import { renderProveedores, supplierRecords, supplierTable } from './modules/proveedores.js?v=20261019-preserve-supplier-history-v1';
@@ -49,7 +52,7 @@ import { accountsPayableDetail } from './modules/accounts-payable-detail.js?v=20
 import { accountPayableSupplierKey, calculateBalance, filterAccountsPayable, normalizePayableSuppliers, registerPayment as registerSupplierPayment, updateAccountPayableStatus } from './services/accounts-payable-service.js?v=20261019-preserve-supplier-history-v1';
 import { renderOperaciones, advancedModal, nextAdvancedId } from './modules/operaciones.js?v=2';
 import { renderParidad, payrollModal, payrollConfigModal, countModal, sistecreditoModal, sistecreditoDepositModal, sistecreditoOpeningModal, formatParityResult, sistecreditoSummary, sistecreditoTable } from './modules/paridad.js?v=20261019-credinet-reconciliation-v1';
-import { api } from './services/api-client.js?v=20261015-large-state-timeout-v1';
+import { api } from './services/api-client.js?v=20261125-rentabilidad-bulk-v1';
 
 const state = { cart:[], payment:'Efectivo', customerId:'CLI-00001', storeId:store.collection.stores[0]?.id || '', transport:0, transportDestination:'', transportNote:'', sistecreditoMixedAmount:0, mixedOtherMethod:'Efectivo' };
 let sistecreditoLedgerEnabled = false;
@@ -69,6 +72,8 @@ let creditViewState = { filter:'all', query:'', page:1, pageSize:20, overdueInst
 let apartadoViewState = { filter:'all', query:'', page:1, pageSize:20 };
 let salesViewState = { query:'', store:'all', month:`${new Date().getFullYear()}-${String(new Date().getMonth()+1).padStart(2,'0')}`, seller:'all', version:0 };
 let productViewState = { query:'', store:'all', active:'active', version:0 };
+let rentabilidadViewState = { code:'', name:'', reference:'', store:'all', category:'all', active:'all', stock:'all', belowCost:false, belowMinimum:false, noPurchaseHistory:false };
+let rentabilidadSelectedProductIds = new Set();
 function syncCustomerBalances(){
 	const allCredits=store.collection.credits||[], sales=store.collection.sales||[];
 	const credits=filterInternalCredits(filterDuplicateHistoricalCredits(allCredits),sales);
@@ -97,6 +102,8 @@ let userPermissions = null;
 const actionPermissionMap = {
 	'new-user':['Usuarios','create'],'edit-user':['Usuarios','edit'],'user-permissions':['Usuarios','edit'],
 	'new-store':['Locales','create'],'edit-store':['Locales','edit'],'delete-store':['Locales','delete'],
+	'edit-rentabilidad-prices':['Productos','edit'],'bulk-edit-rentabilidad-prices':['Productos','edit'],'open-rentabilidad-price-import':['Productos','edit'],
+	'export-rentabilidad-prices':['Productos','view'],'download-rentabilidad-template':['Productos','view'],'view-rentabilidad-price-history':['Productos','view'],
 	'sale-detail':['Ventas','view'],'edit-sale':['Ventas','edit'],'delete-sale':['Ventas','delete'],'new-sale':['Ventas','create'],
 	'purchase-detail':['Compras','view'],'edit-purchase':['Compras','edit'],'delete-purchase':['Compras','delete'],'delete-purchase-mirror':['Compras','delete'],'new-purchase':['Compras','create'],
 	'view-transfer':['Traslados','view'],'edit-transfer':['Traslados','edit'],'delete-transfer':['Traslados','delete'],'transfer-send':['Traslados','edit'],'transfer-receive':['Traslados','edit'],'transfer-cancel':['Traslados','delete'],'new-transfer':['Traslados','create'],
@@ -114,12 +121,13 @@ const actionPermissionMap = {
 const $ = selector => document.querySelector(selector);
 const isLocalApp = ['localhost','127.0.0.1','::1'].includes(window.location.hostname);
 const views = { dashboard:()=>renderDashboard({...store.collection,sistecreditoOpeningDefault:activeTenantId()==='tenant-default'}), ventas:()=>renderVentas(store.collection), facturacion:()=>renderFacturacion(store.collection,state.cart,state.payment,state.customerId,state.transport,state.transportDestination,state.transportNote,state.storeId,state.sistecreditoMixedAmount,state.mixedOtherMethod,sistecreditoLedgerEnabled), productos:()=>renderProductos(store.collection), inventario:()=>renderInventario(store.collection,state.storeId), traslados:()=>renderTraslados(store.collection), proveedores:()=>renderProveedores(store.collection), compras:()=>renderCompras(store.collection), 'cuentas-por-pagar':()=>renderCuentasPorPagar(store.collection), clientes:()=>renderClientes(store.collection), creditos:()=>renderCreditos({...store.collection,installments:[...(store.collection.installments||[]),...creditViewState.overdueInstallments],creditFilter:creditViewState.filter,creditQuery:creditViewState.query,creditPage:creditViewState.page,creditPageSize:creditViewState.pageSize}), cartera:()=>renderCartera({...store.collection,installments:[...(store.collection.installments||[]),...creditViewState.overdueInstallments],creditFilter:creditViewState.filter,creditQuery:creditViewState.query,creditPage:creditViewState.page,creditPageSize:creditViewState.pageSize}), apartados:()=>renderApartados({...store.collection,apartadoFilter:apartadoViewState.filter,apartadoQuery:apartadoViewState.query,apartadoPage:apartadoViewState.page,apartadoPageSize:apartadoViewState.pageSize}), locales:()=>renderLocales(store.collection), descansos:()=>renderDescansos(store.collection), operaciones:()=>renderOperaciones(store.collection), paridad:()=>renderParidad({...store.collection,sistecreditoOpeningDefault:activeTenantId()==='tenant-default',sistecreditoLedgerEnabled,sistecreditoLedgerStatus}), gastos:()=>renderGastos(store.collection), gasolina:()=>renderGasolina(store.collection,canPerform('Gasolina','delete')), auditoria:()=>renderAuditoria(store.collection), usuarios:()=>renderUsuarios(store.collection), talonarios:()=>renderTalonarios(store.collection), reportes:()=>renderReportes(store.collection), configuracion:renderConfiguracion };
+views.rentabilidad = () => renderRentabilidad(store.collection, { ...rentabilidadViewState, selectedProductIds:[...rentabilidadSelectedProductIds] });
 function activeStoreKey(){ return `famimuebles-active-store-${activeTenantId() || 'default'}`; }
 function resolveActiveStore(){ const stores=store.collection.stores||[]; const saved=localStorage.getItem(activeStoreKey()); return stores.some(item=>String(item.id)===String(saved)) ? String(saved) : (stores[0]?.id || ''); }
 function syncActiveStoreSelector(){ const selector=$('#active-store-selector'); if(!selector)return; const stores=store.collection.stores||[]; selector.innerHTML=stores.length ? stores.map(item=>`<option value="${item.id}">${item.name}</option>`).join('') : '<option value="">Sin locales registrados</option>'; selector.disabled=!stores.length; selector.value=state.storeId; }
 function setActiveStore(storeId){ if(!(store.collection.stores||[]).some(item=>String(item.id)===String(storeId)))return; state.storeId=String(storeId); state.cart=[]; localStorage.setItem(activeStoreKey(),state.storeId); syncActiveStoreSelector(); render(); }
 function applyShellMode(){ const brandSmall=document.querySelector('.brand-copy small'); const statusLabel=document.querySelector('.sidebar-foot span:last-child'); if(brandSmall) brandSmall.textContent = 'ERP LOCAL'; if(statusLabel) statusLabel.textContent = 'Modo local'; }
-function allowedRoute(route){ const role=String(JSON.parse(localStorage.getItem('famimuebles-user')||'{}').role||'').toUpperCase(); if(role==='ADMINISTRADOR'||role==='GERENTE')return true; const restricted={CONTADOR:['dashboard','ventas','cuentas-por-pagar','cartera','reportes'],SUPERVISOR:['dashboard','ventas','productos','inventario','traslados','compras','proveedores','operaciones','reportes'],BODEGA:['dashboard','productos','inventario','traslados','compras','operaciones'],CAJERO:['dashboard','ventas','facturacion','clientes','cartera','operaciones'],VENDEDOR:['dashboard','ventas','facturacion','clientes','apartados','cotizaciones']}; return (restricted[role]||['dashboard']).includes(route); }
+function allowedRoute(route){ const role=String(JSON.parse(localStorage.getItem('famimuebles-user')||'{}').role||'').toUpperCase(); if(role==='ADMINISTRADOR'||role==='GERENTE')return true; const restricted={CONTADOR:['dashboard','ventas','cuentas-por-pagar','cartera','reportes'],SUPERVISOR:['dashboard','ventas','productos','rentabilidad','inventario','traslados','compras','proveedores','operaciones','reportes'],BODEGA:['dashboard','productos','inventario','traslados','compras','operaciones'],CAJERO:['dashboard','ventas','facturacion','clientes','cartera','operaciones'],VENDEDOR:['dashboard','ventas','facturacion','clientes','apartados','cotizaciones']}; return (restricted[role]||['dashboard']).includes(route); }
 function canPerform(resource,action){const role=String(JSON.parse(localStorage.getItem('famimuebles-user')||'{}').role||'').toUpperCase();if(role==='ADMINISTRADOR')return true;const permissions=Array.isArray(userPermissions)?userPermissions:[];const item=permissions.find(permission=>permission.resource===resource&&permission.action===action);return Boolean(item?.allowed);}
 function applyUserPermissions(){const mapping=actionPermissionMap;
 	document.querySelectorAll('[data-action]').forEach(element=>{const target=mapping[element.dataset.action];if(target)element.hidden=!canPerform(target[0],target[1]);});}
@@ -204,7 +212,7 @@ async function loadRemoteCatalog(){ try { const catalog=await fetchOperationalDa
 function refreshProducts(){ const query=$('[data-filter="products"]')?.value||'',storeId=$('[data-product-store]')?.value||'all',active=$('[data-product-active]')?.value||'all',limit=50,stockMap=new Map(store.collection.products.map(product=>[product.id,store.collection.inventoryByStore.filter(row=>row.productId===product.id&&(storeId==='all'||String(row.storeId)===String(storeId))).reduce((sum,row)=>sum+Number(row.quantity||0),0)]));let items=store.collection.products.filter(product=>productMatches(product,{query,active,stockMap}));const pages=Math.max(1,Math.ceil(items.length/limit));productPage=Math.min(productPage,pages);if($('#products-table'))$('#products-table').innerHTML=productTable(items,store.collection.stores,limit,productPage,store.collection,storeId);if($('[data-product-count]'))$('[data-product-count]').textContent=`${items.length} productos`;if($('[data-product-page-label]'))$('[data-product-page-label]').textContent=`Pagina ${productPage} de ${pages}`;}
 function clearProductFilters(){ const defaults={'[data-filter="products"]':'','[data-product-store]':'all','[data-product-active]':'active'};Object.entries(defaults).forEach(([selector,value])=>{const element=$(selector);if(element)element.value=value;});productPage=1;refreshProducts();}
 function modal(title, fields, onSubmit){ $('#modal-root').innerHTML=`<div class="modal-backdrop"><form class="modal" id="data-modal"><button type="button" class="modal-close">×</button><p class="eyebrow">FAMIMUEBLES ERP</p><h2>${title}</h2>${fields.map(field=>`<label class="input-label">${field.label}<input class="field" name="${field.name}" type="${field.type||'text'}" value="${field.value||''}" ${field.required===false?'':'required'}></label>`).join('')}<button class="primary wide">Guardar</button></form></div>`; $('.modal-close').onclick=()=>$('#modal-root').innerHTML=''; $('#data-modal').onsubmit=async event=>{event.preventDefault();const button=event.target.querySelector('button.primary');button.disabled=true;try{await onSubmit(Object.fromEntries(new FormData(event.target)));}catch(error){showToast(error.message,'error');}finally{button.disabled=false;}}; }
-async function persistCatalogRecord(path, record, method='POST', stableRequestId=''){ const requestId=method==='POST'?(stableRequestId||(globalThis.crypto?.randomUUID?crypto.randomUUID():`${path}-${Date.now()}-${Math.random()}`)):''; const options={headers:{'X-Tenant-ID':activeTenantId(),...(requestId?{'Idempotency-Key':requestId}: {})}}; const body={...record,...(requestId?{requestId}:{}),tenantId:activeTenantId()}; try { return method==='PUT' ? await api.put(path,body,options) : method==='DELETE' ? await api.delete(path,body,options) : await api.post(path,body,options); } catch(error) { if(error.status===401){localStorage.removeItem('famimuebles-auth-token');localStorage.removeItem('famimuebles-user');throw new Error('La sesion expiro. Inicia sesion nuevamente para guardar cambios.');} throw error; } }
+async function persistCatalogRecord(path, record, method='POST', stableRequestId=''){ const requestId=method==='POST'?(stableRequestId||(globalThis.crypto?.randomUUID?crypto.randomUUID():`${path}-${Date.now()}-${Math.random()}`)):''; const options={headers:{'X-Tenant-ID':activeTenantId(),...(requestId?{'Idempotency-Key':requestId}: {})}}; const body={...record,...(requestId?{requestId}:{}),tenantId:activeTenantId()}; try { return method==='PUT' ? await api.put(path,body,options) : method==='DELETE' ? await api.delete(path,body,options) : await api.post(path,body,options); } catch(error) { if(error.status===401){localStorage.removeItem('famimuebles-auth-token');localStorage.removeItem('famimuebles-user');const authError=new Error('La sesion expiro. Inicia sesion nuevamente para guardar cambios.');authError.status=error.status;authError.details=error.details;throw authError;} throw error; } }
 async function reservePurchaseId(){
 	const records=[
 		...(store.collection.purchases||[]),
@@ -1201,7 +1209,77 @@ document.addEventListener('submit',async event=>{
 		store.save();$('#modal-root').innerHTML='';location.hash='#compras';render();showToast(reservation.serverReserved?'Compra de talonarios recibida y cuenta por pagar creada.':'Compra recibida y cuenta por pagar creada. Consecutivo calculado con el historial disponible; reinicia el servidor para habilitar reserva central.');
 	}catch(error){submitButton.disabled=false;showToast(error.message,'error');}
 },true);
-function openProductEditor(productId=''){ const product=productId&&store.collection.products.find(item=>item.id===productId); const fields=[['name','Nombre',product?.name],['code','Codigo',product?.code],['barcode','Codigo de barras',product?.barcode],['reference','Referencia',product?.reference],['category','Categoria',product?.category],['subcategory','Subcategoria',product?.subcategory],['brand','Marca',product?.brand],['supplierName','Proveedor',product?.supplierName],['cost','Costo',product?.cost||0,'number'],['price','Precio de venta',product?.price||0,'number'],['specialPrice','Precio especial',product?.specialPrice||0,'number'],['iva','IVA',product?.iva||0,'number'],['minimum','Stock minimo',product?.minimum||0,'number'],['maximum','Stock maximo',product?.maximum||0,'number']].map(field=>({name:field[0],label:field[1],value:field[2],type:field[3]}));modal(product?'Editar producto':'Nuevo producto',fields,async values=>{try{const normalized=product?updateProduct(store.collection,product.id,values):createProduct(store.collection,values);if(!product)ensureInventoryEntry(store.collection,normalized.id,state.storeId);await persistCatalogRecord('/api/catalog/product',{...normalized,id:normalized.id,salePrice:normalized.salePrice||normalized.price,taxRate:normalized.iva||0},product?'PUT':'POST');const remote=await hydrateState();if(remote){store.state=remote;await hydrateCatalog(store.state);}$('#modal-root').innerHTML='';render();showToast('Producto guardado correctamente.');}catch(error){showToast(error.message,'error');}}); }
+function openProductEditor(productId=''){ const product=productId&&store.collection.products.find(item=>item.id===productId); if(product&&!canPerform('Productos','edit'))return showToast('No tienes permiso para editar productos.','error');if(!product&&!canPerform('Productos','create'))return showToast('No tienes permiso para crear productos.','error');const fields=[['name','Nombre',product?.name],['code','Codigo',product?.code],['barcode','Codigo de barras',product?.barcode],['reference','Referencia',product?.reference],['category','Categoria',product?.category],['subcategory','Subcategoria',product?.subcategory],['brand','Marca',product?.brand],['supplierName','Proveedor',product?.supplierName],['cost','Costo',product?.cost||0,'number'],['price','Precio de venta',product?.salePrice??product?.price??0,'number'],['minimumPrice','Precio minimo de venta',product?.minimumPrice??0,'number'],['specialPrice','Precio especial',product?.specialPrice||0,'number'],['iva','IVA',product?.iva||0,'number'],['minimum','Stock minimo',product?.minimum||0,'number'],['maximum','Stock maximo',product?.maximum||0,'number']].map(field=>({name:field[0],label:field[1],value:field[2],type:field[3]}));modal(product?'Editar producto':'Nuevo producto',fields,async values=>{if(product&&!canPerform('Productos','edit'))return showToast('No tienes permiso para editar productos.','error');if(!product&&!canPerform('Productos','create'))return showToast('No tienes permiso para crear productos.','error');try{const normalized=product?updateProduct(store.collection,product.id,values):createProduct(store.collection,values);if(!product)ensureInventoryEntry(store.collection,normalized.id,state.storeId);await persistCatalogRecord('/api/catalog/product',{...normalized,id:normalized.id,salePrice:normalized.salePrice||normalized.price,taxRate:normalized.iva||0},product?'PUT':'POST');const remote=await hydrateState();if(remote){store.state=remote;await hydrateCatalog(store.state);}$('#modal-root').innerHTML='';render();showToast('Producto guardado correctamente.');}catch(error){showToast(error.message,'error');}}); }
+function parseRentabilidadPrice(value, label) {
+	const raw=String(value??'').trim();
+	if(!/^(?:\d+|\d{1,3}(?:\.\d{3})+)$/.test(raw))throw new Error(`${label} debe ser un valor valido en pesos colombianos, sin decimales ni negativos.`);
+	const amount=Number(raw.replaceAll('.',''));
+	if(!Number.isSafeInteger(amount))throw new Error(`${label} excede el valor permitido.`);
+	return amount;
+}
+function openRentabilidadPriceEditor(productId){
+	if(!canPerform('Productos','edit'))return showToast('No tienes permiso para editar precios.','error');
+	const analysis=pricingAnalysis(store.collection,rentabilidadViewState.store).find(row=>String(row.product.id)===String(productId));
+	if(!analysis)return showToast('No se encontro el producto para editar sus precios.','error');
+	const root=$('#modal-root');
+	root.innerHTML=renderRentabilidadPriceEditor(analysis);
+	const form=$('#rentabilidad-price-form');
+	const close=()=>{root.innerHTML='';document.removeEventListener('keydown',handleEscape);};
+	const handleEscape=event=>{if(event.key==='Escape')close();};
+	form.querySelectorAll('[data-action="cancel-rentabilidad-price-edit"]').forEach(button=>button.addEventListener('click',close));
+	$('.rentabilidad-modal-backdrop').addEventListener('click',event=>{if(event.target===event.currentTarget)close();});
+	document.addEventListener('keydown',handleEscape);
+	form.querySelectorAll('[data-cop-price]').forEach(input=>input.addEventListener('blur',()=>{
+		const raw=input.value.trim();
+		if(/^(?:\d+|\d{1,3}(?:\.\d{3})+)$/.test(raw)){
+			const amount=Number(raw.replaceAll('.',''));
+			if(Number.isSafeInteger(amount))input.value=amount.toLocaleString('es-CO');
+		}
+	}));
+	form.addEventListener('submit',async event=>{
+		event.preventDefault();
+		if(!canPerform('Productos','edit'))return showToast('No tienes permiso para editar precios.','error');
+		if(!form.reportValidity())return;
+		const submitButton=form.querySelector('[type="submit"]');
+		if(!submitButton||submitButton.disabled)return;
+		try{
+			const values=Object.fromEntries(new FormData(form));
+			values.price=parseRentabilidadPrice(values.price,'El precio de venta');
+			values.minimumPrice=parseRentabilidadPrice(values.minimumPrice,'El precio minimo');
+			const draftState={products:store.collection.products.map(product=>String(product.id)===String(analysis.product.id)?{...product}:product)};
+			const updated=updateProductPricing(draftState,analysis.product.id,values);
+			if(!window.confirm(`¿Guardar los cambios de precio para ${analysis.product.name}?`))return;
+			if(!canPerform('Productos','edit'))return showToast('No tienes permiso para editar precios.','error');
+			submitButton.disabled=true;
+			try{
+				await updateProductPrice({
+					id:updated.id,
+					salePrice:updated.salePrice,
+					minimumPrice:updated.minimumPrice,
+				});
+				const product=analysis.product;
+				product.price=updated.price;
+				product.salePrice=updated.salePrice;
+				product.minimumPrice=updated.minimumPrice;
+				product.updatedAt=updated.updatedAt;
+				store.save();
+				close();
+				render();
+				showToast('Precios actualizados correctamente.');
+			}catch(error){
+				showToast(error.message,'error');
+			}finally{
+				if(submitButton.isConnected)submitButton.disabled=false;
+			}
+		}catch(error){
+			showToast(error.message,'error');
+		}
+	});
+}
+document.addEventListener('click',event=>{
+	const button=event.target.closest('[data-action="edit-rentabilidad-prices"]');
+	if(button)openRentabilidadPriceEditor(button.dataset.productId);
+});
 function openImportModal(){ $('#modal-root').innerHTML='<div class="modal-backdrop"><form class="modal" id="import-modal"><button type="button" class="modal-close">×</button><p class="eyebrow">PRODUCTOS</p><h2>Importar productos</h2><p class="muted">Sube un archivo Excel (.xlsx, .xls), PDF o CSV. Encabezados recomendados: codigo, nombre, referencia, categoria, costo, precio, barcode.</p><label class="input-label">Archivo de productos<input class="field" id="import-file" type="file" accept=".xlsx,.xls,.pdf,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,application/pdf,text/csv" required></label><textarea class="field import-text" rows="6" placeholder="O pega aqui un CSV: codigo,nombre,categoria,costo,precio"></textarea><div class="import-preview"></div><button type="button" class="outline" data-action="preview-import">Vista previa</button><button class="primary wide" data-action="confirm-import" disabled>Importar productos</button></form></div>';$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';$('#import-file').onchange=()=>readImportFile(); }
 async function readImportFile(){const file=$('#import-file')?.files?.[0];if(!file)return;try{const extension=file.name.toLowerCase().split('.').pop();if(extension==='csv'){$('.import-text').value=await file.text();return previewImport();}if(extension==='xlsx'||extension==='xls'){if(!globalThis.XLSX)throw new Error('No se pudo cargar el lector de Excel.');const workbook=XLSX.read(await file.arrayBuffer(),{type:'array'});const sheet=workbook.Sheets[workbook.SheetNames[0]];const rows=XLSX.utils.sheet_to_json(sheet,{defval:'',raw:false});return showImportPreview(importPreviewRows(store.collection,normalizeImportRows(rows)));}if(extension==='pdf')return showImportPreview(importPreviewRows(store.collection,await parsePdfRows(await file.arrayBuffer())));throw new Error('Formato no admitido. Usa Excel, PDF o CSV.');}catch(error){showImportPreview({rows:[],errors:[error.message]});}}
 function normalizeImportRows(rows){return rows.map(row=>Object.fromEntries(Object.entries(row).map(([key,value])=>[String(key).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,'_'),String(value??'').trim()])));}
@@ -1352,6 +1430,450 @@ function updateSalesViewState(){
 document.addEventListener('input',event=>{if(event.target.matches('[data-filter="sales"]'))updateSalesViewState();});
 document.addEventListener('change',event=>{if(event.target.matches('[data-sales-store],[data-sales-month],[data-sales-seller]'))updateSalesViewState();});
 function updateProductViewState(){productViewState={query:$('[data-filter="products"]')?.value||'',store:$('[data-product-store]')?.value||'all',active:$('[data-product-active]')?.value||'all',version:productViewState.version+1};productPage=1;refreshProducts();}
+function updateRentabilidadViewState(){
+	rentabilidadViewState = {
+		code:$('[data-rentabilidad-code]')?.value || '',
+		name:$('[data-rentabilidad-name]')?.value || '',
+		reference:$('[data-rentabilidad-reference]')?.value || '',
+		store:$('[data-rentabilidad-store]')?.value || 'all',
+		category:$('[data-rentabilidad-category]')?.value || 'all',
+		active:$('[data-rentabilidad-active]')?.value || 'all',
+		stock:$('[data-rentabilidad-stock]')?.value || 'all',
+		belowCost:Boolean($('[data-rentabilidad-below-cost]')?.checked),
+		belowMinimum:Boolean($('[data-rentabilidad-below-minimum]')?.checked),
+		noPurchaseHistory:Boolean($('[data-rentabilidad-no-purchases]')?.checked),
+		selectedProductIds:[...rentabilidadSelectedProductIds]
+	};
+	const results=$('#rentabilidad-results');
+	if(results)results.innerHTML=renderRentabilidadResults(store.collection,rentabilidadViewState);
+}
+function refreshRentabilidadSelection(){
+	rentabilidadViewState.selectedProductIds=[...rentabilidadSelectedProductIds];
+	const results=$('#rentabilidad-results');
+	if(results)results.innerHTML=renderRentabilidadResults(store.collection,rentabilidadViewState);
+}
+document.addEventListener('change',event=>{
+	const productCheckbox=event.target.closest('[data-rentabilidad-select-product]');
+	if(productCheckbox){
+		const id=String(productCheckbox.value);
+		if(productCheckbox.checked)rentabilidadSelectedProductIds.add(id);
+		else rentabilidadSelectedProductIds.delete(id);
+		refreshRentabilidadSelection();
+		return;
+	}
+	if(event.target.matches('[data-rentabilidad-select-visible]')){
+		document.querySelectorAll('[data-rentabilidad-select-product]').forEach(checkbox=>{
+			if(event.target.checked)rentabilidadSelectedProductIds.add(String(checkbox.value));
+			else rentabilidadSelectedProductIds.delete(String(checkbox.value));
+		});
+		refreshRentabilidadSelection();
+	}
+});
+function rentabilidadCsvContent(headers,rows){
+	const encode=value=>{
+		let text=value===null||value===undefined?'':String(value);
+		if(typeof value==='string'&&/^\s*[=+\-@]/.test(text))text=`\t${text}`;
+		return /[;"\r\n]/.test(text)?`"${text.replaceAll('"','""')}"`:text;
+	};
+	return `\uFEFF${[headers,...rows.map(row=>headers.map(header=>row[header]))].map(row=>row.map(encode).join(';')).join('\r\n')}`;
+}
+function downloadRentabilidadText(content,mimeType,filename){
+	const blob=new Blob([content],{type:mimeType});
+	const url=URL.createObjectURL(blob);
+	const link=document.createElement('a');
+	link.href=url;
+	link.download=filename;
+	document.body.append(link);
+	link.click();
+	link.remove();
+	window.setTimeout(()=>URL.revokeObjectURL(url),1000);
+}
+function downloadRentabilidadWorkbook(rows,headers,filename,sheetName='Rentabilidad'){
+	const xlsx=globalThis.XLSX;
+	if(!xlsx?.utils?.aoa_to_sheet||!xlsx?.writeFile)throw new Error('La biblioteca Excel no está disponible. Recarga el ERP e intenta nuevamente.');
+	const sheet=xlsx.utils.aoa_to_sheet([headers,...rows.map(row=>headers.map(header=>row[header]??''))]);
+	sheet['!cols']=headers.map(header=>({wch:Math.min(38,Math.max(14,header.length+2))}));
+	headers.forEach((header,columnIndex)=>{
+		const format=header.includes('(COP)')||header==='Margen estimado (COP)'
+			?'$ #,##0'
+			:header==='Margen estimado (%)'?'0.0"%"':'';
+		if(!format)return;
+		for(let rowIndex=1;rowIndex<=rows.length;rowIndex+=1){
+			const cell=xlsx.utils.encode_cell({r:rowIndex,c:columnIndex});
+			if(sheet[cell]&&typeof sheet[cell].v==='number')sheet[cell].z=format;
+		}
+	});
+	const workbook=xlsx.utils.book_new();
+	xlsx.utils.book_append_sheet(workbook,sheet,sheetName);
+	xlsx.writeFile(workbook,filename);
+}
+function exportRentabilidadPrices(format,filtered){
+	const rows=rentabilidadExportRows(store.collection,rentabilidadViewState,filtered);
+	if(!rows.length)return showToast('No hay productos para exportar con el alcance seleccionado.','info');
+	const headers=Object.keys(rows[0]);
+	const scope=filtered?'filtrados':'completo';
+	const date=new Date().toISOString().slice(0,10);
+	const filename=`rentabilidad-${scope}-${date}.${format}`;
+	try{
+		if(format==='csv')downloadRentabilidadText(rentabilidadCsvContent(headers,rows),'text/csv;charset=utf-8',filename);
+		else if(format==='xlsx')downloadRentabilidadWorkbook(rows,headers,filename);
+		else throw new Error('Formato de exportación no soportado.');
+		showToast(`${rows.length} productos exportados correctamente.`);
+	}catch(error){showToast(error.message,'error');}
+}
+function downloadRentabilidadTemplate(format){
+	const rows=rentabilidadPriceTemplateRows(store.collection);
+	const headers=['codigo','nombre','precio'];
+	const date=new Date().toISOString().slice(0,10);
+	try{
+		if(format==='csv')downloadRentabilidadText(rentabilidadCsvContent(headers,rows),'text/csv;charset=utf-8',`plantilla-precios-rentabilidad-${date}.csv`);
+		else if(format==='xlsx')downloadRentabilidadWorkbook(rows,headers,`plantilla-precios-rentabilidad-${date}.xlsx`,'Plantilla');
+		else throw new Error('Formato de plantilla no soportado.');
+		showToast(`Plantilla generada con ${rows.length} productos.`);
+	}catch(error){showToast(error.message,'error');}
+}
+async function persistRentabilidadPricePlan(plan,operationType='masiva'){
+	if(!canPerform('Productos','edit')){
+		return {
+			updated:[],
+			notUpdated:plan.map(item=>({id:String(item.product.id),code:item.product.code||item.product.id,name:item.product.name,reason:'No tienes permiso para editar precios.'})),
+			errorMessage:'No tienes permiso para editar precios.',
+			succeeded:false,
+		};
+	}
+	const eligible=plan.filter(item=>item.eligible);
+	const blocked=plan.filter(item=>!item.eligible).map(item=>({
+		id:String(item.product.id),code:item.product.code||item.product.id,name:item.product.name,reason:item.reason,
+	}));
+	const productById=new Map(plan.map(item=>[String(item.product.id),item.product]));
+	const withProductDetails=items=>items.map(item=>{
+		const product=productById.get(String(item.id));
+		return {...item,code:product?.code||item.code||item.id,name:product?.name||item.name||'Producto'};
+	});
+	const applyReportedUpdates=items=>items.forEach(item=>{
+		const product=store.collection.products.find(candidate=>String(candidate.id)===String(item.id));
+		if(!product)return;
+		product.price=Number(item.salePrice);
+		product.salePrice=Number(item.salePrice);
+		product.updatedAt=new Date().toISOString();
+	});
+	if(!eligible.length)return {updated:[],notUpdated:withProductDetails(blocked),errorMessage:'No hay productos que cumplan las validaciones.',succeeded:false};
+	try{
+		const response=await updateProductPrices(
+			eligible.map(item=>({id:String(item.product.id),salePrice:item.newPrice})),
+			operationType,
+		);
+		if(!Array.isArray(response.updated)||!Array.isArray(response.notUpdated))throw new Error('El servidor no devolvió resultados individuales para el lote.');
+		applyReportedUpdates(response.updated);
+		store.save();
+		updateRentabilidadViewState();
+		return {updated:withProductDetails(response.updated),notUpdated:withProductDetails([...blocked,...response.notUpdated]),errorMessage:'',succeeded:true};
+	}catch(error){
+		let updated=[];
+		let notUpdated=[];
+		let errorMessage=error.message;
+		if(Array.isArray(error.details?.notUpdated)){
+			updated=Array.isArray(error.details.updated)?error.details.updated:[];
+			applyReportedUpdates(updated);
+			if(updated.length){
+				store.save();
+				updateRentabilidadViewState();
+			}
+			notUpdated=[...blocked,...error.details.notUpdated];
+		}else if(error.status>0){
+			notUpdated=[...blocked,...eligible.map(item=>({
+				id:String(item.product.id),
+				reason:error.status>=500
+					?`No se pudo confirmar el resultado del lote: ${error.message}`
+					:`La API no aceptó el lote: ${error.message}`,
+				...(error.status>=500?{status:'unknown'}:{}),
+			}))];
+		}else{
+			try{
+				await hydrateCatalog(store.state,false,true);
+				store.save();
+				eligible.forEach(item=>{
+					const product=store.collection.products.find(candidate=>String(candidate.id)===String(item.product.id));
+					const currentPrice=Number(product?.salePrice??product?.price);
+					if(currentPrice===item.newPrice)updated.push({id:String(item.product.id),salePrice:item.newPrice});
+					else notUpdated.push({id:String(item.product.id),reason:'El precio solicitado no aparece en el catálogo tras verificar el estado del servidor.'});
+				});
+				notUpdated=[...blocked,...notUpdated];
+				errorMessage='Se perdió la respuesta de guardado; el resultado se contrastó con el catálogo actualizado.';
+				updateRentabilidadViewState();
+			}catch(reconcileError){
+				notUpdated=[...blocked,...eligible.map(item=>({
+					id:String(item.product.id),
+					reason:`No se pudo confirmar el resultado del servidor: ${reconcileError.message}`,
+					status:'unknown',
+				}))];
+				errorMessage='No fue posible consultar el estado final del lote. Verifica el catálogo antes de reintentar.';
+			}
+		}
+		return {updated:withProductDetails(updated),notUpdated:withProductDetails(notUpdated),errorMessage,succeeded:false};
+	}
+}
+function openRentabilidadBulkPriceEditor(){
+	if(!canPerform('Productos','edit'))return showToast('No tienes permiso para editar precios.','error');
+	const allRows=pricingAnalysis(store.collection,'all');
+	const availableIds=new Set(allRows.map(row=>String(row.product.id)));
+	rentabilidadSelectedProductIds=new Set([...rentabilidadSelectedProductIds].filter(id=>availableIds.has(id)));
+	const selectedRows=allRows.filter(row=>rentabilidadSelectedProductIds.has(String(row.product.id)));
+	if(!selectedRows.length)return showToast('Selecciona al menos un producto para editar.','error');
+	if(selectedRows.length>1000)return showToast('El lote admite hasta 1.000 productos por operación. Reduce la selección y vuelve a intentar.','error');
+	const root=$('#modal-root');
+	root.innerHTML=renderRentabilidadBulkPriceEditor(selectedRows);
+	const modal=root.querySelector('.rentabilidad-bulk-modal');
+	const operation=modal.querySelector('[data-rentabilidad-bulk-operation]');
+	const amountLabel=modal.querySelector('[data-rentabilidad-bulk-amount-label]');
+	const amountInput=modal.querySelector('[data-rentabilidad-bulk-amount]');
+	const importSection=modal.querySelector('[data-rentabilidad-bulk-import]');
+	const importInput=modal.querySelector('[data-rentabilidad-bulk-import-text]');
+	const fileInput=modal.querySelector('[data-rentabilidad-bulk-file]');
+	const preview=modal.querySelector('[data-rentabilidad-bulk-preview]');
+	const previewButton=modal.querySelector('[data-action="preview-rentabilidad-bulk-edit"]');
+	const applyButton=modal.querySelector('[data-action="apply-rentabilidad-bulk-edit"]');
+	const close=()=>{root.innerHTML='';document.removeEventListener('keydown',handleEscape);};
+	const handleEscape=event=>{if(event.key==='Escape')close();};
+	let pendingPlan=null;
+	const clearPreview=()=>{
+		pendingPlan=null;
+		preview.innerHTML='';
+		applyButton.hidden=true;
+		applyButton.disabled=true;
+	};
+	const configureOperation=()=>{
+		const isSpecific=operation.value==='specific';
+		const isPercent=operation.value.endsWith('percent');
+		importSection.hidden=!isSpecific;
+		amountLabel.hidden=isSpecific;
+		amountLabel.querySelector('span').textContent=isPercent
+			?(operation.value==='increase-percent'?'Porcentaje de aumento':'Porcentaje de descuento')
+			:(operation.value==='increase-fixed'?'Incremento fijo (COP)':'Descuento fijo (COP)');
+		amountInput.inputMode=isPercent?'decimal':'numeric';
+		amountInput.placeholder=isPercent?'Ej. 10 o 2,5':'Ej. 25000 o 25.000';
+		amountInput.required=!isSpecific;
+		clearPreview();
+	};
+	modal.querySelectorAll('[data-action="cancel-rentabilidad-bulk-edit"]').forEach(button=>button.addEventListener('click',close));
+	root.querySelector('.rentabilidad-modal-backdrop').addEventListener('click',event=>{if(event.target===event.currentTarget)close();});
+	document.addEventListener('keydown',handleEscape);
+	operation.addEventListener('change',configureOperation);
+	[amountInput,importInput].forEach(input=>input.addEventListener('input',clearPreview));
+	fileInput.addEventListener('change',async()=>{
+		const file=fileInput.files?.[0];
+		if(!file)return;
+		if(file.size>1024*1024){showToast('El archivo CSV no puede superar 1 MB.','error');fileInput.value='';return;}
+		try{importInput.value=await file.text();clearPreview();}
+		catch(error){showToast(`No se pudo leer el archivo: ${error.message}`,'error');}
+	});
+	previewButton.addEventListener('click',()=>{
+		try{
+			const value=operation.value==='specific'
+				?parseRentabilidadPriceImport(importInput.value,selectedRows)
+				:amountInput.value;
+			pendingPlan=buildRentabilidadBulkPricePlan(selectedRows,operation.value,value);
+			preview.innerHTML=renderRentabilidadBulkPricePreview(pendingPlan);
+			const eligibleCount=pendingPlan.filter(item=>item.eligible).length;
+			applyButton.textContent=`Aplicar cambios (${eligibleCount})`;
+			applyButton.disabled=eligibleCount===0;
+			applyButton.hidden=false;
+		}catch(error){clearPreview();showToast(error.message,'error');}
+	});
+	applyButton.addEventListener('click',async()=>{
+		if(!pendingPlan||applyButton.disabled)return;
+		if(!canPerform('Productos','edit'))return showToast('No tienes permiso para editar precios.','error');
+		const eligible=pendingPlan.filter(item=>item.eligible);
+		if(!window.confirm(`Se actualizarán ${eligible.length} productos seleccionados. Los precios bajo costo se mostrarán como advertencia; los que estén debajo del mínimo no se modificarán. ¿Confirmas el lote?`))return;
+		applyButton.disabled=true;
+		previewButton.disabled=true;
+		try{
+			const result=await persistRentabilidadPricePlan(pendingPlan);
+			if(result.succeeded){
+				rentabilidadSelectedProductIds.clear();
+				rentabilidadViewState.selectedProductIds=[];
+				updateRentabilidadViewState();
+				showToast(`${result.updated.length} productos actualizados; ${result.notUpdated.length} no actualizados.`);
+			}else showToast(result.errorMessage,'error');
+			preview.innerHTML=renderRentabilidadBulkPriceOutcome(result.updated,result.notUpdated,result.errorMessage);
+			applyButton.hidden=true;
+			previewButton.hidden=true;
+		}finally{
+			applyButton.disabled=false;
+			previewButton.disabled=false;
+		}
+	});
+	configureOperation();
+}
+function openRentabilidadPriceImport(){
+	if(!canPerform('Productos','edit'))return showToast('No tienes permiso para importar precios.','error');
+	const root=$('#modal-root');
+	root.innerHTML=renderRentabilidadPriceImportEditor();
+	const modal=root.querySelector('.rentabilidad-import-modal');
+	const fileInput=modal.querySelector('[data-rentabilidad-price-import-file]');
+	const fileStatus=modal.querySelector('[data-rentabilidad-import-file-status]');
+	const preview=modal.querySelector('[data-rentabilidad-price-import-preview]');
+	const validateButton=modal.querySelector('[data-action="validate-rentabilidad-price-import"]');
+	const confirmButton=modal.querySelector('[data-action="confirm-rentabilidad-price-import"]');
+	let importedRecords=null;
+	let pendingPlan=null;
+	const close=()=>{root.innerHTML='';document.removeEventListener('keydown',handleEscape);};
+	const handleEscape=event=>{if(event.key==='Escape')close();};
+	const clearPreview=()=>{
+		pendingPlan=null;
+		preview.innerHTML='';
+		confirmButton.hidden=true;
+		confirmButton.disabled=true;
+	};
+	modal.querySelectorAll('[data-action="cancel-rentabilidad-price-import"]').forEach(button=>button.addEventListener('click',close));
+	root.querySelector('.rentabilidad-modal-backdrop').addEventListener('click',event=>{if(event.target===event.currentTarget)close();});
+	document.addEventListener('keydown',handleEscape);
+	fileInput.addEventListener('change',async()=>{
+		importedRecords=null;
+		validateButton.disabled=true;
+		clearPreview();
+		const file=fileInput.files?.[0];
+		if(!file){
+			fileStatus.textContent='Selecciona un archivo para continuar.';
+			return;
+		}
+		if(file.size>5*1024*1024){
+			fileStatus.textContent='El archivo supera el límite de 5 MB.';
+			return;
+		}
+		try{
+			if(/\.csv$|\.txt$/i.test(file.name)){
+				importedRecords=parseRentabilidadPriceCsv(await file.text());
+			}else if(/\.xlsx$|\.xls$/i.test(file.name)){
+				const xlsx=globalThis.XLSX;
+				if(!xlsx?.read||!xlsx?.utils?.sheet_to_json)throw new Error('La biblioteca Excel no está disponible. Recarga el ERP e intenta nuevamente.');
+				const workbook=xlsx.read(await file.arrayBuffer(),{type:'array'});
+				const firstSheet=workbook.SheetNames[0];
+				if(!firstSheet)throw new Error('El libro de Excel no contiene hojas.');
+				importedRecords=xlsx.utils.sheet_to_json(workbook.Sheets[firstSheet],{defval:'',raw:true});
+			}else throw new Error('Selecciona un archivo CSV o Excel (.xlsx o .xls).');
+			if(!importedRecords.length)throw new Error('La primera hoja del archivo no contiene filas de datos.');
+			fileStatus.textContent=`${file.name} cargado (${importedRecords.length} filas). Pulsa «Validar y previsualizar»; todavía no se ha modificado ningún precio.`;
+			validateButton.disabled=false;
+		}catch(error){
+			fileStatus.textContent=error.message;
+			showToast(error.message,'error');
+		}
+	});
+	validateButton.addEventListener('click',()=>{
+		if(!importedRecords)return;
+		try{
+			const rows=pricingAnalysis(store.collection,'all');
+			const result=parseRentabilidadPriceRecords(importedRecords,rows);
+			if(result.plan.length>1000)result.errors.push('El lote admite hasta 1.000 productos por operación. Divide el archivo y vuelve a validarlo.');
+			pendingPlan=result.plan;
+			preview.innerHTML=renderRentabilidadPriceImportPreview(result);
+			const eligibleCount=pendingPlan.filter(item=>item.eligible).length;
+			confirmButton.textContent=`Confirmar actualización (${eligibleCount})`;
+			confirmButton.disabled=result.errors.length>0||eligibleCount===0;
+			confirmButton.hidden=false;
+		}catch(error){
+			clearPreview();
+			preview.innerHTML=`<div class="rentabilidad-import-errors" role="alert"><strong>${error.message}</strong></div>`;
+		}
+	});
+	confirmButton.addEventListener('click',async()=>{
+		if(!pendingPlan||confirmButton.disabled)return;
+		if(!canPerform('Productos','edit'))return showToast('No tienes permiso para importar precios.','error');
+		const eligibleCount=pendingPlan.filter(item=>item.eligible).length;
+		if(!window.confirm(`Se actualizarán ${eligibleCount} precios del archivo validado. Los productos debajo del mínimo configurado no se modificarán. ¿Confirmas la operación?`))return;
+		confirmButton.disabled=true;
+		validateButton.disabled=true;
+		try{
+			const result=await persistRentabilidadPricePlan(pendingPlan,'importacion');
+			preview.innerHTML=renderRentabilidadBulkPriceOutcome(result.updated,result.notUpdated,result.errorMessage);
+			confirmButton.hidden=true;
+			validateButton.hidden=true;
+			if(result.succeeded)showToast(`${result.updated.length} productos actualizados; ${result.notUpdated.length} no actualizados.`);
+			else showToast(result.errorMessage,'error');
+		}finally{
+			confirmButton.disabled=false;
+			validateButton.disabled=false;
+		}
+	});
+}
+function openRentabilidadPriceHistory(){
+	if(!canPerform('Productos','view'))return showToast('No tienes permiso para consultar el historial de precios.','error');
+	const root=$('#modal-root');
+	let items=[];
+	let beforeId=0;
+	let hasMore=true;
+	let loading=false;
+	let error='';
+	const close=()=>{
+		root.innerHTML='';
+		document.removeEventListener('keydown',handleEscape);
+	};
+	const handleEscape=event=>{if(event.key==='Escape')close();};
+	const renderHistory=()=>{
+		root.innerHTML=renderRentabilidadPriceHistory(items,{hasMore,loading,error});
+		root.querySelector('[data-action="close-rentabilidad-price-history"]')?.addEventListener('click',close);
+		root.querySelector('.rentabilidad-modal-backdrop')?.addEventListener('click',event=>{
+			if(event.target===event.currentTarget)close();
+		});
+		root.querySelector('[data-action="load-more-rentabilidad-price-history"]')?.addEventListener('click',()=>loadHistory());
+	};
+	const loadHistory=async()=>{
+		if(loading||!hasMore)return;
+		if(!canPerform('Productos','view')){
+			error='No tienes permiso para consultar el historial de precios.';
+			hasMore=items.length===0;
+			renderHistory();
+			return;
+		}
+		loading=true;
+		error='';
+		renderHistory();
+		try{
+			const response=await getProductPriceHistory({beforeId,limit:50});
+			if(!Array.isArray(response.items))throw new Error('El servidor devolvió un historial con formato inválido.');
+			items=[...items,...response.items];
+			beforeId=Number(response.nextBeforeId)||0;
+			hasMore=Boolean(response.hasMore);
+		}catch(loadError){
+			error=loadError.message;
+			hasMore=true;
+		}finally{
+			loading=false;
+			renderHistory();
+		}
+	};
+	document.addEventListener('keydown',handleEscape);
+	renderHistory();
+	loadHistory();
+}
+document.addEventListener('input',event=>{if(event.target.matches('[data-rentabilidad-code],[data-rentabilidad-name],[data-rentabilidad-reference]'))updateRentabilidadViewState();});
+document.addEventListener('change',event=>{if(event.target.matches('[data-rentabilidad-store],[data-rentabilidad-category],[data-rentabilidad-active],[data-rentabilidad-stock],[data-rentabilidad-below-cost],[data-rentabilidad-below-minimum],[data-rentabilidad-no-purchases]'))updateRentabilidadViewState();});
+document.addEventListener('click',event=>{
+	if(!event.target.closest('[data-action="clear-rentabilidad-filters"]'))return;
+	document.querySelectorAll('.rentabilidad-filters input').forEach(input=>{
+		if(input.type==='checkbox')input.checked=false;
+		else input.value='';
+	});
+	document.querySelectorAll('.rentabilidad-filters select').forEach(select=>{select.value='all';});
+	updateRentabilidadViewState();
+});
+document.addEventListener('click',event=>{
+	const actionElement=event.target.closest('[data-action]');
+	const action=actionElement?.dataset.action;
+	if(action==='bulk-edit-rentabilidad-prices')openRentabilidadBulkPriceEditor();
+	if(action==='export-rentabilidad-prices'){
+		const filtered=document.querySelector('[data-rentabilidad-export-scope]')?.value==='filtered';
+		exportRentabilidadPrices(actionElement.dataset.format,filtered);
+	}
+	if(action==='download-rentabilidad-template')downloadRentabilidadTemplate(actionElement.dataset.format);
+	if(action==='open-rentabilidad-price-import')openRentabilidadPriceImport();
+	if(action==='view-rentabilidad-price-history')openRentabilidadPriceHistory();
+	if(action==='clear-rentabilidad-selection'){
+		rentabilidadSelectedProductIds.clear();
+		refreshRentabilidadSelection();
+	}
+});
 function filterSharedPurchases(){
 	const query=$('[data-filter="purchases"]')?.value.toLowerCase()||'';
 	const supplier=$('[data-purchase-supplier]')?.value||'all';
@@ -1570,6 +2092,7 @@ document.addEventListener('click',event=>{
 	if(button.dataset.action==='new-talonario')openTalonarioModal();
 	if(button.dataset.action==='send-talonario')openTalonarioModal(button.dataset.talonarioId);
 	if(button.dataset.action==='justify-talonario-number')openTalonarioJustificationModal(button.dataset.talonarioId,button.dataset.talonarioNumber);
+	if(button.dataset.action==='view-talonario-justifications')openTalonarioJustificationsModal(button.dataset.talonarioId);
 });
 document.addEventListener('submit',async event=>{
 	if(event.target.id!=='talonario-form')return;
@@ -2356,7 +2879,19 @@ async function seedConfiguredTalonariosActivos(){
 function openTalonarioJustificationModal(talonarioId, number){
 	const talonario=(store.collection.talonarios||[]).find(item=>String(item.id)===String(talonarioId));
 	if(!talonario)return;
-	$('#modal-root').innerHTML=`<div class="modal-backdrop"><form class="modal" id="talonario-justification-form"><button type="button" class="modal-close">×</button><p class="eyebrow">CONTROL DE CONSECUTIVOS</p><h2>Justificar ${Number(number).toLocaleString('es-CO')}</h2><p class="muted">${String(talonario.destinationName||talonario.storeId||'Sin local')} · ${String(talonario.type||'REMISION')}</p><input type="hidden" name="talonarioId" value="${talonario.id}"><input type="hidden" name="number" value="${number}"><label class="input-label">Motivo<select class="field" name="reason" required><option value="ANULADA">Anulada</option><option value="DANADA">Dañada</option><option value="PERDIDA">Perdida</option><option value="ERROR_DIGITACION">Error de digitacion</option><option value="NO_UTILIZADA">No utilizada</option><option value="OTRO">Otro</option></select></label><label class="input-label">Observacion<textarea class="field" name="notes" rows="3" required></textarea></label><button class="primary wide">Guardar justificacion</button></form></div>`;
+	$('#modal-root').innerHTML=`<div class="modal-backdrop"><form class="modal" id="talonario-justification-form"><button type="button" class="modal-close">×</button><p class="eyebrow">CONTROL DE CONSECUTIVOS</p><h2>Justificar ${Number(number).toLocaleString('es-CO')}</h2><p class="muted">${String(talonario.destinationName||talonario.storeId||'Sin local')} · ${String(talonario.type||'REMISION')}</p><input type="hidden" name="talonarioId" value="${talonario.id}"><input type="hidden" name="number" value="${number}"><label class="input-label">Motivo<select class="field" name="reason" required><option value="ANULADA">Anulada</option><option value="DANADA">Dañada</option><option value="PERDIDA">Perdida</option><option value="ERROR_DIGITACION">Error de digitación</option><option value="NO_UTILIZADA">No utilizada</option><option value="OTRO">Otro</option></select></label><label class="input-label">Observación<textarea class="field" name="notes" rows="3" required></textarea></label><button class="primary wide">Guardar justificación</button></form></div>`;
+	$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';
+}
+function openTalonarioJustificationsModal(talonarioId){
+	const talonario=(store.collection.talonarios||[]).find(item=>String(item.id)===String(talonarioId));
+	if(!talonario)return showToast('No se encontro el talonario para consultar sus justificaciones.','error');
+	const escapeHtml=value=>String(value??'-').replace(/[&<>"']/g,character=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[character]));
+	const reasonLabels={ANULADA:'Anulada',DANADA:'Dañada',PERDIDA:'Perdida',ERROR_DIGITACION:'Error de digitación',NO_UTILIZADA:'No utilizada',OTRO:'Otro'};
+	const documents=justifiedTalonarioDocumentsForLocal(talonario,store.collection.talonarios||[],store.collection.talonarioJustifications||[]);
+	const entries=documents.length
+		?`<div class="talonario-justifications-list">${documents.map(document=>`<article class="talonario-justification-entry"><div class="talonario-justification-heading"><strong>${Number(document.number).toLocaleString('es-CO')}</strong><span>${escapeHtml(reasonLabels[document.reason.toUpperCase()]||document.reason||'Sin motivo')}</span></div><p>${escapeHtml(document.notes||'Sin observación')}</p></article>`).join('')}</div>`
+		:'<p class="muted">No hay consecutivos justificados para este local.</p>';
+	$('#modal-root').innerHTML=`<div class="modal-backdrop"><section class="modal talonario-justifications-modal" role="dialog" aria-modal="true" aria-labelledby="talonario-justifications-title"><button type="button" class="modal-close" aria-label="Cerrar">×</button><p class="eyebrow">CONTROL DE CONSECUTIVOS</p><h2 id="talonario-justifications-title">Justificaciones</h2><p class="muted">${escapeHtml(talonario.destinationName||talonario.storeId||'Sin local')} · ${escapeHtml(talonario.type||'REMISION')}</p>${entries}</section></div>`;
 	$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';
 }
 async function saveTalonarioJustification(form){

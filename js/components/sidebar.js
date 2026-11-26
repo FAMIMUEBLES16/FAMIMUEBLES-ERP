@@ -6,6 +6,7 @@ export const icons = {
 	receipt: icon('<path d="M5 3h14v18l-3-2-4 2-4-2-3 2V3Z"/><path d="M8 8h8M8 12h6"/>'),
 	users: icon('<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/>'),
 	wallet: icon('<path d="M20 7V6a2 2 0 0 0-2-2H5a3 3 0 0 0 0 6h15v8a2 2 0 0 1-2 2H5a3 3 0 0 1-3-3V7"/><path d="M16 14h.01"/>'),
+	tag: icon('<path d="m20 13-7 7-9-9V4h7l9 9Z"/><circle cx="8.5" cy="8.5" r="1"/>'),
 	settings: icon('<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-1.7 1.7-.06-.06a1.7 1.7 0 0 0-1.88-.34A1.7 1.7 0 0 0 15.12 20v.2h-2.4V20a1.7 1.7 0 0 0-1.04-1.56 1.7 1.7 0 0 0-1.88.34l-.06.06-1.7-1.7.06-.06A1.7 1.7 0 0 0 8.4 15a1.7 1.7 0 0 0-1.56-1.04H6v-2.4h.84A1.7 1.7 0 0 0 8.4 10a1.7 1.7 0 0 0-.34-1.88L8 8.06l1.7-1.7.06.06a1.7 1.7 0 0 0 1.88.34A1.7 1.7 0 0 0 12.68 5.2V5h2.4v.2a1.7 1.7 0 0 0 1.04 1.56 1.7 1.7 0 0 0 1.88-.34l.06-.06 1.7 1.7-.06.06A1.7 1.7 0 0 0 19.4 10c.18.63.72 1.04 1.36 1.04H21v2.4h-.24A1.7 1.7 0 0 0 19.4 15Z"/>'),
 	calendar: icon('<rect x="3" y="4" width="18" height="17" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>')
 };
@@ -18,6 +19,7 @@ export const navItems = [
 	{id:'apartados',label:'Apartados',icon:icons.box},
 	{id:'reportes',label:'Reportes',icon:icons.dashboard},
 	{id:'productos',label:'Productos',icon:icons.box},
+	{id:'rentabilidad',label:'Rentabilidad',icon:icons.tag},
 	{id:'inventario',label:'Inventario',icon:icons.box},
 	{id:'traslados',label:'Traslados',icon:icons.box},
 	{id:'proveedores',label:'Proveedores',icon:icons.users},
@@ -34,7 +36,7 @@ export const navItems = [
 	{id:'configuracion',label:'Configuracion',icon:icons.settings},
 ];
 export const navGroups = [
-	{id:'consultar',label:'Consultar',icon:icons.dashboard,items:['ventas','clientes','cartera','apartados','auditoria','reportes']},
+	{id:'consultar',label:'Consultar',icon:icons.dashboard,items:['ventas','clientes','cartera','apartados','auditoria','reportes','rentabilidad']},
 	{id:'registrar',label:'Registrar',icon:icons.box,items:['productos','traslados','proveedores','compras','cuentas-por-pagar','operaciones','gastos','gasolina']},
 	{id:'operaciones',label:'Administracion',icon:icons.settings,items:['paridad','usuarios','descansos','talonarios','configuracion']},
 ];

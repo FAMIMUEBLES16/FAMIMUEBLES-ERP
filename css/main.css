@@ -11,6 +11,209 @@
 .record-summary p { margin:0; color:var(--muted); font-size:12px; }
 .talonarios-summary h3 { margin-bottom: 4px; }
 .talonarios-summary .muted { margin: 0 0 8px; }
+.talonario-justifications-link { color:var(--navy);font-weight:700;text-decoration:underline;text-underline-offset:3px; }
+.talonario-justifications-modal { width:min(620px,100%); }
+.talonario-justifications-list { max-height:min(55vh,520px);overflow-y:auto;border:1px solid var(--line);border-radius:8px; }
+.talonario-justification-entry { padding:12px 14px;border-bottom:1px solid var(--line); }
+.talonario-justification-entry:last-child { border-bottom:0; }
+.talonario-justification-heading { display:flex;align-items:center;justify-content:space-between;gap:12px; }
+.talonario-justification-entry p { margin:8px 0 0;color:var(--muted);white-space:pre-wrap;overflow-wrap:anywhere; }
+.profitability-note { margin:0 0 16px;padding:12px 14px;border:1px solid var(--fm-border);border-radius:8px;background:var(--fm-surface-soft);font-size:12px;line-height:1.5; }
+.rentabilidad-view { color:var(--fm-text); }
+.rentabilidad-view .page-head { margin-bottom:22px; }
+.rentabilidad-view .page-head h2 { color:var(--fm-text);font-size:30px;letter-spacing:-.7px; }
+.rentabilidad-view .rentabilidad-note { display:flex;align-items:flex-start;gap:12px;margin:0 0 18px;padding:16px 18px;border-color:var(--fm-border);border-radius:12px;background:linear-gradient(110deg,var(--fm-primary-soft),#fff 72%);color:var(--fm-text-secondary); }
+.rentabilidad-note-icon { display:grid;place-items:center;flex:0 0 34px;width:34px;height:34px;border-radius:10px;background:#fff;color:var(--fm-primary);box-shadow:var(--shadow-sm); }
+.rentabilidad-note-icon svg,.rentabilidad-stat-icon svg { width:19px;height:19px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round; }
+.rentabilidad-note strong { display:block;margin:1px 0 4px;color:var(--fm-text);font-size:12px; }
+.rentabilidad-note p { margin:0;font-size:12px;line-height:1.55; }
+.rentabilidad-view .rentabilidad-filters { display:grid;grid-template-columns:minmax(0,1fr);gap:13px;margin:0 0 20px;padding:16px 18px;border:1px solid var(--fm-border);border-radius:12px;background:#fff;box-shadow:var(--shadow-sm); }
+.rentabilidad-filter-searches { display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px; }
+.rentabilidad-filter-selects { display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px; }
+.rentabilidad-filter-conditions { display:flex;align-items:center;flex-wrap:wrap;gap:12px 20px;padding-top:2px; }
+.rentabilidad-filter-check { display:inline-flex;align-items:center;gap:8px;color:var(--fm-text-secondary);font-size:11px;cursor:pointer; }
+.rentabilidad-filter-check input { width:15px;height:15px;margin:0;accent-color:var(--fm-primary); }
+.rentabilidad-clear-filters { min-height:34px;margin-left:auto;padding:7px 11px;border-color:var(--fm-border);border-radius:8px;color:var(--fm-text-secondary);font-size:11px; }
+.rentabilidad-filters .input-label { min-width:0;margin:0;color:var(--fm-text-secondary);font-size:11px; }
+.rentabilidad-filters .field { max-width:none;min-height:42px;margin-top:7px;border-color:var(--fm-border);border-radius:9px;background:var(--fm-surface-soft);color:var(--fm-text);font-size:12px; }
+.rentabilidad-filters .field:focus { border-color:var(--fm-primary);background:#fff;box-shadow:0 0 0 3px rgba(23,105,255,.1);outline:0; }
+.modal.rentabilidad-price-modal { width:min(820px,100%); }
+.rentabilidad-price-modal .rentabilidad-price-details { display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin:0 0 18px; }
+.rentabilidad-price-details > div { min-width:0;padding:11px 12px;border:1px solid var(--fm-border);border-radius:9px;background:var(--fm-surface-soft); }
+.rentabilidad-price-details span,.rentabilidad-price-details strong { display:block; }
+.rentabilidad-price-details span { margin-bottom:5px;color:var(--fm-text-muted);font-size:10px;font-weight:600; }
+.rentabilidad-price-details strong { color:var(--fm-text);font-size:12px;overflow-wrap:anywhere; }
+.rentabilidad-price-modal .rentabilidad-price-editable { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px; }
+.rentabilidad-price-modal .rentabilidad-price-editable .input-label { margin:0;color:var(--fm-text-secondary);font-size:11px; }
+.rentabilidad-price-modal .rentabilidad-price-editable .field { max-width:none;min-height:44px;margin-top:7px;border-color:var(--fm-border);border-radius:9px;background:var(--fm-surface-soft);font-size:14px;font-weight:600; }
+.rentabilidad-price-modal .rentabilidad-price-editable .field:focus { border-color:var(--fm-primary);background:#fff;box-shadow:0 0 0 3px rgba(23,105,255,.1);outline:0; }
+.rentabilidad-price-note { margin:12px 0 0;color:var(--fm-text-muted);font-size:10px;line-height:1.5; }
+.rentabilidad-price-actions { display:flex;justify-content:flex-end;gap:10px;margin-top:20px; }
+.rentabilidad-price-actions button { min-height:40px;padding:9px 14px;border-radius:8px;font-size:11px; }
+.rentabilidad-view .rentabilidad-summary { grid-template-columns:repeat(5,minmax(0,1fr));gap:12px;margin:0 0 22px; }
+.rentabilidad-stat { display:flex;align-items:flex-start;gap:12px;min-width:0;padding:17px;border:1px solid var(--fm-border);border-radius:12px;background:#fff;box-shadow:var(--shadow-sm);transition:transform .18s ease,box-shadow .18s ease,border-color .18s ease; }
+.rentabilidad-stat:hover { transform:translateY(-2px);border-color:#d3dff1;box-shadow:var(--shadow-md); }
+.rentabilidad-stat-icon { display:grid;place-items:center;flex:0 0 38px;width:38px;height:38px;border-radius:11px;background:var(--fm-primary-soft);color:var(--fm-primary); }
+.rentabilidad-stat > div { min-width:0; }
+.rentabilidad-stat span:not(.rentabilidad-stat-icon) { display:block;color:var(--fm-text-secondary);font-size:11px;font-weight:600;line-height:1.4; }
+.rentabilidad-stat strong { display:block;margin:5px 0 2px;color:var(--fm-text);font:600 23px 'Space Grotesk'; }
+.rentabilidad-stat .rentabilidad-stat-empty { font-size:13px;letter-spacing:0; }
+.rentabilidad-stat small { display:block;color:var(--fm-text-muted);font-size:10px;line-height:1.4; }
+.rentabilidad-stat--danger .rentabilidad-stat-icon { background:#fff0ef;color:#b42318; }
+.rentabilidad-stat--danger strong,.rentabilidad-stat--danger small { color:#b42318; }
+.rentabilidad-stat--warning .rentabilidad-stat-icon { background:#fff6e6;color:#9a5f00; }
+.rentabilidad-stat--warning strong,.rentabilidad-stat--warning small { color:#9a5f00; }
+.rentabilidad-table-heading { display:flex;align-items:center;justify-content:space-between;gap:14px;margin:0 0 11px; }
+.rentabilidad-table-heading h3 { margin:0;color:var(--fm-text);font:600 16px 'Space Grotesk'; }
+.rentabilidad-table-heading p { margin:4px 0 0;color:var(--fm-text-muted);font-size:11px; }
+.rentabilidad-table-heading-tag { padding:6px 9px;border:1px solid var(--fm-border);border-radius:99px;background:#fff;color:var(--fm-text-secondary);font-size:10px;font-weight:600;white-space:nowrap; }
+.rentabilidad-export-toolbar { display:flex;align-items:flex-end;flex-wrap:wrap;gap:8px;margin:0 0 14px;padding:11px 12px;border:1px solid var(--fm-border);border-radius:10px;background:#fff;box-shadow:var(--shadow-sm); }
+.rentabilidad-export-toolbar .input-label { min-width:190px;margin:0;color:var(--fm-text-secondary);font-size:10px; }
+.rentabilidad-export-toolbar .field { max-width:none;min-height:36px;margin-top:5px;border-color:var(--fm-border);border-radius:8px;background:var(--fm-surface-soft);font-size:11px; }
+.rentabilidad-export-toolbar button { min-height:36px;padding:8px 11px;border-color:var(--fm-border);border-radius:8px;font-size:10px;white-space:nowrap; }
+.rentabilidad-export-divider { align-self:stretch;width:1px;margin:3px 4px;background:var(--fm-border); }
+.rentabilidad-bulk-toolbar { display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0 0 10px;padding:10px 12px;border:1px solid var(--fm-border);border-radius:10px;background:#fff; }
+.rentabilidad-bulk-toolbar > span { color:var(--fm-text-secondary);font-size:11px; }
+.rentabilidad-bulk-toolbar > span strong { color:var(--fm-text); }
+.rentabilidad-bulk-toolbar > div { display:flex;gap:8px; }
+.rentabilidad-bulk-toolbar button { min-height:34px;padding:7px 10px;border-radius:7px;font-size:10px; }
+.rentabilidad-bulk-toolbar button:disabled { cursor:not-allowed;opacity:.5; }
+.rentabilidad-select-product,.rentabilidad-table thead input[data-rentabilidad-select-visible] { width:16px;height:16px;margin:0;accent-color:var(--fm-primary);cursor:pointer; }
+.rentabilidad-bulk-modal { width:min(1080px,100%);max-height:92vh;overflow-y:auto; }
+.rentabilidad-import-modal { width:min(1080px,100%);max-height:92vh;overflow-y:auto; }
+.rentabilidad-import-modal > .input-label { display:block;margin:14px 0 6px;color:var(--fm-text-secondary);font-size:11px; }
+.rentabilidad-import-modal .field { max-width:none;min-height:42px;margin-top:6px;border-color:var(--fm-border);border-radius:8px;background:var(--fm-surface-soft);font-size:12px; }
+.rentabilidad-import-file-status { margin:7px 0;color:var(--fm-text-muted);font-size:10px;line-height:1.5;overflow-wrap:anywhere; }
+.rentabilidad-import-errors,.rentabilidad-import-valid { margin:12px 0;padding:10px 12px;border:1px solid var(--fm-border);border-radius:8px;font-size:11px;line-height:1.5; }
+.rentabilidad-import-errors { border-color:#f1d4d1;background:#fff8f7;color:#9e2821; }
+.rentabilidad-import-errors ul { max-height:140px;margin:6px 0 0;padding-left:19px;overflow:auto; }
+.rentabilidad-import-valid { border-color:#d3ebdf;background:#f4fbf7;color:#19734e; }
+.rentabilidad-bulk-modal > .input-label,.rentabilidad-bulk-import .input-label { display:block;margin:12px 0;color:var(--fm-text-secondary);font-size:11px; }
+.rentabilidad-bulk-modal .field { max-width:none;min-height:42px;margin-top:6px;border-color:var(--fm-border);border-radius:8px;background:var(--fm-surface-soft);font-size:12px; }
+.rentabilidad-bulk-selection { padding:10px 12px;border:1px solid var(--fm-border);border-radius:8px;background:var(--fm-surface-soft);color:var(--fm-text-secondary);font-size:11px; }
+.rentabilidad-bulk-import textarea { resize:vertical;font-family:monospace; }
+.rentabilidad-bulk-preview { margin-top:14px;padding:12px;border:1px solid var(--fm-border);border-radius:10px;background:#fff; }
+.rentabilidad-bulk-preview > p { margin:0 0 8px;color:var(--fm-text-secondary);font-size:11px;line-height:1.5; }
+.rentabilidad-bulk-preview > p strong { color:var(--fm-text); }
+.rentabilidad-bulk-preview-table { max-height:42vh;margin-top:12px;overflow:auto;border:1px solid var(--fm-border);border-radius:8px; }
+.rentabilidad-bulk-preview-table table { width:100%;min-width:840px;border-collapse:collapse; }
+.rentabilidad-bulk-preview-table th,.rentabilidad-bulk-preview-table td { padding:9px 10px;border-bottom:1px solid var(--fm-border);text-align:left;font-size:10px;vertical-align:top; }
+.rentabilidad-bulk-preview-table th { position:sticky;top:0;background:var(--fm-surface-soft);color:var(--fm-text-muted);font-size:9px; }
+.rentabilidad-bulk-preview-table td small { display:block;margin-top:4px;color:#b42318;line-height:1.4; }
+.rentabilidad-bulk-row--blocked { background:#fffaf0; }
+.rentabilidad-bulk-warning { display:block;color:#9a5f00;font-weight:700; }
+.rentabilidad-bulk-blocked { display:block;color:#b42318;font-weight:700; }
+.rentabilidad-bulk-outcome { margin-top:12px;padding:14px;border:1px solid var(--fm-border);border-radius:10px;background:#fff; }
+.rentabilidad-bulk-outcome h3 { margin:14px 0 6px;color:var(--fm-text);font-size:12px; }
+.rentabilidad-bulk-outcome ul { max-height:180px;margin:0;padding:0 0 0 18px;overflow:auto;color:var(--fm-text-secondary);font-size:10px; }
+.rentabilidad-bulk-outcome li { padding:3px 0; }
+.rentabilidad-bulk-outcome p { margin:5px 0;color:var(--fm-text-secondary);font-size:11px; }
+.rentabilidad-view .rentabilidad-table-wrap { max-height:clamp(320px,calc(100vh - 350px),720px);border-color:var(--fm-border);border-radius:12px;box-shadow:var(--shadow-sm); }
+.rentabilidad-view .rentabilidad-table { min-width:1600px; }
+.rentabilidad-table th { padding:13px 14px;color:var(--fm-text-muted);font-size:9px;letter-spacing:.65px; }
+.rentabilidad-table th span { display:block; }
+.rentabilidad-column-mode { display:block;margin-top:4px;color:var(--fm-text-muted);font-size:8px;font-weight:600;letter-spacing:0;white-space:nowrap; }
+.rentabilidad-column-mode--editable { color:var(--fm-primary); }
+.rentabilidad-table td { padding:13px 14px;color:var(--fm-text-secondary);font-size:11px; }
+.rentabilidad-table td.rentabilidad-product { min-width:170px;color:var(--fm-text);white-space:normal; }
+.rentabilidad-product strong { color:var(--fm-text);font-size:11px;line-height:1.4; }
+.rentabilidad-current-price,.rentabilidad-history-value { display:grid;justify-items:start;gap:3px; }
+.rentabilidad-current-price strong { color:var(--fm-text); }
+.rentabilidad-current-price small { color:var(--fm-primary);font-size:8px;font-weight:700;letter-spacing:.3px;text-transform:uppercase; }
+.rentabilidad-history-difference { color:var(--fm-text-muted);font-size:9px; }
+.rentabilidad-history-difference.rentabilidad-difference--up { color:#19734e; }
+.rentabilidad-history-difference.rentabilidad-difference--down { color:#b42318; }
+.rentabilidad-table tbody tr { transition:background-color .15s ease; }
+.rentabilidad-table tbody tr.rentabilidad-row--negative,.rentabilidad-table tbody tr.rentabilidad-row--negative:hover { background:#fff8f7; }
+.rentabilidad-table tbody tr.rentabilidad-row--missing-price,.rentabilidad-table tbody tr.rentabilidad-row--missing-price:hover { background:#fffaf0; }
+.rentabilidad-table td strong { color:var(--fm-text);font-size:11px; }
+.rentabilidad-margin { display:inline-flex;align-items:center;gap:7px; }
+.rentabilidad-margin strong { font-size:11px; }
+.rentabilidad-margin small { padding:3px 6px;border-radius:99px;background:#edf8f3;color:#19734e;font-size:9px;font-weight:700; }
+.rentabilidad-margin--negative strong { color:#b42318!important; }
+.rentabilidad-margin--negative small { background:#fff0ef;color:#b42318; }
+.rentabilidad-margin--zero strong { color:#9a5f00!important; }
+.rentabilidad-margin--zero small { background:#fff6e6;color:#9a5f00; }
+.rentabilidad-price-status { display:inline-flex;padding:5px 8px;border:1px solid transparent;border-radius:99px;font-size:9px;font-weight:700; }
+.rentabilidad-price-status--missing,.rentabilidad-price-status--danger { border-color:#f6d5d2;background:#fff0ef;color:#b42318; }
+.rentabilidad-price-status--warning { border-color:#f3dfb8;background:#fff6e6;color:#9a5f00; }
+.rentabilidad-price-status--success { border-color:#d3ebdf;background:#edf8f3;color:#19734e; }
+.rentabilidad-status { display:inline-flex;padding:4px 7px;border-radius:99px;font-size:9px;font-weight:700; }
+.rentabilidad-status--warning { background:#fff3dd;color:#9a5f00; }
+.rentabilidad-difference { font-weight:700; }
+.rentabilidad-difference--up { color:#19734e; }
+.rentabilidad-difference--down { color:#b42318; }
+.rentabilidad-edit-button { padding:6px 8px;border:1px solid var(--fm-border);border-radius:7px;background:#fff;color:var(--fm-primary);font-size:10px;font-weight:700;transition:background-color .15s ease,border-color .15s ease; }
+.rentabilidad-edit-button:hover { border-color:var(--fm-primary);background:var(--fm-primary-soft); }
+.rentabilidad-empty { margin:0;padding:36px 16px;border:1px dashed var(--fm-border);border-radius:12px;background:#fff;font-size:12px; }
+.rentabilidad-history-modal { width:min(1120px,100%);max-height:92vh;overflow-y:auto; }
+.rentabilidad-history-table-wrap { max-height:58vh;margin:14px 0;overflow:auto;border:1px solid var(--fm-border);border-radius:9px; }
+.rentabilidad-history-table { width:100%;min-width:880px;border-collapse:collapse; }
+.rentabilidad-history-table th,.rentabilidad-history-table td { padding:10px 11px;border-bottom:1px solid var(--fm-border);text-align:left;font-size:10px;vertical-align:top; }
+.rentabilidad-history-table th { position:sticky;top:0;background:var(--fm-surface-soft);color:var(--fm-text-muted);font-size:9px; }
+.rentabilidad-history-more { display:block;margin:12px auto 0;padding:9px 13px;border-radius:8px;font-size:11px; }
+@media (max-width: 1050px) {
+	.rentabilidad-view .rentabilidad-filters { grid-template-columns:1fr; }
+	.rentabilidad-filter-searches { grid-template-columns:repeat(2,minmax(0,1fr)); }
+	.rentabilidad-filter-selects { grid-template-columns:repeat(2,minmax(0,1fr)); }
+	.rentabilidad-view .rentabilidad-summary { grid-template-columns:repeat(3,minmax(0,1fr)); }
+	.rentabilidad-view .rentabilidad-table-wrap { max-height:65vh; }
+}
+@media (max-width: 700px) {
+	.rentabilidad-view .page-head { margin-bottom:17px; }
+	.rentabilidad-view .page-head h2 { font-size:25px; }
+	.rentabilidad-view .rentabilidad-filters { grid-template-columns:1fr;gap:11px;padding:14px; }
+	.rentabilidad-filter-searches,.rentabilidad-filter-selects { grid-template-columns:1fr;gap:10px; }
+	.rentabilidad-filter-conditions { align-items:flex-start;flex-direction:column;gap:11px; }
+	.rentabilidad-clear-filters { width:100%;margin-left:0; }
+	.rentabilidad-price-modal .rentabilidad-price-details { grid-template-columns:repeat(2,minmax(0,1fr)); }
+	.rentabilidad-price-modal .rentabilidad-price-editable { grid-template-columns:1fr; }
+	.rentabilidad-price-actions { flex-direction:column-reverse; }
+	.rentabilidad-price-actions button { width:100%; }
+	.rentabilidad-view .rentabilidad-summary { gap:9px;margin-bottom:19px; }
+	.rentabilidad-export-toolbar { align-items:stretch;flex-direction:column; }
+	.rentabilidad-export-toolbar .input-label { min-width:0; }
+	.rentabilidad-export-toolbar button { width:100%; }
+	.rentabilidad-export-divider { display:none; }
+	.rentabilidad-stat { gap:9px;padding:12px 10px;border-radius:10px; }
+	.rentabilidad-stat-icon { flex-basis:32px;width:32px;height:32px;border-radius:9px; }
+	.rentabilidad-stat-icon svg { width:16px;height:16px; }
+	.rentabilidad-stat span:not(.rentabilidad-stat-icon) { font-size:10px; }
+	.rentabilidad-stat strong { font-size:19px; }
+	.rentabilidad-stat small { font-size:9px; }
+	.rentabilidad-table-heading { align-items:flex-start; }
+	.rentabilidad-table-heading h3 { font-size:14px; }
+	.rentabilidad-table-heading-tag { font-size:9px; }
+	.rentabilidad-bulk-toolbar { align-items:stretch;flex-direction:column; }
+	.rentabilidad-bulk-toolbar > div { flex-direction:column; }
+	.rentabilidad-bulk-toolbar button { width:100%; }
+	.rentabilidad-view .rentabilidad-table-wrap { max-height:none;overflow:visible;border:0;background:transparent;box-shadow:none; }
+	.rentabilidad-view .rentabilidad-table { display:block;min-width:0; }
+	.rentabilidad-table thead { display:none; }
+	.rentabilidad-table tbody { display:grid;gap:10px; }
+	.rentabilidad-table tbody tr { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 12px;padding:4px 12px;border:1px solid var(--fm-border);border-radius:11px;background:#fff!important;box-shadow:var(--shadow-sm); }
+	.rentabilidad-table tbody tr:hover { background:#fff!important; }
+	.rentabilidad-table tbody td { display:grid;grid-template-columns:minmax(80px,.8fr) minmax(0,1.2fr);align-items:center;gap:8px;min-width:0;padding:9px 0;border-bottom:1px solid var(--fm-border);white-space:normal;text-align:right;font-size:10px;overflow-wrap:anywhere; }
+	.rentabilidad-table tbody td::before { content:attr(data-label);color:var(--fm-text-muted);font-size:9px;font-weight:700;text-align:left; }
+	.rentabilidad-table tbody td.rentabilidad-product { grid-column:1/-1;min-width:0;padding:11px 0;text-align:left; }
+	.rentabilidad-table tbody td.rentabilidad-product::before { content:none; }
+	.rentabilidad-table tbody td[data-label="Seleccionar"] { grid-column:1/-1;justify-items:start; }
+	.rentabilidad-table tbody td[data-label="Acciones"] { grid-column:1/-1;border-bottom:0; }
+	.rentabilidad-table tbody td[data-label="Acciones"]::before { content:none; }
+	.rentabilidad-table .rentabilidad-margin { justify-content:flex-end;flex-wrap:wrap;gap:4px; }
+	.rentabilidad-table .rentabilidad-current-price,.rentabilidad-table .rentabilidad-history-value { justify-items:end; }
+	.rentabilidad-table .rentabilidad-edit-button { width:100%;padding:8px; }
+}
+@media (max-width: 380px) {
+	.rentabilidad-stat { display:block;padding:10px; }
+	.rentabilidad-stat-icon { margin-bottom:8px; }
+	.rentabilidad-table tbody tr { grid-template-columns:minmax(0,1fr); }
+	.rentabilidad-table tbody td { grid-template-columns:minmax(88px,.8fr) minmax(0,1.2fr); }
+	.rentabilidad-price-modal .rentabilidad-price-details { grid-template-columns:1fr; }
+}
+@media (prefers-reduced-motion: reduce) {
+	.rentabilidad-stat,.rentabilidad-table tbody tr,.rentabilidad-edit-button { transition:none; }
+}
 .talonarios-history-scroll { overflow-x: auto; }
 .talonarios-history-scroll .table-wrap { overflow: visible; }
 @media (max-width: 900px) { .talonarios-filters { grid-template-columns: 1fr 1fr; } }

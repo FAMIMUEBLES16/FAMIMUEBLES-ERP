@@ -1,6 +1,6 @@
 import { createAccountPayable } from '../services/accounts-payable-service.js?v=14';
 import { demoState } from './demo-data.js';
-import { api } from '../services/api-client.js?v=20261015-large-state-timeout-v1';
+import { api } from '../services/api-client.js?v=20261125-rentabilidad-bulk-v1';
 import { API_BASE_URL } from '../config.js?v=20261105-public-api-fallback-v1';
 
 export const TENANT_STORAGE_KEY = 'famimuebles-tenant-id';
@@ -68,7 +68,7 @@ function normalizeState(state) {
   const storesByName = Object.fromEntries(base.stores.map(store => [store.name, store.id]));
   const customerIds = new Map();
   base.customers = Array.isArray(base.customers) ? base.customers.map((customer, index) => { const id=customer.id && String(customer.id).startsWith('CLI-') ? customer.id : `CLI-${String(index+1).padStart(5,'0')}`; customerIds.set(customer.name,id); return { ...customer, id }; }) : [];
-  base.products = Array.isArray(base.products) ? base.products.map((product, index) => { const minimum=3; const maximum=Number(product.maximum ?? product.maxStock ?? minimum * 3); const costValue=Number(product.cost ?? 0); const cost=Number.isFinite(costValue) && costValue >= 0 ? costValue : 0; const statedPrice=Number(product.price ?? product.salePrice ?? 0); const price=Number.isFinite(statedPrice) && statedPrice >= 0 ? statedPrice : 0; const active=product.active ?? product.activo ?? true; return { ...product, id:product.id && String(product.id).startsWith('PROD-') ? product.id : `PROD-${String(index+1).padStart(5,'0')}`, barcode:String(product.barcode || ''), reference:product.reference || product.code, storeId:product.storeId || storesByName[product.store] || base.stores[0]?.id, minimum, minStock:minimum, maximum, maxStock:maximum, ideal:product.ideal || maximum, cost, price, salePrice:price, minimumPrice:Math.max(price * 0.8, cost || 0), specialPrice:Number(product.specialPrice ?? 0), iva:Number(product.iva ?? 0), categoryName:product.categoryName || product.category || 'General', subcategory:String(product.subcategory || product.subcategoryName || ''), subcategoryName:product.subcategoryName || product.subcategory || '', brand:String(product.brand || ''), supplierName:String(product.supplierName || ''), active, activo:active, estado:active ? 'Activo' : 'Inactivo' }; }) : [];
+  base.products = Array.isArray(base.products) ? base.products.map((product, index) => { const minimum=3; const maximum=Number(product.maximum ?? product.maxStock ?? minimum * 3); const costValue=Number(product.cost ?? 0); const cost=Number.isFinite(costValue) && costValue >= 0 ? costValue : 0; const statedPrice=Number(product.price ?? product.salePrice ?? 0); const price=Number.isFinite(statedPrice) && statedPrice >= 0 ? statedPrice : 0; const active=product.active ?? product.activo ?? true; const minimumPriceValue=Number(product.minimumPrice ?? 0); const minimumPrice=Number.isFinite(minimumPriceValue) && minimumPriceValue >= 0 ? minimumPriceValue : 0; return { ...product, id:product.id && String(product.id).startsWith('PROD-') ? product.id : `PROD-${String(index+1).padStart(5,'0')}`, barcode:String(product.barcode || ''), reference:product.reference || product.code, storeId:product.storeId || storesByName[product.store] || base.stores[0]?.id, minimum, minStock:minimum, maximum, maxStock:maximum, ideal:product.ideal || maximum, cost, price, salePrice:price, minimumPrice, specialPrice:Number(product.specialPrice ?? 0), iva:Number(product.iva ?? 0), categoryName:product.categoryName || product.category || 'General', subcategory:String(product.subcategory || product.subcategoryName || ''), subcategoryName:product.subcategoryName || product.subcategory || '', brand:String(product.brand || ''), supplierName:String(product.supplierName || ''), active, activo:active, estado:active ? 'Activo' : 'Inactivo' }; }) : [];
   const saleIds = new Map();
   base.sales = Array.isArray(base.sales) ? base.sales.map((sale, index) => { const id=sale.id && String(sale.id).startsWith('VEN-') && String(sale.id).length===9 ? sale.id : `VEN-${String(index+1).padStart(5,'0')}`; const customerId=sale.customerId || customerIds.get(sale.customer) || 'CLI-00001'; saleIds.set(sale.id,id); return { ...sale, id, invoiceId:sale.invoiceId || `FAC-${String(index+1).padStart(5,'0')}`, customerId, customer:sale.customer || base.customers.find(customer=>customer.id===customerId)?.name || 'Cliente contado', paymentMethod:sale.paymentMethod || sale.payment || 'Efectivo', total:Number(sale.total || 0), items:Array.isArray(sale.items) ? sale.items : [] }; }) : [];
   const creditIds = new Map();
@@ -124,6 +124,22 @@ export function saveState(state) {
   REMOTE_DOMAIN_COLLECTIONS.forEach(collection => delete snapshot[collection]);
   return api.post('/api/state', { state: snapshot, tenantId: activeTenantId() }, { headers: { 'X-Tenant-ID': activeTenantId() } }).then(() => true);
 }
+function mergeCatalogProducts(currentProducts, catalogProducts) {
+  const previousById = new Map((Array.isArray(currentProducts) ? currentProducts : []).map(product => [String(product.id), product]));
+  return catalogProducts.map(product => {
+    const previous = previousById.get(String(product.id)) || {};
+    const salePrice = product.salePrice ?? product.price ?? previous.salePrice ?? previous.price ?? 0;
+    return {
+      ...previous,
+      ...product,
+      price: salePrice,
+      salePrice,
+      specialPrice: product.specialPrice ?? previous.specialPrice ?? 0,
+      minimumPrice: product.minimumPrice ?? previous.minimumPrice ?? 0,
+      iva: product.iva ?? product.taxRate ?? previous.iva ?? 0,
+    };
+  });
+}
 export async function hydrateState(bootstrap = false) {
   if (!API_BASE_URL) return null;
   try {
@@ -164,7 +180,7 @@ export async function hydrateCatalog(state, useStateCatalog = false, throwOnErro
       if (throwOnError) throw new Error('El servidor devolvio un catalogo incompleto.');
       return state;
     }
-    state.products = catalog.products.map(product => ({ ...product, price:0, salePrice:0, specialPrice:0, minimumPrice:0 }));
+    state.products = mergeCatalogProducts(state.products, catalog.products);
     state.stores = catalog.stores;
     if (Array.isArray(catalog.sales)) state.sales = catalog.sales;
     state.inventoryByStore = catalog.inventory || [];
@@ -177,7 +193,7 @@ export async function hydrateCatalog(state, useStateCatalog = false, throwOnErro
       if (throwOnError) throw new Error('El servidor devolvio un catalogo incompleto.');
       return state;
     }
-    state.products = catalog.products.map(product => ({ ...product, price:0, salePrice:0, specialPrice:0, minimumPrice:0 }));
+    state.products = mergeCatalogProducts(state.products, catalog.products);
     state.stores = catalog.stores;
     if (Array.isArray(catalog.sales)) state.sales = catalog.sales;
     state.inventoryByStore = catalog.inventory || [];

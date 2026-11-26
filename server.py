@@ -20,7 +20,7 @@ import urllib.error
 import urllib.request
 import zipfile
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse, unquote, parse_qs
@@ -371,12 +371,9 @@ def _initialize_schema() -> sqlite3.Connection:
         );
         CREATE TABLE IF NOT EXISTS products (
             id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, code TEXT NOT NULL,
-            received_hash = str(payload.get("hash", "")).strip().lower()
-            auth_date = str(payload.get("auth_date", "")).strip()
-            if not TELEGRAM_BOT_TOKEN or not received_hash or not auth_date:
             name TEXT NOT NULL, reference TEXT NOT NULL DEFAULT '', barcode TEXT NOT NULL DEFAULT '',
             category TEXT NOT NULL DEFAULT '', cost REAL NOT NULL DEFAULT 0,
-            sale_price REAL NOT NULL DEFAULT 0, tax_rate REAL NOT NULL DEFAULT 0,
+            sale_price REAL NOT NULL DEFAULT 0, minimum_price REAL NOT NULL DEFAULT 0, tax_rate REAL NOT NULL DEFAULT 0,
             active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             UNIQUE (tenant_id, code)
         );
@@ -407,6 +404,9 @@ def _initialize_schema() -> sqlite3.Connection:
         CREATE INDEX IF NOT EXISTS idx_movements_tenant_date ON inventory_movements(tenant_id, created_at);
         CREATE INDEX IF NOT EXISTS idx_sales_tenant_date ON sales(tenant_id, created_at);
     """)
+    product_columns = {row[1] for row in database.execute("PRAGMA table_info(products)")}
+    if "minimum_price" not in product_columns:
+        database.execute("ALTER TABLE products ADD COLUMN minimum_price REAL NOT NULL DEFAULT 0")
     sales_columns = {row[1] for row in database.execute("PRAGMA table_info(sales)")}
     if "invoice_number" not in sales_columns:
         database.execute("ALTER TABLE sales ADD COLUMN invoice_number TEXT NOT NULL DEFAULT ''")
@@ -446,7 +446,8 @@ def _initialize_postgres_schema() -> _PostgresConnection:
         "CREATE TABLE IF NOT EXISTS tenants (id TEXT PRIMARY KEY, name TEXT NOT NULL, slug TEXT UNIQUE NOT NULL, plan TEXT NOT NULL DEFAULT 'starter', active INTEGER NOT NULL DEFAULT 1, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)",
         "CREATE TABLE IF NOT EXISTS tenant_states (tenant_id TEXT PRIMARY KEY, state_json TEXT NOT NULL, updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)",
         "CREATE TABLE IF NOT EXISTS stores (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, code TEXT NOT NULL, name TEXT NOT NULL, address TEXT NOT NULL DEFAULT '', phone TEXT NOT NULL DEFAULT '', active INTEGER NOT NULL DEFAULT 1, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE (tenant_id, code))",
-        "CREATE TABLE IF NOT EXISTS products (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, code TEXT NOT NULL, name TEXT NOT NULL, reference TEXT NOT NULL DEFAULT '', barcode TEXT NOT NULL DEFAULT '', category TEXT NOT NULL DEFAULT '', cost DOUBLE PRECISION NOT NULL DEFAULT 0, sale_price DOUBLE PRECISION NOT NULL DEFAULT 0, tax_rate DOUBLE PRECISION NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE (tenant_id, code))",
+        "CREATE TABLE IF NOT EXISTS products (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, code TEXT NOT NULL, name TEXT NOT NULL, reference TEXT NOT NULL DEFAULT '', barcode TEXT NOT NULL DEFAULT '', category TEXT NOT NULL DEFAULT '', cost DOUBLE PRECISION NOT NULL DEFAULT 0, sale_price DOUBLE PRECISION NOT NULL DEFAULT 0, minimum_price DOUBLE PRECISION NOT NULL DEFAULT 0, tax_rate DOUBLE PRECISION NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE (tenant_id, code))",
+        "ALTER TABLE products ADD COLUMN IF NOT EXISTS minimum_price DOUBLE PRECISION NOT NULL DEFAULT 0",
         "CREATE TABLE IF NOT EXISTS inventory (tenant_id TEXT NOT NULL, product_id TEXT NOT NULL, store_id TEXT NOT NULL, quantity DOUBLE PRECISION NOT NULL DEFAULT 0, reserved_quantity DOUBLE PRECISION NOT NULL DEFAULT 0, minimum_quantity DOUBLE PRECISION NOT NULL DEFAULT 0, updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (tenant_id, product_id, store_id))",
         "CREATE TABLE IF NOT EXISTS inventory_movements (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, product_id TEXT NOT NULL, store_id TEXT NOT NULL, movement_type TEXT NOT NULL, quantity DOUBLE PRECISION NOT NULL, reference_id TEXT, note TEXT NOT NULL DEFAULT '', user_id TEXT, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)",
         "CREATE TABLE IF NOT EXISTS garantia_historial (id BIGSERIAL PRIMARY KEY, garantia_id INTEGER NOT NULL, fecha TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, tipo TEXT NOT NULL, estado TEXT, local TEXT, local_destino TEXT, codigo TEXT, descripcion TEXT, cantidad INTEGER NOT NULL DEFAULT 0, usuario TEXT, observacion TEXT, movimiento_id INTEGER)",
@@ -522,6 +523,7 @@ def _initialize_postgres_schema() -> _PostgresConnection:
     database.execute("ALTER TABLE locales ADD COLUMN IF NOT EXISTS direccion TEXT NOT NULL DEFAULT ''")
     database.execute("ALTER TABLE locales ADD COLUMN IF NOT EXISTS telefono TEXT NOT NULL DEFAULT ''")
     database.execute("ALTER TABLE productos ADD COLUMN IF NOT EXISTS precio_venta BIGINT NOT NULL DEFAULT 0")
+    database.execute("ALTER TABLE productos ADD COLUMN IF NOT EXISTS precio_minimo BIGINT NOT NULL DEFAULT 0")
     database.execute("CREATE TABLE IF NOT EXISTS clientes (id BIGSERIAL PRIMARY KEY, tenant_id TEXT NOT NULL DEFAULT 'tenant-default', external_id TEXT, nombre TEXT NOT NULL, documento TEXT DEFAULT '', telefono TEXT NOT NULL DEFAULT '', direccion TEXT NOT NULL DEFAULT '', email TEXT NOT NULL DEFAULT '', estado TEXT NOT NULL DEFAULT 'Activo', created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)")
     database.execute("ALTER TABLE clientes ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT 'tenant-default'")
     database.execute("ALTER TABLE clientes ADD COLUMN IF NOT EXISTS external_id TEXT")
@@ -687,6 +689,71 @@ def record_id(payload: dict) -> str:
     if not value:
         raise ValueError("El registro requiere un id")
     return value
+
+
+def _catalog_product_prices(payload: dict, existing_minimum_price=0) -> tuple[int, int]:
+    try:
+        sale_price = float(payload.get("salePrice", payload.get("price", 0)) or 0)
+        minimum_value = payload.get("minimumPrice", payload.get("minimum_price"))
+        minimum_price = float(existing_minimum_price if minimum_value is None else minimum_value or 0)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("El precio de venta y el precio minimo deben ser validos") from exc
+    if not math.isfinite(sale_price) or not math.isfinite(minimum_price) or sale_price < 0 or minimum_price < 0:
+        raise ValueError("El precio de venta y el precio minimo deben ser validos")
+    if sale_price < minimum_price:
+        raise ValueError("El precio de venta no puede ser menor al precio minimo configurado")
+    return int(sale_price), int(minimum_price)
+
+
+def _rentabilidad_product_prices(payload: dict) -> tuple[int, int]:
+    sale_value = payload.get("salePrice", payload.get("price"))
+    minimum_value = payload.get("minimumPrice", payload.get("minimum_price"))
+    if sale_value is None or minimum_value is None:
+        raise ValueError("Se requieren el precio de venta y el precio minimo")
+    try:
+        sale_price = Decimal(str(sale_value))
+        minimum_price = Decimal(str(minimum_value))
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise ValueError("El precio de venta y el precio minimo deben ser validos") from exc
+    if (
+        not sale_price.is_finite()
+        or not minimum_price.is_finite()
+        or sale_price < 0
+        or minimum_price < 0
+        or sale_price != sale_price.to_integral_value()
+        or minimum_price != minimum_price.to_integral_value()
+    ):
+        raise ValueError("El precio de venta y el precio minimo deben ser pesos enteros no negativos")
+    if sale_price < minimum_price:
+        raise ValueError("El precio de venta no puede ser menor al precio minimo configurado")
+    return int(sale_price), int(minimum_price)
+
+
+def _rentabilidad_bulk_price_items(payload: dict) -> list[dict]:
+    items = payload.get("items")
+    if not isinstance(items, list) or not items:
+        raise ValueError("Selecciona al menos un producto para actualizar")
+    if len(items) > 1000:
+        raise ValueError("El lote no puede superar 1.000 productos")
+    normalized = []
+    seen = set()
+    for item in items:
+        if not isinstance(item, dict):
+            raise ValueError("Cada producto del lote debe ser un objeto valido")
+        identifier = str(item.get("id", "")).strip()
+        if not identifier:
+            raise ValueError("Cada producto del lote requiere un id")
+        if identifier in seen:
+            raise ValueError(f"El producto {identifier} aparece mas de una vez")
+        seen.add(identifier)
+        sale_price, _ = _rentabilidad_product_prices({
+            "salePrice": item.get("salePrice"),
+            "minimumPrice": 0,
+        })
+        if sale_price > 9_007_199_254_740_991:
+            raise ValueError(f"El precio del producto {identifier} excede el limite permitido")
+        normalized.append({"id": identifier, "salePrice": sale_price})
+    return normalized
 
 
 def optional_customer_document(value):
@@ -1592,7 +1659,7 @@ def sync_catalog_state(database: sqlite3.Connection, tenant: str, state: dict) -
     for product in state.get("products", []):
         if not isinstance(product, dict) or not product.get("id") or not product.get("name"):
             continue
-        database.execute("INSERT INTO products (id, tenant_id, code, name, reference, barcode, category, cost, sale_price, tax_rate, active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET code=excluded.code, name=excluded.name, reference=excluded.reference, barcode=excluded.barcode, category=excluded.category, cost=excluded.cost, sale_price=excluded.sale_price, tax_rate=excluded.tax_rate, active=excluded.active", (str(product["id"]), tenant, str(product.get("code") or product["id"]), str(product["name"]), str(product.get("reference") or ""), str(product.get("barcode") or ""), str(product.get("category") or product.get("categoryName") or ""), float(product.get("cost") or 0), float(product.get("salePrice") or product.get("price") or 0), float(product.get("iva") or 0), 0 if product.get("active") is False else 1))
+        database.execute("INSERT INTO products (id, tenant_id, code, name, reference, barcode, category, cost, sale_price, minimum_price, tax_rate, active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET code=excluded.code, name=excluded.name, reference=excluded.reference, barcode=excluded.barcode, category=excluded.category, cost=excluded.cost, sale_price=excluded.sale_price, minimum_price=excluded.minimum_price, tax_rate=excluded.tax_rate, active=excluded.active", (str(product["id"]), tenant, str(product.get("code") or product["id"]), str(product["name"]), str(product.get("reference") or ""), str(product.get("barcode") or ""), str(product.get("category") or product.get("categoryName") or ""), float(product.get("cost") or 0), float(product.get("salePrice") or product.get("price") or 0), float(product.get("minimumPrice") or 0), float(product.get("iva") or 0), 0 if product.get("active") is False else 1))
     for row in state.get("inventoryByStore", []):
         if not isinstance(row, dict) or not row.get("productId") or not row.get("storeId"):
             continue
@@ -1613,7 +1680,7 @@ def _shared_catalog(database: _PostgresConnection) -> dict:
         for row in database.execute("SELECT id, nombre, activo, direccion, telefono FROM locales ORDER BY nombre").fetchall()
     ]
     products = [
-        {"id": str(row["codigo"]).strip(), "code": str(row["codigo"]).strip(), "name": row["nombre_producto"], "reference": "", "barcode": "", "category": product_category(row["nombre_producto"]), "categoryName": product_category(row["nombre_producto"]), "cost": row["precio_compra"] or 0, "salePrice": row["precio_venta"] or 0, "taxRate": 0, "minimum": 3, "minStock": 3, "minimumStock": 3, "active": str(row["activo"] or "SI").upper() != "NO"}
+        {"id": str(row["codigo"]).strip(), "code": str(row["codigo"]).strip(), "name": row["nombre_producto"], "reference": "", "barcode": "", "category": product_category(row["nombre_producto"]), "categoryName": product_category(row["nombre_producto"]), "cost": row["precio_compra"] or 0, "salePrice": row["precio_venta"] or 0, "minimumPrice": row["precio_minimo"] or 0, "taxRate": 0, "minimum": 3, "minStock": 3, "minimumStock": 3, "active": str(row["activo"] or "SI").upper() != "NO"}
                 for row in database.execute("""SELECT BTRIM(p.codigo) AS codigo, p.nombre_producto, p.precio_compra,
                                      COALESCE(NULLIF(p.precio_venta, 0), (
                                              SELECT mp.precio_unitario FROM movimiento_productos mp
@@ -1622,7 +1689,7 @@ def _shared_catalog(database: _PostgresConnection) -> dict:
                                                  AND UPPER(COALESCE(m.tipo, '')) = 'VENTA'
                                                  AND COALESCE(mp.precio_unitario, 0) > 0
                                              ORDER BY m.fecha DESC, m.id DESC LIMIT 1
-                                     ), 0) AS precio_venta, p.activo
+                                     ), 0) AS precio_venta, p.precio_minimo, p.activo
                                      FROM productos p ORDER BY p.nombre_producto""").fetchall()
     ]
     inventory_rows = database.execute(
@@ -3097,6 +3164,80 @@ class AppHandler(SimpleHTTPRequestHandler):
                 return
             self.send_json(200, {"items": [dict(zip(columns, row)) for row in rows], "report": report_name, "columns": columns})
             return
+        if path == "/api/catalog/product/pricing/history":
+            query = parse_qs(parsed_url.query)
+            raw_before_id = (query.get("beforeId") or ["0"])[0]
+            raw_limit = (query.get("limit") or ["50"])[0]
+            if not raw_before_id.isdigit() or not raw_limit.isdigit():
+                self.send_json(400, {"error": "El cursor y el límite deben ser enteros no negativos."})
+                return
+            before_id = int(raw_before_id)
+            limit = int(raw_limit)
+            if limit < 1 or limit > 100:
+                self.send_json(400, {"error": "El límite del historial debe estar entre 1 y 100."})
+                return
+            current_tenant = tenant_id(self)
+            if _postgres_enabled():
+                sql = """
+                    SELECT ae.id, ae.user_id AS "userId",
+                           COALESCE(NULLIF(u.display_name, ''), u.username, 'Usuario eliminado') AS "userName",
+                           ae.created_at AS "createdAt", ae.data_json AS "dataJson"
+                    FROM audit_events ae
+                    LEFT JOIN auth_users u ON u.id = ae.user_id AND u.tenant_id = %s
+                    WHERE ae.collection = 'products'
+                      AND COALESCE(ae.data_json::jsonb ->> 'tenantId', '') = %s
+                      AND ae.data_json::jsonb ? 'operationType'
+                      AND (%s = 0 OR ae.id < %s)
+                    ORDER BY ae.id DESC
+                    LIMIT %s
+                """
+            else:
+                sql = """
+                    SELECT ae.id, ae.user_id AS userId,
+                           COALESCE(NULLIF(u.display_name, ''), u.username, 'Usuario eliminado') AS userName,
+                           ae.created_at AS createdAt, ae.data_json AS dataJson
+                    FROM audit_events ae
+                    LEFT JOIN auth_users u ON u.id = ae.user_id AND u.tenant_id = ?
+                    WHERE ae.collection = 'products'
+                      AND json_extract(ae.data_json, '$.tenantId') = ?
+                      AND json_extract(ae.data_json, '$.operationType') IS NOT NULL
+                      AND (? = 0 OR ae.id < ?)
+                    ORDER BY ae.id DESC
+                    LIMIT ?
+                """
+            with connection() as database:
+                rows = database.execute(
+                    sql,
+                    (current_tenant, current_tenant, before_id, before_id, limit + 1),
+                ).fetchall()
+            has_more = len(rows) > limit
+            rows = rows[:limit]
+            items = []
+            for row in rows:
+                event = dict(row)
+                data = event.pop("dataJson")
+                if isinstance(data, str):
+                    data = json.loads(data)
+                items.append({
+                    "eventId": event["id"],
+                    "userId": event.get("userId"),
+                    "userName": event.get("userName"),
+                    "createdAt": event.get("createdAt"),
+                    "operationType": data.get("operationType"),
+                    "productId": data.get("productId"),
+                    "productCode": data.get("productCode"),
+                    "productName": data.get("productName"),
+                    "salePriceBefore": data.get("salePriceBefore"),
+                    "salePriceAfter": data.get("salePriceAfter"),
+                    "minimumPriceBefore": data.get("minimumPriceBefore"),
+                    "minimumPriceAfter": data.get("minimumPriceAfter"),
+                })
+            self.send_json(200, {
+                "items": items,
+                "hasMore": has_more,
+                "nextBeforeId": items[-1]["eventId"] if has_more and items else None,
+            })
+            return
         if path == "/api/state":
             if _postgres_enabled():
                 bootstrap = (parse_qs(parsed_url.query).get("bootstrap") or [""])[0] == "1"
@@ -3122,7 +3263,7 @@ class AppHandler(SimpleHTTPRequestHandler):
             current_tenant = tenant_id(self)
             with connection() as database:
                 stores = [dict(row) for row in database.execute("SELECT id, code, name, address, phone, active FROM stores WHERE tenant_id = ? ORDER BY name", (current_tenant,))]
-                products = [dict(row) for row in database.execute("SELECT id, code, name, reference, barcode, category, cost, sale_price AS salePrice, tax_rate AS taxRate, active FROM products WHERE tenant_id = ? ORDER BY name", (current_tenant,))]
+                products = [dict(row) for row in database.execute("SELECT id, code, name, reference, barcode, category, cost, sale_price AS salePrice, minimum_price AS minimumPrice, tax_rate AS taxRate, active FROM products WHERE tenant_id = ? ORDER BY name", (current_tenant,))]
                 inventory = [dict(row) for row in database.execute("SELECT product_id AS productId, store_id AS storeId, quantity, reserved_quantity AS reservedQuantity, minimum_quantity AS minimumQuantity FROM inventory WHERE tenant_id = ?", (current_tenant,))]
                 sales = []
                 for row in database.execute("SELECT id, store_id AS storeId, customer_id AS customerId, invoice_number AS invoiceNumber, total, payment_method AS paymentMethod, created_at AS date FROM sales WHERE tenant_id = ? ORDER BY created_at", (current_tenant,)):
@@ -3542,7 +3683,10 @@ class AppHandler(SimpleHTTPRequestHandler):
                             name = str(payload.get("name", "")).strip()
                             if not code or not name:
                                 raise ValueError("El producto requiere codigo y nombre")
-                            database.execute("INSERT INTO productos (codigo, nombre_producto, precio_compra, precio_venta, activo) VALUES (%s, %s, %s, %s, %s) ON CONFLICT (codigo) DO UPDATE SET nombre_producto = EXCLUDED.nombre_producto, precio_compra = EXCLUDED.precio_compra, precio_venta = EXCLUDED.precio_venta, activo = EXCLUDED.activo", (code, name, int(float(payload.get("cost", 0) or 0)), int(float(payload.get("salePrice", payload.get("price", 0)) or 0)), "NO" if payload.get("active") is False else "SI"))
+                            existing = database.execute("SELECT precio_minimo FROM productos WHERE codigo = %s", (code,)).fetchone()
+                            existing_minimum_price = existing["precio_minimo"] if existing else 0
+                            sale_price, minimum_price = _catalog_product_prices(payload, existing_minimum_price)
+                            database.execute("INSERT INTO productos (codigo, nombre_producto, precio_compra, precio_venta, precio_minimo, activo) VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (codigo) DO UPDATE SET nombre_producto = EXCLUDED.nombre_producto, precio_compra = EXCLUDED.precio_compra, precio_venta = EXCLUDED.precio_venta, precio_minimo = EXCLUDED.precio_minimo, activo = EXCLUDED.activo", (code, name, int(float(payload.get("cost", 0) or 0)), sale_price, minimum_price, "NO" if payload.get("active") is False else "SI"))
                     self.send_json(201, {"ok": True, "id": identifier})
                     return
                 current_tenant = tenant_id(self, payload)
@@ -3559,7 +3703,8 @@ class AppHandler(SimpleHTTPRequestHandler):
                         name = str(payload.get("name", "")).strip()
                         if not code or not name:
                             raise ValueError("El producto requiere codigo y nombre")
-                        database.execute("INSERT INTO products (id, tenant_id, code, name, reference, barcode, category, cost, sale_price, tax_rate) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (identifier, current_tenant, code, name, str(payload.get("reference", "")), str(payload.get("barcode", "")), str(payload.get("category", "")), float(payload.get("cost", 0)), float(payload.get("salePrice", 0)), float(payload.get("taxRate", 0))))
+                        sale_price, minimum_price = _catalog_product_prices(payload)
+                        database.execute("INSERT INTO products (id, tenant_id, code, name, reference, barcode, category, cost, sale_price, minimum_price, tax_rate) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (identifier, current_tenant, code, name, str(payload.get("reference", "")), str(payload.get("barcode", "")), str(payload.get("category", "")), float(payload.get("cost", 0)), sale_price, minimum_price, float(payload.get("taxRate", 0))))
                 self.send_json(201, {"ok": True, "id": identifier})
                 return
             if path == "/api/parity/conteo":
@@ -4716,6 +4861,176 @@ class AppHandler(SimpleHTTPRequestHandler):
             if not can_access(self, path, "PUT"):
                 self.send_json(403, {"error": "Permiso insuficiente"})
                 return
+            if path == "/api/catalog/product/pricing/bulk":
+                try:
+                    items = _rentabilidad_bulk_price_items(payload)
+                except ValueError as error:
+                    raw_items = payload.get("items") if isinstance(payload.get("items"), list) else []
+                    self.send_json(400, {
+                        "error": str(error),
+                        "updated": [],
+                        "notUpdated": [
+                            {"id": str(item.get("id", "")), "reason": str(error)}
+                            for item in raw_items
+                            if isinstance(item, dict)
+                        ],
+                    })
+                    return
+
+                operation_type = str(payload.get("operationType") or "masiva").strip().lower()
+                if operation_type not in {"masiva", "importacion"}:
+                    self.send_json(400, {
+                        "error": "El tipo de operación masiva no es válido.",
+                        "updated": [],
+                        "notUpdated": [{"id": item["id"], "reason": "Tipo de operación no válido."} for item in items],
+                    })
+                    return
+                current_user = authenticated_user(self)
+                current_tenant = tenant_id(self, payload)
+                updated_items = []
+                not_updated_items = []
+                failed_identifier = ""
+                try:
+                    with connection() as database:
+                        for item in items:
+                            failed_identifier = item["id"]
+                            if _postgres_enabled():
+                                existing = database.execute(
+                                    "SELECT BTRIM(codigo) AS id, nombre_producto AS name, COALESCE(precio_venta, 0) AS sale_price, COALESCE(precio_minimo, 0) AS minimum_price FROM productos WHERE BTRIM(codigo) = BTRIM(%s) FOR UPDATE",
+                                    (item["id"],),
+                                ).fetchone()
+                            else:
+                                existing = database.execute(
+                                    "SELECT id, name, sale_price, minimum_price FROM products WHERE id = ? AND tenant_id = ?",
+                                    (item["id"], current_tenant),
+                                ).fetchone()
+                            if not existing:
+                                not_updated_items.append({"id": item["id"], "reason": "Producto no encontrado."})
+                                continue
+                            previous_sale_price = int(existing["sale_price"] or 0)
+                            minimum_price = int(existing["minimum_price"] or 0)
+                            if item["salePrice"] < minimum_price:
+                                not_updated_items.append({
+                                    "id": item["id"],
+                                    "reason": "El precio resultante es inferior al precio mínimo configurado.",
+                                })
+                                continue
+                            if _postgres_enabled():
+                                changed = database.execute(
+                                    "UPDATE productos SET precio_venta = %s WHERE BTRIM(codigo) = BTRIM(%s)",
+                                    (item["salePrice"], item["id"]),
+                                ).rowcount
+                            else:
+                                changed = database.execute(
+                                    "UPDATE products SET sale_price = ? WHERE id = ? AND tenant_id = ?",
+                                    (item["salePrice"], item["id"], current_tenant),
+                                ).rowcount
+                            if changed != 1:
+                                raise RuntimeError("El producto dejó de estar disponible durante la actualización")
+                            audit_data = {
+                                "tenantId": current_tenant,
+                                "operationType": operation_type,
+                                "productId": item["id"],
+                                "productCode": item["id"],
+                                "productName": str(existing["name"] or ""),
+                                "salePriceBefore": previous_sale_price,
+                                "salePriceAfter": item["salePrice"],
+                                "minimumPriceBefore": minimum_price,
+                                "minimumPriceAfter": minimum_price,
+                            }
+                            database.execute(
+                                "INSERT INTO audit_events (user_id, action, collection, record_id, data_json) VALUES (?, ?, ?, ?, ?)",
+                                (current_user["id"], "UPDATE", "products", item["id"], json.dumps(audit_data, ensure_ascii=False)),
+                            )
+                            updated_items.append({"id": item["id"], "salePrice": item["salePrice"]})
+                except Exception:
+                    self.send_json(500, {
+                        "error": "El lote se revirtió y ningún producto fue actualizado.",
+                        "updated": [],
+                        "notUpdated": [
+                            {
+                                "id": item["id"],
+                                "reason": "La transacción se revirtió; no se guardó ningún cambio."
+                                if item["id"] != failed_identifier else
+                                "La transacción se revirtió al actualizar este producto.",
+                            }
+                            for item in items
+                        ],
+                    })
+                    return
+                self.send_json(200, {
+                    "ok": True,
+                    "total": len(items),
+                    "updated": updated_items,
+                    "notUpdated": not_updated_items,
+                })
+                return
+            if path == "/api/catalog/product/pricing":
+                identifier = record_id(payload)
+                sale_price, minimum_price = _rentabilidad_product_prices(payload)
+                current_user = authenticated_user(self)
+                current_tenant = tenant_id(self, payload)
+                if _postgres_enabled():
+                    with connection() as database:
+                        existing = database.execute(
+                            "SELECT BTRIM(codigo) AS id, nombre_producto AS name, COALESCE(precio_venta, 0) AS sale_price, COALESCE(precio_minimo, 0) AS minimum_price FROM productos WHERE BTRIM(codigo) = BTRIM(%s) FOR UPDATE",
+                            (identifier,),
+                        ).fetchone()
+                        updated = 0
+                        if existing:
+                            updated = database.execute(
+                                "UPDATE productos SET precio_venta = %s, precio_minimo = %s WHERE BTRIM(codigo) = BTRIM(%s)",
+                                (sale_price, minimum_price, identifier),
+                            ).rowcount
+                        if updated == 1:
+                            audit_data = {
+                                "tenantId": current_tenant,
+                                "operationType": "individual",
+                                "productId": identifier,
+                                "productCode": identifier,
+                                "productName": str(existing["name"] or ""),
+                                "salePriceBefore": int(existing["sale_price"] or 0),
+                                "salePriceAfter": sale_price,
+                                "minimumPriceBefore": int(existing["minimum_price"] or 0),
+                                "minimumPriceAfter": minimum_price,
+                            }
+                            database.execute(
+                                "INSERT INTO audit_events (user_id, action, collection, record_id, data_json) VALUES (?, ?, ?, ?, ?)",
+                                (current_user["id"], "UPDATE", "products", identifier, json.dumps(audit_data, ensure_ascii=False)),
+                            )
+                else:
+                    with connection() as database:
+                        existing = database.execute(
+                            "SELECT id, name, sale_price, minimum_price FROM products WHERE id = ? AND tenant_id = ?",
+                            (identifier, current_tenant),
+                        ).fetchone()
+                        updated = 0
+                        if existing:
+                            updated = database.execute(
+                                "UPDATE products SET sale_price = ?, minimum_price = ? WHERE id = ? AND tenant_id = ?",
+                                (sale_price, minimum_price, identifier, current_tenant),
+                            ).rowcount
+                        if updated == 1:
+                            audit_data = {
+                                "tenantId": current_tenant,
+                                "operationType": "individual",
+                                "productId": identifier,
+                                "productCode": identifier,
+                                "productName": str(existing["name"] or ""),
+                                "salePriceBefore": int(existing["sale_price"] or 0),
+                                "salePriceAfter": sale_price,
+                                "minimumPriceBefore": int(existing["minimum_price"] or 0),
+                                "minimumPriceAfter": minimum_price,
+                            }
+                            database.execute(
+                                "INSERT INTO audit_events (user_id, action, collection, record_id, data_json) VALUES (?, ?, ?, ?, ?)",
+                                (current_user["id"], "UPDATE", "products", identifier, json.dumps(audit_data, ensure_ascii=False)),
+                            )
+                if not updated:
+                    self.send_json(404, {"error": "Producto no encontrado"})
+                    return
+                self.send_json(200, {"ok": True, "id": identifier})
+                return
             fuel_match = re.fullmatch(r"/api/parity/gasolina/(\d+)", path)
             if fuel_match:
                 if not _postgres_enabled():
@@ -5167,11 +5482,37 @@ class AppHandler(SimpleHTTPRequestHandler):
                             raise ValueError("El producto requiere codigo y nombre")
                         if code != identifier and database.execute("SELECT 1 FROM productos WHERE codigo = %s", (code,)).fetchone():
                             raise ValueError("El nuevo codigo ya existe")
-                        updated = database.execute("UPDATE productos SET codigo = %s, nombre_producto = %s, precio_compra = %s, activo = %s WHERE codigo = %s", (code, name, int(float(payload.get("cost", payload.get("precio_compra", 0)) or 0)), "NO" if payload.get("active") is False else "SI", identifier)).rowcount
+                        existing = database.execute(
+                            "SELECT BTRIM(codigo) AS id, nombre_producto AS name, COALESCE(precio_venta, 0) AS sale_price, COALESCE(precio_minimo, 0) AS minimum_price FROM productos WHERE codigo = %s FOR UPDATE",
+                            (identifier,),
+                        ).fetchone()
+                        existing_minimum_price = existing["minimum_price"] if existing else 0
+                        sale_price, minimum_price = _catalog_product_prices(payload, existing_minimum_price)
+                        updated = database.execute("UPDATE productos SET codigo = %s, nombre_producto = %s, precio_compra = %s, precio_venta = %s, precio_minimo = %s, activo = %s WHERE codigo = %s", (code, name, int(float(payload.get("cost", payload.get("precio_compra", 0)) or 0)), sale_price, minimum_price, "NO" if payload.get("active") is False else "SI", identifier)).rowcount
                         if updated and code != identifier:
                             database.execute("UPDATE inventarios SET codigo = %s WHERE codigo = %s", (code, identifier))
                             database.execute("UPDATE movimiento_productos SET codigo = %s WHERE codigo = %s", (code, identifier))
                             database.execute("UPDATE comisiones_productos SET codigo = %s WHERE codigo = %s", (code, identifier))
+                        if updated and existing and (
+                            float(existing["sale_price"] or 0) != float(sale_price)
+                            or float(existing["minimum_price"] or 0) != float(minimum_price)
+                        ):
+                            current_user = authenticated_user(self)
+                            audit_data = {
+                                "tenantId": tenant_id(self, payload),
+                                "operationType": "individual",
+                                "productId": identifier,
+                                "productCode": code,
+                                "productName": name,
+                                "salePriceBefore": float(existing["sale_price"] or 0),
+                                "salePriceAfter": sale_price,
+                                "minimumPriceBefore": float(existing["minimum_price"] or 0),
+                                "minimumPriceAfter": minimum_price,
+                            }
+                            database.execute(
+                                "INSERT INTO audit_events (user_id, action, collection, record_id, data_json) VALUES (?, ?, ?, ?, ?)",
+                                (current_user["id"], "UPDATE", "products", identifier, json.dumps(audit_data, ensure_ascii=False)),
+                            )
                     else:
                         code = str(payload.get("code") or payload.get("codigo") or "").strip()
                         name = str(payload.get("name") or payload.get("nombre") or "").strip()
@@ -5195,10 +5536,36 @@ class AppHandler(SimpleHTTPRequestHandler):
                     code = str(payload.get("code", "")).strip()
                     if not name or not code:
                         raise ValueError("El producto requiere codigo y nombre")
+                    existing = database.execute(
+                        "SELECT id, name, sale_price, minimum_price FROM products WHERE id = ? AND tenant_id = ?",
+                        (identifier, current_tenant),
+                    ).fetchone()
+                    existing_minimum_price = existing["minimum_price"] if existing else 0
+                    sale_price, minimum_price = _catalog_product_prices(payload, existing_minimum_price)
                     updated = database.execute(
-                        "UPDATE products SET code = ?, name = ?, reference = ?, barcode = ?, category = ?, cost = ?, sale_price = ?, tax_rate = ?, active = ? WHERE id = ? AND tenant_id = ?",
-                        (code, name, str(payload.get("reference", "")), str(payload.get("barcode", "")), str(payload.get("category", "")), float(payload.get("cost", 0)), float(payload.get("salePrice", 0)), float(payload.get("taxRate", 0)), 0 if payload.get("active") is False else 1, identifier, current_tenant),
+                        "UPDATE products SET code = ?, name = ?, reference = ?, barcode = ?, category = ?, cost = ?, sale_price = ?, minimum_price = ?, tax_rate = ?, active = ? WHERE id = ? AND tenant_id = ?",
+                        (code, name, str(payload.get("reference", "")), str(payload.get("barcode", "")), str(payload.get("category", "")), float(payload.get("cost", 0)), sale_price, minimum_price, float(payload.get("taxRate", 0)), 0 if payload.get("active") is False else 1, identifier, current_tenant),
                     ).rowcount
+                    if updated and existing and (
+                        float(existing["sale_price"] or 0) != float(sale_price)
+                        or float(existing["minimum_price"] or 0) != float(minimum_price)
+                    ):
+                        current_user = authenticated_user(self)
+                        audit_data = {
+                            "tenantId": current_tenant,
+                            "operationType": "individual",
+                            "productId": identifier,
+                            "productCode": code,
+                            "productName": name,
+                            "salePriceBefore": float(existing["sale_price"] or 0),
+                            "salePriceAfter": sale_price,
+                            "minimumPriceBefore": float(existing["minimum_price"] or 0),
+                            "minimumPriceAfter": minimum_price,
+                        }
+                        database.execute(
+                            "INSERT INTO audit_events (user_id, action, collection, record_id, data_json) VALUES (?, ?, ?, ?, ?)",
+                            (current_user["id"], "UPDATE", "products", identifier, json.dumps(audit_data, ensure_ascii=False)),
+                        )
                 else:
                     name = str(payload.get("name", "")).strip()
                     code = str(payload.get("code", "")).strip()
