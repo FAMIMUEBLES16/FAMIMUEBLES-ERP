@@ -3,18 +3,18 @@ function transferRecord(transferId){const local=(store.collection.transfers||[])
 function showTransferDetail(transferId){const transfer=transferRecord(transferId);if(!transfer)return showToast('No se encontro el traslado.','error');const items=transfer.items||[];$('#modal-root').innerHTML=`<div class="modal-backdrop"><section class="modal"><button type="button" class="modal-close">×</button><p class="eyebrow">INVENTARIO</p><h2>Traslado ${transfer.id}</h2><div class="detail-grid"><div><span>Origen</span><strong>${transfer.originStoreId||transfer.local_origen||'-'}</strong></div><div><span>Destino</span><strong>${transfer.destinationStoreId||transfer.local_destino||'-'}</strong></div><div><span>Fecha</span><strong>${transfer.createdAt||transfer.fecha||'-'}</strong></div><div><span>Estado</span><strong>${transfer.status||transfer.estado||'-'}</strong></div></div><h3>Productos</h3>${table(['Producto','Cantidad'],items.map(item=>`<tr><td>${item.name||item.descripcion||item.productId||item.codigo||'Producto'}</td><td>${item.quantity||item.cantidad||0}</td></tr>`))}</section></div>`;$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';}
 function editTransfer(transferId){const transfer=transferRecord(transferId);if(!transfer)return showToast('No se encontro el traslado.','error');$('#modal-root').innerHTML=`<div class="modal-backdrop"><form class="modal" id="transfer-edit-form"><button type="button" class="modal-close">×</button><p class="eyebrow">INVENTARIO</p><h2>Editar traslado</h2><textarea class="field" name="data" rows="12" required>${JSON.stringify(transfer,null,2)}</textarea><button class="primary wide">Guardar cambios</button></form></div>`;$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';$('#transfer-edit-form').onsubmit=async event=>{event.preventDefault();try{const updated=JSON.parse(new FormData(event.target).get('data'));if(String(updated.id)!==String(transfer.id))throw new Error('El ID no puede cambiarse.');await persistDomainRecord('transfers',updated);store.collection.transfers=[...(store.collection.transfers||[]).filter(item=>String(item.id)!==String(updated.id)),updated];$('#modal-root').innerHTML='';render();showToast('Traslado actualizado correctamente.');}catch(error){showToast(error.message,'error');}};}
 async function deleteTransferRemote(transferId){if(!window.confirm('¿Eliminar este traslado?'))return;try{await persistCatalogRecord(`/api/domain/transfers/${encodeURIComponent(transferId)}`,{},'DELETE');store.collection.transfers=(store.collection.transfers||[]).filter(item=>String(item.id)!==String(transferId));$('#modal-root').innerHTML='';render();showToast('Traslado eliminado correctamente.');}catch(error){showToast(error.message,'error');}}
-import { store } from './data/store.js?v=20';
-import { hydrateState, hydrateStateWithRetry, hydrateCatalog, saveState, authHeaders, activeTenantId, isStaticDeployment } from './data/storage.js?v=32';
+import { store } from './data/store.js?v=21';
+import { hydrateState, hydrateStateWithRetry, hydrateCatalog, saveState, authHeaders, activeTenantId, isStaticDeployment } from './data/storage.js?v=33';
 import { generateId } from './utils/ids.js';
 import { currentRoute, startRouter } from './router.js?v=19';
 import { navItems, navGroups } from './components/sidebar.js?v=27';
 import { showToast } from './components/toast.js';
-import { table } from './components/tables.js';
+import { table } from './components/tables.js?v=2';
 import { renderNotifications } from './components/notifications.js';
 import { renderDashboard } from './modules/dashboard-v3.js?v=20261022-sistecredito-refresh-v1';
 import { canonicalSellerName, renderVentas, salesTable, salesSummary, normalizeSales, salesWithAnnulledTalonarios, salesMonthKey, saleTimestamp, filterSales, salesSellers, findMatchingSaleCustomer, upsertSaleRecord } from './modules/ventas.js?v=20261104-sale-submit-recovery-v1';
-import { renderFacturacion, cartTotal, productResults, customerResults } from './modules/facturacion.js?v=20261019-sistecredito-server-guard-v1';
-import { renderProductos, productTable, productMatches } from './modules/productos.js?v=22';
+import { renderFacturacion, cartTotal, productResults, customerResults } from './modules/facturacion.js?v=20261126-critical-round-1';
+import { renderProductos, productTable, productMatches } from './modules/productos.js?v=20261126-critical-round-1';
 import { buildRentabilidadBulkPricePlan, parseRentabilidadPriceCsv, parseRentabilidadPriceImport, parseRentabilidadPriceRecords, rentabilidadExportRows, rentabilidadPriceTemplateRows, renderRentabilidad, renderRentabilidadBulkPriceEditor, renderRentabilidadBulkPriceOutcome, renderRentabilidadBulkPricePreview, renderRentabilidadPriceEditor, renderRentabilidadPriceImportEditor, renderRentabilidadPriceImportPreview, renderRentabilidadPriceHistory, renderRentabilidadResults } from './modules/rentabilidad.js?v=12';
 import { pricingAnalysis } from './utils/rentabilidad-calculations.js?v=1';
 import { getProductPriceHistory, updateProductPrice, updateProductPrices } from './services/pricing-service.js?v=1';
@@ -37,11 +37,15 @@ import { historicalTalonarios, historicalRecibos, storedTalonarios } from './mod
 import { renderApartados } from './modules/apartados.js?v=20261015-finance-identifiers-v1';
 import { createApartado, decreaseSaleInventory, runTransaction, addMovement } from './modules/finanzas.js?v=18';
 import { formatCurrency as money } from './utils/currency.js?v=18';
+import { clearPendingOperation, getOrCreatePendingOperation } from './utils/pending-operations.js?v=1';
 
 let appHydrating = true;
+window.addEventListener('famimuebles:save-error', event => {
+	showToast(`No se guardaron los cambios: ${event.detail?.message || 'error de sincronizacion.'}`, 'error');
+});
 import { adjustStock, increaseStock, decreaseStock } from './services/inventory-service.js?v=18';
 import { createProduct, updateProduct, updateProductPricing, setProductActive, generateTestProducts, searchProducts, categoryFromProductName } from './services/product-service.js?v=23';
-import { productDetail } from './modules/product-detail.js?v=14';
+import { productDetail } from './modules/product-detail.js?v=15';
 import { importPreview, importPreviewRows, importProducts } from './modules/product-import.js?v=15';
 import { renderProveedores, supplierRecords, supplierTable } from './modules/proveedores.js?v=20261019-preserve-supplier-history-v1';
 import { renderCompras, purchaseTable, purchaseSummary } from './modules/compras.js?v=20261020-purchase-entry-sequence-v1';
@@ -65,6 +69,8 @@ let initialDomainHydrationStarted = false;
 let initialDomainHydrationTimer = null;
 let saleSubmissionInFlight = false;
 let pendingSaleSubmission = null;
+let pendingPurchaseSubmission = null;
+let pendingProductImport = null;
 const automaticSharedRefreshIntervalMs = 30000;
 let lastAutomaticSharedRefreshAt = 0;
 let inventoryViewState = { store:'all', query:'', active:'active', status:'all', sort:'name', version:0 };
@@ -316,7 +322,7 @@ async function saveTalonarioForm(form){
 		if(!Array.isArray(store.collection.talonarios))store.collection.talonarios=[];
 		store.collection.talonarios.push(item);
 	}
-	store.save();
+	await store.save({notify:false});
 	$('#modal-root').innerHTML='';
 	render();
 	showToast(sourceId?'Talonario enviado correctamente.':'Talonario almacenado correctamente.');
@@ -339,7 +345,7 @@ function currentTalonarioFor(item, items){
 	const group=talonarioGroupKey(item);
 	return [...(items||[])].filter(candidate=>talonarioGroupKey(candidate)===group&&['EN_USO','ENVIADO'].includes(String(candidate.status||'').toUpperCase())).sort((left,right)=>Number(right.startNumber||0)-Number(left.startNumber||0))[0];
 }
-function registerTalonarioSale(talonario){
+async function registerTalonarioSale(talonario){
 	if(!talonario?.id)return;
 	const talonarios=store.collection.talonarios||[];
 	const index=talonarios.findIndex(item=>String(item.id)===String(talonario.id));
@@ -355,7 +361,7 @@ function registerTalonarioSale(talonario){
 		const key=`talonario-venta-bajo:${talonario.id}:${today}`;
 		if(!store.collection.notifications.some(item=>item.key===key))store.collection.notifications.push({id:`NOT-TAL-VENTA-${talonario.id}-${today}`,key,text:`Alerta: al talonario de ${type==='RECIBO'?'recibos':'remisiones'} ${talonario.startNumber} - ${talonario.endNumber} del local ${localName} le quedan ${remaining} documentos. Envia un talonario nuevo.`,type:'warning',action:'talonarios',targetId:talonario.id,createdAt:new Date().toISOString(),read:false});
 	}
-	store.save();
+	await store.save({notify:false});
 }
 async function refreshTalonarioSalesAlerts(){
 	const sales=store.collection.sales||[];
@@ -383,7 +389,7 @@ async function refreshTalonarioSalesAlerts(){
 			if(!store.collection.notifications.some(item=>item.key===key))store.collection.notifications.push({id:`NOT-TAL-VENTA-${talonario.id}-${today}`,key,text:`Alerta: al talonario de ${type==='RECIBO'?'recibos':'remisiones'} ${talonario.startNumber} - ${talonario.endNumber} del local ${alertLocalName} le quedan ${remaining} documentos. Envia un talonario nuevo.`,type:'warning',action:'talonarios',targetId:talonario.id,createdAt:new Date().toISOString(),read:false});
 		}
 	}
-	store.save();
+	await store.save({notify:false});
 }
 const criticalDomainCollections = new Set(['customers','suppliers','purchases','accountsPayable','supplierPayments','talonarios','talonarioJustifications','credits','expenses','transfers','sistecreditoAdjustments','sistecreditoSaleAmounts']);
 async function loadDomainCollection(state, collection, timeout=5000, retries=0, refreshExisting=false){
@@ -448,7 +454,7 @@ async function hydrateDomainCollections(state, loadSecondary=true, allowSideEffe
  if(requireComplete&&payableResults.some(result=>!result))throw new Error('No se pudieron cargar todas las cuentas por pagar.');
  const normalizedPayables=normalizePayableSuppliers(state);
  if(allowSideEffects&&normalizedPayables.length){
-  store.save();
+  await store.save({notify:false});
   Promise.allSettled(normalizedPayables.map(account=>persistDomainRecord('accountsPayable',account))).then(results=>results.filter(result=>result.status==='rejected').forEach(result=>console.warn('No se pudo normalizar el proveedor de una cuenta por pagar:',result.reason?.message||result.reason)));
  }
  if(loadSecondary&&['dashboard','cuentas-por-pagar'].includes(currentRoute()))render();
@@ -459,7 +465,7 @@ async function hydrateDomainCollections(state, loadSecondary=true, allowSideEffe
 			await seedHistoricalTalonarios(state);
 			await seedConfiguredTalonariosActivos();
 			store.collection.talonarios=normalizeActiveTalonarios(store.collection.talonarios||[],store.collection.sales||[]);
-			store.save();
+			await store.save({notify:false});
 			await persistTalonarioNormalizationChanges(talonariosBeforeNormalization,store.collection.talonarios);
 			await refreshTalonarioSalesAlerts();
 			if(currentRoute()==='talonarios')render();
@@ -629,7 +635,7 @@ function openUserModal(){
 		try{
 			await persistCatalogRecord('/api/users',Object.fromEntries(new FormData(form)));
 			await hydrateUsers(store.state);
-			store.save();
+			await store.save({notify:false});
 			$('#modal-root').innerHTML='';
 			render();
 			showToast('Usuario creado correctamente.');
@@ -665,7 +671,7 @@ function openEditUserModal(userId,permissionsAfterCreate=false){
 		try{
 			const result=await persistCatalogRecord('/api/users',values,managed?'PUT':'POST');
 			await hydrateUsers(store.state);
-			store.save();
+			await store.save({notify:false});
 			$('#modal-root').innerHTML='';
 			render();
 			showToast(managed?'Usuario actualizado correctamente.':'Acceso creado y local asignado correctamente.');
@@ -791,7 +797,50 @@ async function openFuelModal(){
 		}
 	};
 }
-function openModal(type){ if(type==='fuel'){openFuelModal().catch(error=>showToast(error.message,'error'));return;} const configs={customer:['Nuevo cliente',[['name','Nombre completo'],['document','Documento'],['phone','Telefono'],['email','Correo']],values=>store.add('customers',{id:generateId('CLI',store.collection.customers),...values,purchases:0,credits:0,balance:0,status:'Activo'})],product:['Nuevo producto',[['name','Nombre'],['code','Codigo'],['reference','Referencia'],['category','Categoria'],['price','Precio','number'],['minimum','Stock minimo','number']],values=>{const product=store.add('products',{id:generateId('PROD',store.collection.products),...values,price:Number(values.price)||0,minimum:Number(values.minimum)||0,minimumPrice:Number(values.price)||0,stock:0,ideal:(Number(values.minimum)||0)*3,estado:'Activo',activo:true,storeId:state.storeId});ensureInventoryEntry(store.collection,product.id,state.storeId);}],credit:['Nuevo credito',[['total','Valor total','number'],['initial','Cuota inicial','number'],['installmentsCount','Numero de cuotas','number']],values=>store.add('credits',{id:generateId('CR',store.collection.credits),customerId:state.customerId,total:Number(values.total)||0,originalAmount:Number(values.total)||0,initial:Number(values.initial)||0,downPayment:Number(values.initial)||0,paid:0,financedAmount:Math.max(0,(Number(values.total)||0)-(Number(values.initial)||0)),installmentsCount:Number(values.installmentsCount)||1,installmentAmount:0,next:'Pendiente',date:'Ahora',status:'Al dia'})],expense:['Nuevo gasto',[['description','Descripcion'],['amount','Valor','number']],values=>store.add('expenses',{id:generateId('GAS',store.collection.expenses),date:new Date().toISOString().slice(0,10),storeId:state.storeId,category:'Otros',description:values.description,amount:Number(values.amount)||0,paymentMethod:'Efectivo',createdBy:'USR-00001'})],fuel:['Registrar gasolina',[['vehicle','Vehiculo'],['mileage','Kilometraje actual','number'],['quantity','Galones','number'],['amount','Valor','number']],values=>store.add('fuelRecords',{id:generateId('FUE',store.collection.fuelRecords),date:new Date().toISOString().slice(0,10),storeId:state.storeId,vehicle:values.vehicle,driver:'Pendiente',quantity:Number(values.quantity)||0,unit:'galones',amount:Number(values.amount)||0,mileage:Number(values.mileage)||0,station:'Pendiente',createdBy:'USR-00001'})],user:['Nuevo usuario',[['name','Nombre'],['email','Correo'],['role','Rol']],values=>store.add('users',{id:generateId('USR',store.collection.users),...values,status:'Activo'})]}; const config=configs[type]; if(!config)return; modal(config[0],config[1].map(field=>({name:field[0],label:field[1],type:field[2]})),values=>{config[2](values);store.save();$('#modal-root').innerHTML='';render();showToast('Registro guardado correctamente.');}); }
+function openModal(type){
+	if(type==='fuel'){openFuelModal().catch(error=>showToast(error.message,'error'));return;}
+	const configs={
+		customer:{title:'Nuevo cliente',fields:[['name','Nombre completo'],['document','Documento'],['phone','Telefono'],['email','Correo']],collection:'customers',create:values=>({id:generateId('CLI',store.collection.customers),...values,purchases:0,credits:0,balance:0,status:'Activo'})},
+		product:{title:'Nuevo producto',fields:[['name','Nombre'],['code','Codigo'],['reference','Referencia'],['category','Categoria'],['price','Precio','number'],['minimum','Stock minimo','number']],collection:'products',create:(values,draft)=>{const product=createProduct(draft,{...values,price:Number(values.price)||0,minimum:Number(values.minimum)||0,minimumPrice:Number(values.price)||0,storeId:state.storeId});ensureInventoryEntry(draft,product.id,state.storeId);return product;}},
+		credit:{title:'Nuevo credito',fields:[['total','Valor total','number'],['initial','Cuota inicial','number'],['installmentsCount','Numero de cuotas','number']],collection:'credits',create:values=>({id:generateId('CR',store.collection.credits),customerId:state.customerId,total:Number(values.total)||0,originalAmount:Number(values.total)||0,initial:Number(values.initial)||0,downPayment:Number(values.initial)||0,paid:0,financedAmount:Math.max(0,(Number(values.total)||0)-(Number(values.initial)||0)),installmentsCount:Number(values.installmentsCount)||1,installmentAmount:0,next:'Pendiente',date:'Ahora',status:'Al dia'})},
+		expense:{title:'Nuevo gasto',fields:[['description','Descripcion'],['amount','Valor','number']],collection:'expenses',create:values=>({id:generateId('GAS',store.collection.expenses),date:new Date().toISOString().slice(0,10),storeId:state.storeId,category:'Otros',description:values.description,amount:Number(values.amount)||0,paymentMethod:'Efectivo',createdBy:'USR-00001'})},
+		user:{title:'Nuevo usuario',fields:[['name','Nombre'],['email','Correo'],['role','Rol']],collection:'users',create:values=>({id:generateId('USR',store.collection.users),...values,status:'Activo'})},
+	};
+	const config=configs[type];
+	if(!config)return;
+	let pendingRecord=null;
+	let pendingFingerprint='';
+	modal(config.title,config.fields.map(field=>({name:field[0],label:field[1],type:field[2]})),async values=>{
+		const fingerprint=JSON.stringify(values);
+		if(!pendingRecord||pendingFingerprint!==fingerprint){
+			const draftState=structuredClone(store.collection);
+			pendingRecord={record:config.create(values,draftState),draftState,requestId:`product-${globalThis.crypto?.randomUUID?crypto.randomUUID():`${Date.now()}-${Math.random()}`}`};
+			pendingFingerprint=fingerprint;
+		}
+		if(!isStaticDeployment()){
+			const result=config.collection==='products'
+				?await persistCatalogRecord('/api/catalog/product',{...pendingRecord.record,id:pendingRecord.record.id,salePrice:pendingRecord.record.salePrice||pendingRecord.record.price,taxRate:pendingRecord.record.iva||0},'POST',pendingRecord.requestId)
+				:await persistDomainRecord(config.collection,pendingRecord.record);
+			if(result?.ok!==true)throw new Error('El servidor no confirmo el guardado del registro.');
+		}
+		if(config.collection==='products'){
+			store.state=pendingRecord.draftState;
+		}else if(isStaticDeployment()){
+			store.state=pendingRecord.draftState;
+			if(!store.collection[config.collection].some(item=>String(item.id)===String(pendingRecord.record.id))){
+				store.add(config.collection,pendingRecord.record,{persist:false});
+			}
+		}else if(!store.collection[config.collection].some(item=>String(item.id)===String(pendingRecord.record.id))){
+			store.add(config.collection,pendingRecord.record,{persist:false});
+		}
+		if(isStaticDeployment())await store.save({notify:false});
+		pendingRecord=null;
+		pendingFingerprint='';
+		$('#modal-root').innerHTML='';
+		render();
+		showToast('Registro guardado correctamente.');
+	});
+}
 function openStoreModal(storeId=''){ const storeItem=storeId && store.collection.stores.find(item=>item.id===storeId); modal(storeItem ? 'Editar local' : 'Nuevo local', [{name:'name',label:'Nombre',value:storeItem?.name||''},{name:'code',label:'Codigo',value:storeItem?.code||''},{name:'address',label:'Direccion',value:storeItem?.address||'',required:false},{name:'phone',label:'Telefono',value:storeItem?.phone||'',required:false},{name:'status',label:'Estado',value:storeItem?.status||'Activo'}],async values=>{ const payload={id:storeItem?.id||generateId('LOC',store.collection.stores),name:values.name,code:values.code,address:values.address||'',phone:values.phone||'',status:values.status||'Activo'}; await persistCatalogRecord('/api/catalog/store',payload,storeItem?'PUT':'POST'); const normalized=await hydrateState(); if(normalized){store.state=normalized;await hydrateCatalog(store.state);} $('#modal-root').innerHTML=''; render(); showToast(storeItem ? 'Local actualizado correctamente.' : 'Local guardado correctamente.'); }); }
 function showStoreDetail(storeId){ const storeItem=store.collection.stores.find(item=>item.id===storeId); if(!storeItem) return; const inventoryCount=(store.collection.inventoryByStore||[]).filter(item=>String(item.storeId)===String(storeId)).length; const inventoryUnits=(store.collection.inventoryByStore||[]).filter(item=>String(item.storeId)===String(storeId)).reduce((sum,item)=>sum+Number(item.quantity||0),0); $('#modal-root').innerHTML=`<div class="modal-backdrop"><div class="modal"><button type="button" class="modal-close">×</button><p class="eyebrow">LOCAL</p><h2>${storeItem.name || storeItem.code || 'Detalle del local'}</h2><div class="detail-grid"><div><span class="muted">Codigo</span><strong>${storeItem.code || '-'}</strong></div><div><span class="muted">Estado</span><strong>${storeItem.status || 'Activo'}</strong></div><div><span class="muted">Direccion</span><strong>${storeItem.address || 'Sin direccion'}</strong></div><div><span class="muted">Telefono</span><strong>${storeItem.phone || 'Sin telefono'}</strong></div><div><span class="muted">Productos</span><strong>${inventoryCount}</strong></div><div><span class="muted">Unidades</span><strong>${inventoryUnits}</strong></div></div><div class="store-actions" style="margin-top:18px;display:flex;gap:8px;flex-wrap:wrap;"><button class="outline" type="button" data-action="edit-store" data-store-id="${storeItem.id}">Editar local</button><button class="outline" type="button" data-action="local-inventory" data-store-id="${storeItem.id}">Inventario</button><button class="outline" type="button" data-action="local-transfer" data-store-id="${storeItem.id}">Trasladar</button></div></div></div>`; $('.modal-close').onclick=()=>$('#modal-root').innerHTML=''; }
 function saleDetail(saleId){ const sale = (store.collection.sales || []).find(item => String(item.id) === String(saleId)) || (store.collection.ventas || []).find(item => String(item.id) === String(saleId)); if(!sale) return; const customerName = sale.customer || sale.cliente || sale.cliente_nombre || 'Cliente'; const saleStore = (store.collection.stores || []).find(item => String(item.id) === String(sale.storeId || sale.local_id || sale.local)) || {name: sale.storeName || sale.local || 'Sin local'}; const rows = (sale.items && sale.items.length) ? sale.items : ((store.collection.movimiento_productos || []).filter(item => String(item.movimiento_id) === String(sale.movimiento_id ?? sale.id)).map(item => ({ productId:String(item.codigo || item.descripcion || ''), quantity:Number(item.cantidad || 0), price:Number(item.precio_unitario || 0), subtotal:Number(item.precio_total || 0), name:String(item.descripcion || item.producto || item.codigo || 'Producto') }))); const total = Number(sale.total || rows.reduce((sum,item)=>sum + Number(item.subtotal || (Number(item.quantity||0) * Number(item.price||0))), 0)); $('#modal-root').innerHTML=`<div class="modal-backdrop"><section class="modal"><button type="button" class="modal-close">×</button><p class="eyebrow">DETALLE DE VENTA</p><h2>${sale.id}</h2><div class="detail-grid"><div><span>Cliente</span><strong>${customerName}</strong></div><div><span>Local</span><strong>${saleStore.name}</strong></div><div><span>Fecha</span><strong>${sale.date || sale.fecha || '-'}</strong></div><div><span>Vendedor</span><strong>${sale.vendedor || sale.user || sale.empleado || 'No informado'}</strong></div><div><span>Metodo de pago</span><strong>${sale.paymentMethod || sale.metodo_pago || 'Sin dato'}</strong></div><div><span>Total</span><strong>${money(total)}</strong></div></div><h3>Productos</h3>${table(['Producto','Cantidad','Valor unitario','Subtotal'], rows.map(item => `<tr><td>${item.name || item.productId || 'Producto'}</td><td>${item.quantity || 0}</td><td>${money(Number(item.price || 0))}</td><td>${money(Number(item.subtotal || ((Number(item.quantity||0) * Number(item.price||0)) || 0)))}</td></tr>`))}<p class="muted">Estado: ${sale.status || 'Completada'}</p></section></div>`; $('.modal-close').onclick=()=>$('#modal-root').innerHTML=''; }
@@ -856,7 +905,7 @@ function openSaleEditModal(saleId){
 	$('#sale-edit-modal').onsubmit=async event=>{event.preventDefault();try{const values=Object.fromEntries(new FormData(event.target));await persistCatalogRecord('/api/catalog/sale',{...sale,...values,paymentMethod:values.paymentMethod||currentPayment},'PUT');Object.assign(sale,values,{paymentMethod:values.paymentMethod||currentPayment});await hydrateCatalog(store.state);$('#modal-root').innerHTML='';render();showToast('Venta actualizada correctamente.');}catch(error){showToast(error.message,'error');}};
 }
 async function deleteSale(saleId){if(!window.confirm('¿Anular esta venta? El inventario sera revertido y quedara registro de auditoria.'))return;try{await persistCatalogRecord(`/api/catalog/sale/${encodeURIComponent(saleId)}`,{},'DELETE');const normalized=await hydrateState();if(normalized){store.state=normalized;await hydrateCatalog(store.state);}$('#modal-root').innerHTML='';render();showToast('Venta anulada e inventario revertido.');}catch(error){showToast(error.message,'error');}}
-function deleteLocalTransfer(transferId){if(!window.confirm('¿Eliminar este traslado?'))return;const transfer=store.collection.transfers.find(item=>String(item.id)===String(transferId));if(!transfer)return;try{runTransaction(store.collection,()=>{if(transfer.status==='EN_TRANSITO')transfer.items.forEach(item=>increaseStock(store.collection,item.productId,transfer.originStoreId,item.quantity,transfer.id,'ANULACION_TRASLADO'));if(transfer.status==='RECIBIDO'){transfer.items.forEach(item=>{decreaseStock(store.collection,item.productId,transfer.destinationStoreId,item.quantity,transfer.id,'ANULACION_TRASLADO');increaseStock(store.collection,item.productId,transfer.originStoreId,item.quantity,transfer.id,'ANULACION_TRASLADO');});}store.collection.transfers=store.collection.transfers.filter(item=>item.id!==transfer.id);store.collection.auditLog.push({id:generateId('AUD',store.collection.auditLog),date:new Date().toISOString(),userId:'USR-00001',action:'Eliminar traslado',transferId:transfer.id});});store.save();render();showToast('Traslado eliminado e inventario revertido.');}catch(error){showToast(error.message,'error');}}
+async function deleteLocalTransfer(transferId){if(!window.confirm('¿Eliminar este traslado?'))return;const transfer=store.collection.transfers.find(item=>String(item.id)===String(transferId));if(!transfer)return;const previousState=structuredClone(store.state);try{runTransaction(store.collection,()=>{if(transfer.status==='EN_TRANSITO')transfer.items.forEach(item=>increaseStock(store.collection,item.productId,transfer.originStoreId,item.quantity,transfer.id,'ANULACION_TRASLADO'));if(transfer.status==='RECIBIDO'){transfer.items.forEach(item=>{decreaseStock(store.collection,item.productId,transfer.destinationStoreId,item.quantity,transfer.id,'ANULACION_TRASLADO');increaseStock(store.collection,item.productId,transfer.originStoreId,item.quantity,transfer.id,'ANULACION_TRASLADO');});}store.collection.transfers=store.collection.transfers.filter(item=>item.id!==transfer.id);store.collection.auditLog.push({id:generateId('AUD',store.collection.auditLog),date:new Date().toISOString(),userId:'USR-00001',action:'Eliminar traslado',transferId:transfer.id});});await store.save({notify:false});render();showToast('Traslado eliminado e inventario revertido.');}catch(error){store.state=previousState;render();showToast(error.message,'error');}}
 async function deleteLocalPurchase(purchaseId){
 	if(!window.confirm('¿Eliminar esta compra?'))return;
 	const domainPurchase=(store.collection.purchases||[]).find(item=>String(item.id)===String(purchaseId));
@@ -898,7 +947,7 @@ async function deleteLocalPurchase(purchaseId){
 			const normalized=await hydrateState();
 			if(normalized){store.state=normalized;await hydrateCatalog(store.state);}
 		}
-		store.save();
+		await store.save({notify:false});
 		render();
 		showToast('Compra eliminada.');
 	}catch(error){showToast(error.message,'error');}
@@ -916,14 +965,14 @@ async function deletePurchaseMirror(purchaseId,entryId){
 			await persistCatalogRecord(`/api/purchases/duplicate/${encodeURIComponent(purchaseId)}/${encodeURIComponent(entryId)}`,{},'DELETE');
 		}
 		store.collection.purchases=(store.collection.purchases||[]).filter(item=>String(item.id)!==String(purchaseId));
-		store.save();
+		await store.save({notify:false});
 		render();
 		showToast(`Registro duplicado ${purchaseId} eliminado. La entrada y el inventario siguen intactos.`);
 	}catch(error){showToast(error.message,'error');}
 }
 document.addEventListener('click',event=>{const button=event.target.closest('[data-action]');if(!button)return;const storeId=button.dataset.storeId;if(button.dataset.action==='toggle-store')toggleStore(storeId);if(button.dataset.action==='delete-store')deleteStore(storeId);});
-async function toggleStore(storeId){const storeItem=store.collection.stores.find(item=>String(item.id)===String(storeId));if(!storeItem)return;try{await persistCatalogRecord('/api/catalog/store',{...storeItem,status:storeItem.status==='Inactivo'?'Activo':'Inactivo',active:storeItem.status==='Inactivo'},'PUT');storeItem.status=storeItem.status==='Inactivo'?'Activo':'Inactivo';storeItem.active=storeItem.status==='Activo';store.save();render();showToast(`Local ${storeItem.status==='Activo'?'activado':'desactivado'}.`);}catch(error){showToast(error.message,'error');}}
-async function deleteStore(storeId){if(!window.confirm('¿Eliminar este local? Solo se permite si no tiene información relacionada.'))return;try{await persistCatalogRecord(`/api/catalog/store/${encodeURIComponent(storeId)}`,{},'DELETE');store.collection.stores=store.collection.stores.filter(item=>String(item.id)!==String(storeId));store.save();render();showToast('Local eliminado correctamente.');}catch(error){showToast(error.message,'error');}}
+async function toggleStore(storeId){const storeItem=store.collection.stores.find(item=>String(item.id)===String(storeId));if(!storeItem)return;try{await persistCatalogRecord('/api/catalog/store',{...storeItem,status:storeItem.status==='Inactivo'?'Activo':'Inactivo',active:storeItem.status==='Inactivo'},'PUT');storeItem.status=storeItem.status==='Inactivo'?'Activo':'Inactivo';storeItem.active=storeItem.status==='Activo';await store.save({notify:false});render();showToast(`Local ${storeItem.status==='Activo'?'activado':'desactivado'}.`);}catch(error){showToast(error.message,'error');}}
+async function deleteStore(storeId){if(!window.confirm('¿Eliminar este local? Solo se permite si no tiene información relacionada.'))return;try{await persistCatalogRecord(`/api/catalog/store/${encodeURIComponent(storeId)}`,{},'DELETE');store.collection.stores=store.collection.stores.filter(item=>String(item.id)!==String(storeId));await store.save({notify:false});render();showToast('Local eliminado correctamente.');}catch(error){showToast(error.message,'error');}}
 function openApartadoEditModal(id){
 	const item=store.collection.apartados.find(entry=>String(entry.id)===String(id));
 	if(!item)return;
@@ -1086,7 +1135,7 @@ function openPurchaseEditModal(purchase,targetCollection='purchases'){
 				if(accountIndex<0)store.collection.accountsPayable.push(accountUpdate);
 				else store.collection.accountsPayable[accountIndex]=accountUpdate;
 			}
-			store.save();$('#modal-root').innerHTML='';render();showToast('Compra y cuenta por pagar actualizadas correctamente.');
+			await store.save({notify:false});$('#modal-root').innerHTML='';render();showToast('Compra y cuenta por pagar actualizadas correctamente.');
 		}catch(error){
 			if(savedPurchase){
 				try{await persistDomainRecord('purchases',purchase);}
@@ -1107,7 +1156,7 @@ function openDomainEditModal(collection,id,label){
 	$('#modal-root').innerHTML=`<div class="modal-backdrop"><form class="modal" id="domain-edit-form"><button type="button" class="modal-close">×</button><p class="eyebrow">ADMINISTRACION</p><h2>Editar ${label}</h2><textarea class="field" name="data" rows="12" required>${JSON.stringify(item,null,2)}</textarea><button class="primary wide">Guardar cambios</button></form></div>`;
 	const closeButton=$('.modal-close');
 	if(closeButton)closeButton.onclick=()=>$('#modal-root').innerHTML='';
-	$('#domain-edit-form').onsubmit=async event=>{event.preventDefault();try{const updated=JSON.parse(new FormData(event.target).get('data'));if(!updated.id||String(updated.id)!==String(item.id))throw new Error('El ID no puede cambiarse.');if(targetCollection==='entries')await persistCatalogRecord('/api/shared-entry',updated,'PUT');else await persistDomainRecord(targetCollection,updated);const source=(store.collection[targetCollection]||[]);const index=source.findIndex(entry=>String(entry.id)===String(id));if(index>=0)source[index]=updated;else if(Array.isArray(store.collection[targetCollection]))store.collection[targetCollection].push(updated);store.save();$('#modal-root').innerHTML='';render();showToast(`${label} actualizado correctamente.`);}catch(error){showToast(error.message,'error');}};}
+	$('#domain-edit-form').onsubmit=async event=>{event.preventDefault();try{const updated=JSON.parse(new FormData(event.target).get('data'));if(!updated.id||String(updated.id)!==String(item.id))throw new Error('El ID no puede cambiarse.');if(targetCollection==='entries')await persistCatalogRecord('/api/shared-entry',updated,'PUT');else await persistDomainRecord(targetCollection,updated);const source=(store.collection[targetCollection]||[]);const index=source.findIndex(entry=>String(entry.id)===String(id));if(index>=0)source[index]=updated;else if(Array.isArray(store.collection[targetCollection]))store.collection[targetCollection].push(updated);await store.save({notify:false});$('#modal-root').innerHTML='';render();showToast(`${label} actualizado correctamente.`);}catch(error){showToast(error.message,'error');}};}
 function openApartadoViewModal(item){
 	const escapeHtml=value=>String(value??'').replace(/[&<>"']/g,character=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[character]));
 	const customer=item.customer||item.cliente_nombre||item.cliente||'Sin cliente';
@@ -1161,9 +1210,48 @@ function showCreditDetailConsolidated(creditId){
 	$('#modal-root').innerHTML=`<div class="modal-backdrop"><section class="modal credit-detail-modal"><button type="button" class="modal-close">×</button><p class="eyebrow">CARTERA</p><h2>Detalle del credito ${escapeHtml(credit.id)}</h2><h3>Informacion del credito</h3><div class="detail-grid">${field('Identificador',credit.id)}${field('Saldo pendiente',money(pending))}${field('Estado',credit.status||credit.estado||'PENDIENTE')}${field('Creado',credit.createdAt||credit.creado_en||credit.date||credit.fecha||'-')}${field('Actualizado',credit.updatedAt||credit.actualizado_en||'-')}${field('Movimiento',movementId)}${field('Total',money(total))}${field('Abono inicial',money(initial))}${field('Pagado',money(paid))}</div><h3>Cliente</h3><div class="detail-grid">${field('Nombre',customerName)}${field('Documento',credit.documento||credit.document||customer.document||'-')}${field('Telefono',credit.telefono||credit.phone||customer.phone||'-')}${field('Creado por',credit.creado_por||credit.createdBy||'-')}</div><h3>Venta</h3><div class="detail-grid">${field('Factura',invoice)}${field('Vendedor',seller)}${field('Local',local)}${field('Fecha',sale.date||sale.fecha||'-')}</div><h3>Historial de abonos</h3>${paymentRows}<h3>Productos vendidos</h3>${productRows}</section></div>`;
 	$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';
 }
-async function deleteDomainRecord(collection,id,label){if(!window.confirm(`¿Eliminar ${label}?`))return;try{await persistCatalogRecord(`/api/domain/${encodeURIComponent(collection)}/${encodeURIComponent(id)}`,{},'DELETE');if(Array.isArray(store.collection[collection]))store.collection[collection]=store.collection[collection].filter(item=>String(item.id)!==String(id));store.save();render();showToast(`${label} eliminado correctamente.`);}catch(error){showToast(error.message,'error');}}
-function deleteInventoryEntry(productId,storeId){if(!window.confirm('¿Eliminar esta existencia del local?'))return;const index=store.collection.inventoryByStore.findIndex(item=>String(item.productId)===String(productId)&&String(item.storeId)===String(storeId));if(index<0)return;store.collection.inventoryByStore.splice(index,1);store.collection.inventory=store.collection.inventory.filter(item=>!(String(item.productId)===String(productId)&&String(item.storeId)===String(storeId)));store.collection.auditLog.push({id:generateId('AUD',store.collection.auditLog),date:new Date().toISOString(),userId:'USR-00001',action:'Eliminar existencia',productId,storeId});store.save();render();showToast('Existencia eliminada del local.');}
-function openAdjustment(productId='', storeId=''){ const selectedStore=storeId || state.storeId || store.collection.stores[0]?.id; const selectedProduct=productId || store.collection.products[0]?.id; const current=inventoryEntry(store.collection,selectedProduct,selectedStore)?.quantity || 0; modal('Ajuste de inventario',[{name:'storeId',label:'Local',value:selectedStore},{name:'productId',label:'Producto',value:selectedProduct},{name:'newQuantity',label:'Nueva cantidad',type:'number',value:current},{name:'reason',label:'Motivo'}],async values=>{const target=Number(values.newQuantity);if(!Number.isInteger(target)||target<0)throw new Error('La nueva cantidad debe ser un entero mayor o igual a cero.');await persistCatalogRecord('/api/catalog/inventory-movement',{productId:values.productId,storeId:values.storeId,targetQuantity:target,movementType:'AJUSTE',note:values.reason||'Ajuste manual'});const remote=await hydrateState();if(remote){store.state=remote;await hydrateCatalog(store.state);}$('#modal-root').innerHTML='';render();showToast('Cantidad actualizada en PostgreSQL y movimiento registrado.');}); }
+async function deleteDomainRecord(collection,id,label){if(!window.confirm(`¿Eliminar ${label}?`))return;try{await persistCatalogRecord(`/api/domain/${encodeURIComponent(collection)}/${encodeURIComponent(id)}`,{},'DELETE');if(Array.isArray(store.collection[collection]))store.collection[collection]=store.collection[collection].filter(item=>String(item.id)!==String(id));await store.save({notify:false});render();showToast(`${label} eliminado correctamente.`);}catch(error){showToast(error.message,'error');}}
+async function deleteInventoryEntry(productId,storeId){if(!window.confirm('¿Eliminar esta existencia del local?'))return;const index=store.collection.inventoryByStore.findIndex(item=>String(item.productId)===String(productId)&&String(item.storeId)===String(storeId));if(index<0)return;const previousState=structuredClone(store.collection);try{store.collection.inventoryByStore.splice(index,1);store.collection.inventory=store.collection.inventory.filter(item=>!(String(item.productId)===String(productId)&&String(item.storeId)===String(storeId)));store.collection.auditLog.push({id:generateId('AUD',store.collection.auditLog),date:new Date().toISOString(),userId:'USR-00001',action:'Eliminar existencia',productId,storeId});await store.save({notify:false});render();showToast('Existencia eliminada del local.');}catch(error){store.state=previousState;render();showToast(error.message,'error');}}
+function openAdjustment(productId='', storeId=''){
+	const selectedStore=storeId||state.storeId||store.collection.stores[0]?.id;
+	const selectedProduct=productId||store.collection.products[0]?.id;
+	const current=inventoryEntry(store.collection,selectedProduct,selectedStore)?.quantity||0;
+	modal('Ajuste de inventario',[{name:'storeId',label:'Local',value:selectedStore},{name:'productId',label:'Producto',value:selectedProduct},{name:'newQuantity',label:'Nueva cantidad',type:'number',value:current},{name:'reason',label:'Motivo'}],async values=>{
+		const target=Number(values.newQuantity);
+		if(!Number.isInteger(target)||target<0)throw new Error('La nueva cantidad debe ser un entero mayor o igual a cero.');
+		const fingerprint=JSON.stringify({storeId:values.storeId,productId:values.productId,targetQuantity:target,note:values.reason||'',tenantId:activeTenantId()});
+		const pending=getOrCreatePendingOperation({
+			operation:'inventory-adjustment',
+			tenantId:activeTenantId(),
+			fingerprint,
+			create:()=>({requestId:`inventory-adjustment-${globalThis.crypto?.randomUUID?crypto.randomUUID():`${Date.now()}-${Math.random()}`}`}),
+		});
+		if(isStaticDeployment()){
+			const draftState=structuredClone(store.collection);
+			if((draftState.inventoryMovements||[]).some(item=>String(item.id)===String(pending.requestId))){
+				try{clearPendingOperation({operation:'inventory-adjustment',tenantId:activeTenantId(),fingerprint});}
+				catch(error){console.error('[app] No se pudo limpiar la clave del ajuste local confirmado:',error);}
+				$('#modal-root').innerHTML='';
+				showToast('Este ajuste ya se habia guardado en este dispositivo.');
+				return;
+			}
+			adjustStock(draftState,values.productId,values.storeId,target,values.reason||'Ajuste manual');
+			draftState.inventoryMovements.at(-1).id=pending.requestId;
+			await saveState(draftState);
+			store.state=draftState;
+		}else{
+			const result=await persistCatalogRecord('/api/catalog/inventory-movement',{id:pending.requestId,productId:values.productId,storeId:values.storeId,targetQuantity:target,movementType:'AJUSTE',note:values.reason||'Ajuste manual'},'POST',pending.requestId);
+			if(result?.ok!==true)throw new Error('El servidor no confirmo el ajuste de inventario.');
+			const remote=await hydrateState();
+			if(remote){store.state=remote;await hydrateCatalog(store.state);}
+		}
+		try{clearPendingOperation({operation:'inventory-adjustment',tenantId:activeTenantId(),fingerprint});}
+		catch(error){console.error('[app] No se pudo limpiar la clave del ajuste confirmado:',error);}
+		$('#modal-root').innerHTML='';
+		render();
+		showToast('Cantidad actualizada y movimiento registrado.');
+	});
+}
 function openSupplierModal(supplierId=''){ const supplier=supplierId&&store.collection.suppliers.find(item=>item.id===supplierId); modal(supplier?'Editar proveedor':'Nuevo proveedor',[{name:'code',label:'Codigo',value:supplier?.code,required:false},{name:'name',label:'Nombre o razon social',value:supplier?.name},{name:'document',label:'NIT o documento',value:supplier?.document,required:false},{name:'phone',label:'Telefono',value:supplier?.phone,required:false},{name:'whatsapp',label:'WhatsApp',value:supplier?.whatsapp,required:false},{name:'email',label:'Correo',value:supplier?.email,required:false},{name:'address',label:'Direccion',value:supplier?.address,required:false},{name:'city',label:'Ciudad',value:supplier?.city,required:false},{name:'contact',label:'Contacto',value:supplier?.contact,required:false},{name:'paymentTerms',label:'Condiciones de pago',value:supplier?.paymentTerms||'Contado',required:false},{name:'creditDays',label:'Dias de credito',type:'number',value:supplier?.creditDays||0,required:false},{name:'notes',label:'Observaciones',value:supplier?.notes,required:false}],async values=>{const payload={id:supplier?.id||generateId('SUP',store.collection.suppliers),...values,creditDays:Number(values.creditDays||0),paymentTerms:String(values.paymentTerms||'Contado'),active:supplier?.active!==false,createdAt:supplier?.createdAt||new Date().toISOString(),updatedAt:new Date().toISOString()};await persistDomainRecord('suppliers',payload);const index=store.collection.suppliers.findIndex(item=>item.id===payload.id);if(index===-1)store.collection.suppliers.push(payload);else store.collection.suppliers[index]=payload;$('#modal-root').innerHTML='';render();showToast('Proveedor guardado correctamente.');}); }
 function openPurchaseModal(){ purchaseDraft=[]; const suppliers=store.collection.suppliers.filter(item=>item.active!==false).map(item=>`<option value="${item.id}">${item.code} · ${item.name}</option>`).join(''); const stores=store.collection.stores.map(item=>`<option value="${item.id}">${item.name}</option>`).join(''); const products=store.collection.products.map(item=>`<option value="${item.id}">${item.code} · ${item.name}</option>`).join(''); $('#modal-root').innerHTML=`<div class="modal-backdrop"><form class="modal" id="purchase-modal"><button type="button" class="modal-close">×</button><p class="eyebrow">ABASTECIMIENTO</p><h2>Nueva compra</h2><label class="input-label">Proveedor<select class="field" name="supplierId" required>${suppliers}</select></label><label class="input-label">Local destino<select class="field" name="storeId" required>${stores}</select></label><label class="input-label">Factura proveedor<input class="field" name="supplierInvoice"></label><label class="input-label">Forma de pago<select class="field" name="paymentMethod"><option>Contado</option><option>Credito</option><option>Transferencia</option></select></label><label class="input-label">Producto<select class="field" data-purchase-product>${products}</select></label><div class="purchase-line-fields"><input class="field" type="number" min="1" value="1" data-purchase-quantity placeholder="Cantidad"><input class="field" type="number" min="0" value="0" data-purchase-cost placeholder="Costo unitario"><input class="field" type="number" min="0" value="0" data-purchase-iva placeholder="IVA %"><input class="field" type="number" min="0" value="0" data-purchase-discount placeholder="Descuento"></div><button type="button" class="outline wide" data-action="add-purchase-line">Agregar producto</button><div class="purchase-draft"></div><label class="input-label">Observaciones<textarea class="field" name="notes"></textarea></label><button class="primary wide">Guardar compra</button></form></div>`;$('.modal-close').onclick=()=>$('#modal-root').innerHTML=''; }
 function openPurchaseModalV2(){
@@ -1205,11 +1293,89 @@ document.addEventListener('submit',async event=>{
 			for(const talonario of received.records)await persistDomainRecord('talonarios',talonario);
 			for(const account of draftState.accountsPayable.filter(item=>String(item.purchaseId)===String(purchase.id)))await persistDomainRecord('accountsPayable',account);
 		}
+		if(isStaticDeployment())await saveState(draftState);
 		store.state=draftState;
-		store.save();$('#modal-root').innerHTML='';location.hash='#compras';render();showToast(reservation.serverReserved?'Compra de talonarios recibida y cuenta por pagar creada.':'Compra recibida y cuenta por pagar creada. Consecutivo calculado con el historial disponible; reinicia el servidor para habilitar reserva central.');
+		if(!isStaticDeployment())await store.save({notify:false});
+		$('#modal-root').innerHTML='';location.hash='#compras';render();showToast(reservation.serverReserved?'Compra de talonarios recibida y cuenta por pagar creada.':'Compra recibida y cuenta por pagar creada. Consecutivo calculado con el historial disponible; reinicia el servidor para habilitar reserva central.');
 	}catch(error){submitButton.disabled=false;showToast(error.message,'error');}
 },true);
-function openProductEditor(productId=''){ const product=productId&&store.collection.products.find(item=>item.id===productId); if(product&&!canPerform('Productos','edit'))return showToast('No tienes permiso para editar productos.','error');if(!product&&!canPerform('Productos','create'))return showToast('No tienes permiso para crear productos.','error');const fields=[['name','Nombre',product?.name],['code','Codigo',product?.code],['barcode','Codigo de barras',product?.barcode],['reference','Referencia',product?.reference],['category','Categoria',product?.category],['subcategory','Subcategoria',product?.subcategory],['brand','Marca',product?.brand],['supplierName','Proveedor',product?.supplierName],['cost','Costo',product?.cost||0,'number'],['price','Precio de venta',product?.salePrice??product?.price??0,'number'],['minimumPrice','Precio minimo de venta',product?.minimumPrice??0,'number'],['specialPrice','Precio especial',product?.specialPrice||0,'number'],['iva','IVA',product?.iva||0,'number'],['minimum','Stock minimo',product?.minimum||0,'number'],['maximum','Stock maximo',product?.maximum||0,'number']].map(field=>({name:field[0],label:field[1],value:field[2],type:field[3]}));modal(product?'Editar producto':'Nuevo producto',fields,async values=>{if(product&&!canPerform('Productos','edit'))return showToast('No tienes permiso para editar productos.','error');if(!product&&!canPerform('Productos','create'))return showToast('No tienes permiso para crear productos.','error');try{const normalized=product?updateProduct(store.collection,product.id,values):createProduct(store.collection,values);if(!product)ensureInventoryEntry(store.collection,normalized.id,state.storeId);await persistCatalogRecord('/api/catalog/product',{...normalized,id:normalized.id,salePrice:normalized.salePrice||normalized.price,taxRate:normalized.iva||0},product?'PUT':'POST');const remote=await hydrateState();if(remote){store.state=remote;await hydrateCatalog(store.state);}$('#modal-root').innerHTML='';render();showToast('Producto guardado correctamente.');}catch(error){showToast(error.message,'error');}}); }
+function openProductEditor(productId=''){
+	const product=productId&&store.collection.products.find(item=>item.id===productId);
+	if(product&&!canPerform('Productos','edit'))return showToast('No tienes permiso para editar productos.','error');
+	if(!product&&!canPerform('Productos','create'))return showToast('No tienes permiso para crear productos.','error');
+	const fields=[['name','Nombre',product?.name],['code','Codigo',product?.code],['barcode','Codigo de barras',product?.barcode],['reference','Referencia',product?.reference],['category','Categoria',product?.category],['subcategory','Subcategoria',product?.subcategory],['brand','Marca',product?.brand],['supplierName','Proveedor',product?.supplierName],['cost','Costo',product?.cost||0,'number'],['price','Precio de venta',product?.salePrice??product?.price??0,'number'],['minimumPrice','Precio minimo de venta',product?.minimumPrice??0,'number'],['specialPrice','Precio especial',product?.specialPrice||0,'number'],['iva','IVA',product?.iva||0,'number'],['minimum','Stock minimo',product?.minimum||0,'number'],['maximum','Stock maximo',product?.maximum||0,'number']].map(field=>({name:field[0],label:field[1],value:field[2],type:field[3]}));
+	let pendingSave=null;
+	modal(product?'Editar producto':'Nuevo producto',fields,async values=>{
+		if(product&&!canPerform('Productos','edit'))throw new Error('No tienes permiso para editar productos.');
+		if(!product&&!canPerform('Productos','create'))throw new Error('No tienes permiso para crear productos.');
+		const fingerprint=JSON.stringify(values);
+		if(!pendingSave||pendingSave.fingerprint!==fingerprint){
+			const draftState=structuredClone(store.collection);
+			const normalized=product?updateProduct(draftState,product.id,values):createProduct(draftState,values);
+			if(!product)ensureInventoryEntry(draftState,normalized.id,state.storeId);
+			pendingSave={fingerprint,draftState,product:normalized,requestId:`product-${normalized.id}-${globalThis.crypto?.randomUUID?crypto.randomUUID():`${Date.now()}-${Math.random()}`}`};
+		}
+		const normalized=pendingSave.product;
+		if(isStaticDeployment()){
+			await saveState(pendingSave.draftState);
+			store.state=pendingSave.draftState;
+		}else{
+			const result=await persistCatalogRecord('/api/catalog/product',{...normalized,id:normalized.id,salePrice:normalized.salePrice||normalized.price,taxRate:normalized.iva||0},product?'PUT':'POST',pendingSave.requestId);
+			if(result?.ok!==true)throw new Error('El servidor no confirmo el guardado del producto.');
+			store.state=pendingSave.draftState;
+			const remote=await hydrateState();
+			if(remote){store.state=remote;await hydrateCatalog(store.state);}
+		}
+		pendingSave=null;
+		$('#modal-root').innerHTML='';
+		render();
+		showToast('Producto guardado correctamente.');
+	});
+}
+async function persistProductActivation(product){
+	const draftState=structuredClone(store.collection);
+	const updated=setProductActive(draftState,product.id,product.active===false);
+	if(isStaticDeployment()){
+		await saveState(draftState);
+		store.state=draftState;
+	}else{
+		const result=await persistCatalogRecord('/api/catalog/product',{...updated,id:updated.id,salePrice:updated.salePrice||updated.price,taxRate:updated.iva||0},'PUT');
+		if(result?.ok!==true)throw new Error('El servidor no confirmo el cambio de estado del producto.');
+		store.state=draftState;
+		const remote=await hydrateState();
+		if(remote){store.state=remote;await hydrateCatalog(store.state);}
+	}
+	render();
+	showToast(`Producto ${updated.active?'activado':'desactivado'} correctamente.`);
+}
+document.addEventListener('click',event=>{
+	const button=event.target.closest('[data-action="toggle-product"]');
+	if(!button)return;
+	event.preventDefault();
+	event.stopImmediatePropagation();
+	const product=store.collection.products.find(item=>item.id===button.closest('[data-product-id]')?.dataset.productId);
+	if(!product)return;
+	if(!canPerform('Productos','edit'))return showToast('No tienes permiso para editar productos.','error');
+	persistProductActivation(product).catch(error=>showToast(error.message,'error'));
+},true);
+document.addEventListener('click',async event=>{
+	const button=event.target.closest('[data-action="toggle-supplier"]');
+	if(!button)return;
+	event.preventDefault();
+	event.stopImmediatePropagation();
+	const supplier=store.collection.suppliers.find(item=>String(item.id)===String(button.closest('[data-supplier-id]')?.dataset.supplierId));
+	if(!supplier)return;
+	const previous=supplier.active;
+	supplier.active=supplier.active===false;
+	try{
+		await store.save({notify:false});
+		render();
+	}catch(error){
+		supplier.active=previous;
+		render();
+		showToast(error.message,'error');
+	}
+},true);
 function parseRentabilidadPrice(value, label) {
 	const raw=String(value??'').trim();
 	if(!/^(?:\d+|\d{1,3}(?:\.\d{3})+)$/.test(raw))throw new Error(`${label} debe ser un valor valido en pesos colombianos, sin decimales ni negativos.`);
@@ -1246,23 +1412,25 @@ function openRentabilidadPriceEditor(productId){
 			const values=Object.fromEntries(new FormData(form));
 			values.price=parseRentabilidadPrice(values.price,'El precio de venta');
 			values.minimumPrice=parseRentabilidadPrice(values.minimumPrice,'El precio minimo');
-			const draftState={products:store.collection.products.map(product=>String(product.id)===String(analysis.product.id)?{...product}:product)};
+			const draftState=structuredClone(store.collection);
 			const updated=updateProductPricing(draftState,analysis.product.id,values);
 			if(!window.confirm(`¿Guardar los cambios de precio para ${analysis.product.name}?`))return;
 			if(!canPerform('Productos','edit'))return showToast('No tienes permiso para editar precios.','error');
 			submitButton.disabled=true;
 			try{
-				await updateProductPrice({
-					id:updated.id,
-					salePrice:updated.salePrice,
-					minimumPrice:updated.minimumPrice,
-				});
-				const product=analysis.product;
-				product.price=updated.price;
-				product.salePrice=updated.salePrice;
-				product.minimumPrice=updated.minimumPrice;
-				product.updatedAt=updated.updatedAt;
-				store.save();
+				if(isStaticDeployment()){
+					await saveState(draftState);
+					store.state=draftState;
+				}else{
+					const result=await updateProductPrice({
+						id:updated.id,
+						salePrice:updated.salePrice,
+						minimumPrice:updated.minimumPrice,
+					});
+					if(result?.ok!==true)throw new Error('El servidor no confirmo la actualización de precios.');
+					store.state=draftState;
+					await store.save({notify:false});
+				}
 				close();
 				render();
 				showToast('Precios actualizados correctamente.');
@@ -1286,9 +1454,80 @@ function normalizeImportRows(rows){return rows.map(row=>Object.fromEntries(Objec
 async function parsePdfRows(buffer){const pdfjs=await import('https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.mjs');const document=await pdfjs.getDocument({data:buffer}).promise;const rows=[];for(let pageNumber=1;pageNumber<=document.numPages;pageNumber++){const page=await document.getPage(pageNumber);const content=await page.getTextContent();const lines=new Map();content.items.forEach(item=>{const y=Math.round(item.transform[5]);if(!lines.has(y))lines.set(y,[]);lines.get(y).push(item);});[...lines.entries()].sort((a,b)=>b[0]-a[0]).forEach(([,items])=>{const values=items.sort((a,b)=>a.transform[4]-b.transform[4]).map(item=>item.str.trim()).filter(Boolean);if(values.length>=2)rows.push(values);});}if(rows.length<2)throw new Error('El PDF no contiene una tabla de productos legible.');const headers=rows.shift().map(value=>String(value).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,'_'));return rows.map(values=>Object.fromEntries(headers.map((header,index)=>[header,values[index]||''])));}
 function showImportPreview(result){$('.import-preview').innerHTML=`<p>${result.rows.length} filas · ${result.errors.length} errores</p>${result.errors.map(error=>`<p class="danger-text">${error}</p>`).join('')}`;const button=$('[data-action="confirm-import"]');button.disabled=Boolean(result.errors.length||!result.rows.length);button.dataset.rows=JSON.stringify(result.rows);}
 function previewImport(){const result=importPreview(store.collection,$('.import-text').value);showImportPreview(result);}
-function confirmImport(){const rows=JSON.parse($('[data-action="confirm-import"]').dataset.rows||'[]');const products=importProducts(store.collection,rows);products.forEach(product=>store.collection.stores.forEach(storeItem=>ensureInventoryEntry(store.collection,product.id,storeItem.id)));store.save();$('#modal-root').innerHTML='';render();showToast(`${products.length} productos importados.`);}
-function addProduct(productId){ const product=store.collection.products.find(item=>item.id===productId); const row=product&&inventoryEntry(store.collection,product.id,state.storeId); if(!product||!row||row.quantity<=0)return showToast('El producto no tiene stock en este local.','error'); const item=state.cart.find(entry=>entry.id===product.id); if(item)item.quantity=Math.min(row.quantity,item.quantity+1); else state.cart.push({...product,stock:row.quantity,priceLista:product.price,priceVenta:product.price,quantity:1,quantityInvalid:false}); render(); }
-function finishSaleLegacy(){ if(!state.storeId)return showToast('Selecciona un local.','error');if(!state.cart.length)return showToast('Agrega al menos un producto.','error');if(!state.customerId)return showToast('Selecciona un cliente.','error');try{runTransaction(store.collection,()=>{state.cart.forEach(item=>{const row=inventoryEntry(store.collection,item.id,state.storeId);if(!row||item.quantityInvalid||item.quantity<=0||item.quantity>row.quantity)throw new Error(`Stock insuficiente en este local para ${item.name}.`);if(item.priceVenta<item.minimumPrice)throw new Error(`Precio minimo autorizado: ${money(item.minimumPrice)}.`);});const sale={id:generateId('VEN',store.collection.sales),invoiceId:generateId('FAC',store.collection.sales),customerId:state.customerId,customer:store.collection.customers.find(item=>item.id===state.customerId)?.name||'Cliente contado',storeId:state.storeId,items:state.cart.map(item=>({productId:item.id,quantity:item.quantity,priceLista:item.priceLista,priceVenta:item.priceVenta})),transport:state.transport,transportDestination:state.transportDestination,transportNote:state.transportNote,paymentMethod:state.payment,total:cartTotal(state.cart,state.transport),date:new Date().toISOString(),status:state.payment==='Apartado'?'Apartado':'Completada'};store.collection.sales.push(sale);if(state.payment==='Apartado')createApartado(store.collection,sale,Number($('[data-apartado-initial]')?.value||0),'Efectivo');else decreaseSaleInventory(store.collection,sale);if(state.payment.toLowerCase().includes('intern')){const credit=store.add('credits',{id:generateId('CR',store.collection.credits),customerId:sale.customerId,saleId:sale.id,total:sale.total,originalAmount:sale.total,initial:0,downPayment:0,paid:0,financedAmount:sale.total,installmentsCount:6,installmentAmount:Math.ceil(sale.total/6),next:'Pendiente',date:'Ahora',status:'Al dia'});store.add('installments',{id:generateId('CUO',store.collection.installments),creditId:credit.id,number:1,dueDate:'Pendiente',amount:credit.installmentAmount,paidAmount:0,status:'Pendiente'});}store.collection.auditLog.push({id:generateId('AUD',store.collection.auditLog),date:new Date().toISOString(),userId:'USR-00001',action:'Crear venta',saleId:sale.id,storeId:state.storeId});});store.save();state.cart=[];showToast('Venta creada y stock actualizado.');render();}catch(error){showToast(error.message,'error');}}
+async function confirmImport(){
+	const button=$('[data-action="confirm-import"]');
+	if(!button||button.disabled)return;
+	button.disabled=true;
+	try{
+		const rows=JSON.parse(button.dataset.rows||'[]');
+		const fingerprint=JSON.stringify(rows);
+		if(!pendingProductImport||pendingProductImport.fingerprint!==fingerprint){
+			const draftState=structuredClone(store.collection);
+			const products=importProducts(draftState,rows);
+			products.forEach(product=>draftState.stores.forEach(storeItem=>ensureInventoryEntry(draftState,product.id,storeItem.id)));
+			pendingProductImport={
+				fingerprint,
+				draftState,
+				products,
+				requestIds:new Map(products.map(product=>[String(product.id),`product-import-${globalThis.crypto?.randomUUID?crypto.randomUUID():`${Date.now()}-${Math.random()}`}`])),
+			};
+		}
+		if(isStaticDeployment()){
+			await saveState(pendingProductImport.draftState);
+			store.state=pendingProductImport.draftState;
+		}else{
+			for(const product of pendingProductImport.products){
+				const requestId=pendingProductImport.requestIds.get(String(product.id));
+				const result=await persistCatalogRecord('/api/catalog/product',{...product,id:product.id,salePrice:product.salePrice||product.price,taxRate:product.iva||0},'POST',requestId);
+				if(result?.ok!==true)throw new Error(`El servidor no confirmo el producto ${product.code}.`);
+			}
+			store.state=pendingProductImport.draftState;
+			const remote=await hydrateState();
+			if(remote){store.state=remote;await hydrateCatalog(store.state);}
+		}
+		const importedCount=pendingProductImport.products.length;
+		pendingProductImport=null;
+		$('#modal-root').innerHTML='';
+		render();
+		showToast(`${importedCount} productos importados.`);
+	}catch(error){
+		showToast(error.message,'error');
+		button.disabled=false;
+	}
+}
+function addProduct(productId){ const product=store.collection.products.find(item=>item.id===productId); const row=product&&inventoryEntry(store.collection,product.id,state.storeId); if(!product||!row||row.quantity<=0)return showToast('El producto no tiene stock en este local.','error'); const item=state.cart.find(entry=>entry.id===product.id); if(item)item.quantity=Math.min(row.quantity,item.quantity+1); else {const currentPrice=Number(product.salePrice??product.price??0);state.cart.push({...product,stock:row.quantity,priceLista:currentPrice,priceVenta:currentPrice,quantity:1,quantityInvalid:false});} render(); }
+async function finishSaleLegacy(){
+	if(!state.storeId)return showToast('Selecciona un local.','error');
+	if(!state.cart.length)return showToast('Agrega al menos un producto.','error');
+	if(!state.customerId)return showToast('Selecciona un cliente.','error');
+	const previousState=structuredClone(store.state);
+	try{
+		runTransaction(store.collection,()=>{
+			state.cart.forEach(item=>{
+				const row=inventoryEntry(store.collection,item.id,state.storeId);
+				if(!row||item.quantityInvalid||item.quantity<=0||item.quantity>row.quantity)throw new Error(`Stock insuficiente en este local para ${item.name}.`);
+				if(item.priceVenta<item.minimumPrice)throw new Error(`Precio minimo autorizado: ${money(item.minimumPrice)}.`);
+			});
+			const sale={id:generateId('VEN',store.collection.sales),invoiceId:generateId('FAC',store.collection.sales),customerId:state.customerId,customer:store.collection.customers.find(item=>item.id===state.customerId)?.name||'Cliente contado',storeId:state.storeId,items:state.cart.map(item=>({productId:item.id,quantity:item.quantity,priceLista:item.priceLista,priceVenta:item.priceVenta})),transport:state.transport,transportDestination:state.transportDestination,transportNote:state.transportNote,paymentMethod:state.payment,total:cartTotal(state.cart,state.transport),date:new Date().toISOString(),status:state.payment==='Apartado'?'Apartado':'Completada'};
+			store.collection.sales.push(sale);
+			if(state.payment==='Apartado')createApartado(store.collection,sale,Number($('[data-apartado-initial]')?.value||0),'Efectivo');
+			else decreaseSaleInventory(store.collection,sale);
+			if(state.payment.toLowerCase().includes('intern')){
+				const credit={id:generateId('CR',store.collection.credits),customerId:sale.customerId,saleId:sale.id,total:sale.total,originalAmount:sale.total,initial:0,downPayment:0,paid:0,financedAmount:sale.total,installmentsCount:6,installmentAmount:Math.ceil(sale.total/6),next:'Pendiente',date:'Ahora',status:'Al dia'};
+				store.add('credits',credit,{persist:false});
+				store.add('installments',{id:generateId('CUO',store.collection.installments),creditId:credit.id,number:1,dueDate:'Pendiente',amount:credit.installmentAmount,paidAmount:0,status:'Pendiente'},{persist:false});
+			}
+			store.collection.auditLog.push({id:generateId('AUD',store.collection.auditLog),date:new Date().toISOString(),userId:'USR-00001',action:'Crear venta',saleId:sale.id,storeId:state.storeId});
+		});
+		await store.save({notify:false});
+		state.cart=[];
+		showToast('Venta creada y stock actualizado.');
+		render();
+	}catch(error){
+		store.state=previousState;
+		showToast(error.message,'error');
+	}
+}
 async function finishSale(){
 	if(saleSubmissionInFlight)return;
 	saleSubmissionInFlight=true;
@@ -1331,18 +1570,98 @@ async function finishSale(){
 			transportNote:state.transportNote,
 			creditInitial:Number($('[data-credit-initial]')?.value||0),
 			creditInstallments:Number($('[data-credit-installments]')?.value||6),
+			apartadoInitial:Number($('[data-apartado-initial]')?.value||0),
 			tenantId:activeTenantId()
 		};
 		const fingerprint=JSON.stringify(salePayload);
-		if(!pendingSaleSubmission||pendingSaleSubmission.fingerprint!==fingerprint){
-			pendingSaleSubmission={
-				fingerprint,
+		pendingSaleSubmission=getOrCreatePendingOperation({
+			operation:'sale',
+			tenantId:activeTenantId(),
+			fingerprint,
+			create:()=>({
 				id:generateId('VEN',store.collection.sales),
-				requestId:globalThis.crypto?.randomUUID?crypto.randomUUID():`sale-${Date.now()}-${Math.random()}`
-			};
-		}
+				requestId:globalThis.crypto?.randomUUID?crypto.randomUUID():`sale-${Date.now()}-${Math.random()}`,
+				invoiceNumber:salePayload.invoiceNumber||(isStaticDeployment()?generateId('FAC',store.collection.sales):''),
+				date:salePayload.date,
+			}),
+		});
+		salePayload.invoiceNumber=pendingSaleSubmission.invoiceNumber;
+		salePayload.date=pendingSaleSubmission.date;
 		salePayload.id=pendingSaleSubmission.id;
 		salePayload.requestId=pendingSaleSubmission.requestId;
+		if(isStaticDeployment()){
+			const draftState=structuredClone(store.collection);
+			const existingSale=draftState.sales.find(item=>String(item.id)===String(pendingSaleSubmission.id));
+			if(existingSale){
+				try{clearPendingOperation({operation:'sale',tenantId:activeTenantId(),fingerprint});}
+				catch(error){console.error('[app] No se pudo limpiar la clave de la venta local confirmada:',error);}
+				pendingSaleSubmission=null;
+				saleSubmissionInFlight=false;
+				if(submitButton?.isConnected)submitButton.disabled=false;
+				$('#modal-root').innerHTML='';
+				showToast('Esta venta ya se habia guardado en este dispositivo.');
+				return;
+			}
+			const items=salePayload.items.map(item=>{
+				const product=draftState.products.find(candidate=>String(candidate.id)===String(item.productId));
+				const stock=inventoryEntry(draftState,item.productId,salePayload.storeId);
+				if(!product||product.active===false||!stock||!Number.isSafeInteger(item.quantity)||item.quantity<=0||item.quantity>Number(stock.quantity||0))throw new Error(`Producto inactivo o stock insuficiente para ${product?.name||item.productId}.`);
+				if(!Number.isSafeInteger(item.unitPrice)||item.unitPrice<=0||item.unitPrice<Number(product.minimumPrice||0))throw new Error(`Precio minimo autorizado: ${money(product.minimumPrice||0)}.`);
+				return {...item,name:product.name,code:product.code,priceLista:item.unitPrice,priceVenta:item.unitPrice,subtotal:item.quantity*item.unitPrice};
+			});
+			const total=items.reduce((sum,item)=>sum+item.subtotal,Number(salePayload.transport||0));
+			const sale={
+				...salePayload,
+				id:pendingSaleSubmission.id,
+				invoiceId:salePayload.invoiceNumber,
+				total,
+				items,
+				createdAt:new Date().toISOString(),
+				status:String(salePayload.paymentMethod).toLowerCase().includes('apartado')?'Apartado':'Completada',
+			};
+			const normalizedPaymentMethod=String(salePayload.paymentMethod).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+			runTransaction(draftState,()=>{
+				draftState.sales.push(sale);
+				if(sale.status==='Apartado'){
+					if(!Number.isFinite(salePayload.apartadoInitial)||salePayload.apartadoInitial<0||salePayload.apartadoInitial>total)throw new Error('El abono inicial del apartado no es válido.');
+					createApartado(draftState,sale,salePayload.apartadoInitial,'Efectivo');
+				}else{
+					decreaseSaleInventory(draftState,sale);
+				}
+				if(salePayload.sistecreditoAmount!==null){
+					draftState.sistecreditoSaleAmounts.push({id:sale.id,saleId:sale.id,type:'sale_payment',date:sale.date,amount:salePayload.sistecreditoAmount,otherPaymentMethod:salePayload.otherPaymentMethod});
+				}
+				if(normalizedPaymentMethod.includes('credito')&&!normalizedPaymentMethod.includes('siste')){
+					const initial=salePayload.creditInitial;
+					if(!Number.isFinite(initial)||initial<0||initial>total)throw new Error('La cuota inicial no puede superar el total de la venta.');
+					const installmentsCount=salePayload.creditInstallments;
+					if(!Number.isSafeInteger(installmentsCount)||installmentsCount<1)throw new Error('El número de cuotas no es válido.');
+					const financedAmount=total-initial;
+					const credit={id:generateId('CR',draftState.credits),saleId:sale.id,customerId:sale.customerId,customer:sale.customer,total,originalAmount:total,initial,downPayment:initial,paid:0,financedAmount,installmentsCount,installmentAmount:financedAmount/installmentsCount,date:sale.date,status:financedAmount?'Al dia':'Saldado',storeId:sale.storeId,items};
+					draftState.credits.push(credit);
+					draftState.installments.push({id:generateId('CUO',draftState.installments),creditId:credit.id,number:1,dueDate:'Pendiente',amount:financedAmount,paidAmount:0,status:financedAmount?'Pendiente':'Pagada'});
+				}
+				draftState.auditLog.push({id:generateId('AUD',draftState.auditLog),date:new Date().toISOString(),userId:'USR-00001',action:'Crear venta',saleId:sale.id,storeId:sale.storeId});
+			});
+			await saveState(draftState);
+			store.state=draftState;
+			try{clearPendingOperation({operation:'sale',tenantId:activeTenantId(),fingerprint});}
+			catch(error){console.error('[app] No se pudo limpiar la clave de la venta local confirmada:',error);}
+			pendingSaleSubmission=null;
+			state.cart=[];
+			state.customerId='';
+			state.payment='Efectivo';
+			state.sistecreditoMixedAmount=0;
+			state.mixedOtherMethod='Efectivo';
+			state.transport=0;
+			state.transportDestination='';
+			state.transportNote='';
+			saleSubmissionInFlight=false;
+			if(currentRoute()==='facturacion')render();
+			else if(currentRoute()==='ventas')applySalesFilters();
+			showToast('Venta guardada en este dispositivo.');
+			return;
+		}
 		createdSale=await api.post('/api/catalog/sale',salePayload,{headers:{'X-Tenant-ID':activeTenantId(),'Idempotency-Key':salePayload.requestId}});
 	}catch(error){
 		saleSubmissionInFlight=false;
@@ -1350,6 +1669,8 @@ async function finishSale(){
 		showToast(error.message,'error');
 		return;
 	}
+	try{clearPendingOperation({operation:'sale',tenantId:activeTenantId(),fingerprint:pendingSaleSubmission.fingerprint});}
+	catch(error){console.error('[app] No se pudo limpiar la clave de la venta confirmada:',error);}
 	pendingSaleSubmission=null;
 	const registeredSale={
 		...salePayload,
@@ -1375,18 +1696,20 @@ async function finishSale(){
 	saleSubmissionInFlight=false;
 	if(currentRoute()==='facturacion')render();
 	else if(currentRoute()==='ventas')applySalesFilters();
-	showToast('Venta creada correctamente con el backend transaccional.');
-	registerTalonarioSale(createdSale.talonario);
+	const saleWarnings=[];
+	try{await registerTalonarioSale(createdSale.talonario);}
+	catch(error){console.error('La venta se registro, pero no se pudo guardar la actualizacion del talonario:',error);saleWarnings.push('no se pudo guardar la actualizacion local del talonario.');}
 	try{
 		await hydrateCatalog(store.state,false,true);
 		if(currentRoute()==='ventas')applySalesFilters();
 	}catch(error){
 		console.warn('La venta se registro, pero no se pudo actualizar el catalogo de ventas:',error.message);
-		showToast('La venta quedó registrada y el formulario se limpió, pero no se pudo actualizar la lista. Se reintentará automáticamente.','error');
+		saleWarnings.push('no se pudo actualizar la lista local de ventas.');
 	}
+	showToast(`Venta registrada correctamente con el backend transaccional.${saleWarnings.length?` Aviso: ${saleWarnings.join(' ')}`:''}`,saleWarnings.length?'info':'success');
 }
 function transferField(name){return document.querySelector(`.transfer-modal [data-transfer-${name}]`);} function updateTransferAvailability(){const row=inventoryEntry(store.collection,transferField('product')?.value,transferField('origin')?.value);document.querySelector('[data-transfer-origin-stock]')?.replaceChildren(String(row?.quantity||0));} function openTransfer(){transferDraft.length=0;transferRequestId=globalThis.crypto?.randomUUID?crypto.randomUUID():`transfer-${Date.now()}-${Math.random()}`;$('#modal-root').innerHTML=transferModal(store.collection);$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';const origin=transferField('origin');if(origin)origin.value=state.storeId;updateTransferAvailability();} function addTransferItem(){const origin=transferField('origin').value,destination=transferField('destination').value,productId=transferField('product').value,quantity=Number(transferField('quantity').value),row=inventoryEntry(store.collection,productId,origin);if(origin===destination)return showToast('El origen y destino deben ser diferentes.','error');if(!row||quantity<=0||quantity>row.quantity)return showToast('La cantidad supera el stock disponible.','error');transferDraft.push({productId,quantity});$('#transfer-items').innerHTML=transferDraft.map(item=>`<p>${store.collection.products.find(product=>product.id===item.productId)?.name} · ${item.quantity} unidades</p>`).join('');}
-document.addEventListener('click',event=>{const action=event.target.closest('[data-action]')?.dataset.action;if(action==='new-sale')location.hash='#facturacion';else if(action==='new-store')openStoreModal();else if(action==='edit-store')openStoreModal(event.target.closest('[data-store-id]')?.dataset.storeId);else if(action==='local-detail')showStoreDetail(event.target.closest('[data-store-id]')?.dataset.storeId);else if(action==='local-inventory'){const storeId=event.target.closest('[data-store-id]')?.dataset.storeId;if(storeId){state.storeId=storeId;location.hash='#inventario';render();}}else if(action==='local-transfer'){const storeId=event.target.closest('[data-store-id]')?.dataset.storeId;if(storeId){state.storeId=storeId;openTransfer();}}else if(action==='adjust-inventory')openAdjustment(event.target.closest('[data-product-id]')?.dataset.productId,event.target.closest('[data-store-id]')?.dataset.storeId);else if(action==='new-product')openProductEditor();else if(action==='edit-product'){const product=store.collection.products.find(item=>item.id===event.target.closest('[data-product-id]')?.dataset.productId);openProductEditor(product?.id);}else if(action==='toggle-product'){const product=store.collection.products.find(item=>item.id===event.target.closest('[data-product-id]')?.dataset.productId);if(product){setProductActive(store.collection,product.id,product.active===false);store.save();render();}}else if(action==='new-supplier')openSupplierModal();else if(action==='edit-supplier')openSupplierModal(event.target.closest('[data-supplier-id]')?.dataset.supplierId);else if(action==='new-customer')openCustomerModal();else if(action==='edit-customer')openCustomerModal(event.target.closest('[data-customer-id]')?.dataset.customerId);else if(action==='toggle-supplier'){const supplier=store.collection.suppliers.find(item=>item.id===event.target.closest('[data-supplier-id]')?.dataset.supplierId);if(supplier){supplier.active=supplier.active===false;store.save();render();}}else if(action==='product-detail'){const id=event.target.closest('[data-product-id]')?.dataset.productId;$('#modal-root').innerHTML=productDetail(store.collection,id);$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';}else if(action==='import-products')openImportModal();else if(action==='preview-import')previewImport();else if(action==='confirm-import')confirmImport();else if(['new-credit','new-expense','new-fuel','new-user'].includes(action))openModal(action.replace('new-',''));else if(action==='finish-sale')finishSaleLegacy();else if(action==='cancel-invoice'){state.cart=[];render();}else if(action==='add-product')addProduct(event.target.closest('[data-product-id]')?.dataset.productId);else if(action==='new-transfer')openTransfer();else if(action==='payment')showToast('Registra abonos desde el modulo de cartera.','info');if(event.target.dataset.productId&&!action)addProduct(event.target.dataset.productId);if(event.target.dataset.customerId){state.customerId=event.target.dataset.customerId;render();}if(event.target.dataset.payment){state.payment=event.target.dataset.payment;render();}if(event.target.closest('[data-transfer-add]'))addTransferItem();});
+document.addEventListener('click',async event=>{const action=event.target.closest('[data-action]')?.dataset.action;if(action==='new-sale')location.hash='#facturacion';else if(action==='new-store')openStoreModal();else if(action==='edit-store')openStoreModal(event.target.closest('[data-store-id]')?.dataset.storeId);else if(action==='local-detail')showStoreDetail(event.target.closest('[data-store-id]')?.dataset.storeId);else if(action==='local-inventory'){const storeId=event.target.closest('[data-store-id]')?.dataset.storeId;if(storeId){state.storeId=storeId;location.hash='#inventario';render();}}else if(action==='local-transfer'){const storeId=event.target.closest('[data-store-id]')?.dataset.storeId;if(storeId){state.storeId=storeId;openTransfer();}}else if(action==='adjust-inventory')openAdjustment(event.target.closest('[data-product-id]')?.dataset.productId,event.target.closest('[data-store-id]')?.dataset.storeId);else if(action==='new-product')openProductEditor();else if(action==='edit-product'){const product=store.collection.products.find(item=>item.id===event.target.closest('[data-product-id]')?.dataset.productId);openProductEditor(product?.id);}else if(action==='toggle-product'){const product=store.collection.products.find(item=>item.id===event.target.closest('[data-product-id]')?.dataset.productId);if(product){const active=product.active;setProductActive(store.collection,product.id,product.active===false);try{await store.save({notify:false});render();}catch(error){product.active=active;render();showToast(error.message,'error');}}}else if(action==='new-supplier')openSupplierModal();else if(action==='edit-supplier')openSupplierModal(event.target.closest('[data-supplier-id]')?.dataset.supplierId);else if(action==='toggle-supplier'){const supplier=store.collection.suppliers.find(item=>item.id===event.target.closest('[data-supplier-id]')?.dataset.supplierId);if(supplier){const active=supplier.active;supplier.active=supplier.active===false;try{await store.save({notify:false});render();}catch(error){supplier.active=active;render();showToast(error.message,'error');}}}else if(action==='product-detail'){const id=event.target.closest('[data-product-id]')?.dataset.productId;$('#modal-root').innerHTML=productDetail(store.collection,id);$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';}else if(action==='import-products')openImportModal();else if(action==='preview-import')previewImport();else if(action==='confirm-import')confirmImport();else if(['new-credit','new-expense','new-fuel','new-user'].includes(action))openModal(action.replace('new-',''));else if(action==='finish-sale')finishSaleLegacy();else if(action==='cancel-invoice'){state.cart=[];render();}else if(action==='add-product')addProduct(event.target.closest('[data-product-id]')?.dataset.productId);else if(action==='new-transfer')openTransfer();else if(action==='payment')showToast('Registra abonos desde el modulo de cartera.','info');if(event.target.dataset.productId&&!action)addProduct(event.target.dataset.productId);if(event.target.dataset.customerId){state.customerId=event.target.dataset.customerId;render();}if(event.target.dataset.payment){state.payment=event.target.dataset.payment;render();}if(event.target.closest('[data-transfer-add]'))addTransferItem();});
 document.addEventListener('click',event=>{if(event.target.dataset.remove){state.cart=state.cart.filter(item=>String(item.id)!==event.target.dataset.remove);render();}if(event.target.dataset.increase){const item=state.cart.find(entry=>entry.id===event.target.dataset.increase);const row=item&&inventoryEntry(store.collection,item.id,state.storeId);if(item&&row)item.quantity=Math.min(row.quantity,item.quantity+1);render();}if(event.target.dataset.decrease){const item=state.cart.find(entry=>entry.id===event.target.dataset.decrease);if(item)item.quantity=Math.max(1,item.quantity-1);render();}});
 document.addEventListener('input',event=>{if(event.target.id==='billing-product'){const available=document.querySelector('[data-billing-available]')?.checked!==false;$('#product-results').innerHTML=productResults(store.collection.products,state.storeId,store.collection,event.target.value,available);}if(event.target.id==='customer-search')$('#customer-results').innerHTML=customerResults(store.collection.customers.filter(item=>`${item.name} ${item.document} ${item.phone} ${item.id}`.toLowerCase().includes(event.target.value.toLowerCase())),state.customerId);if(event.target.matches('[data-filter="products"]'))updateProductViewState();if(event.target.dataset.quantity){const item=state.cart.find(entry=>String(entry.id)===event.target.dataset.quantity);const row=item&&inventoryEntry(store.collection,item.id,state.storeId);const requested=Number(event.target.value)||0;if(item&&row){item.quantity=Math.max(1,requested);item.quantityInvalid=requested>row.quantity;if(item.quantityInvalid)showToast('Stock insuficiente en este local.','error');render();}}if(event.target.dataset.price){const item=state.cart.find(entry=>String(entry.id)===event.target.dataset.price);if(item)item.priceVenta=Math.max(item.minimumPrice,Number(event.target.value)||0);}});
 document.addEventListener('input',event=>{
@@ -1565,7 +1888,7 @@ async function persistRentabilidadPricePlan(plan,operationType='masiva'){
 		);
 		if(!Array.isArray(response.updated)||!Array.isArray(response.notUpdated))throw new Error('El servidor no devolvió resultados individuales para el lote.');
 		applyReportedUpdates(response.updated);
-		store.save();
+		await store.save({notify:false});
 		updateRentabilidadViewState();
 		return {updated:withProductDetails(response.updated),notUpdated:withProductDetails([...blocked,...response.notUpdated]),errorMessage:'',succeeded:true};
 	}catch(error){
@@ -1576,7 +1899,7 @@ async function persistRentabilidadPricePlan(plan,operationType='masiva'){
 			updated=Array.isArray(error.details.updated)?error.details.updated:[];
 			applyReportedUpdates(updated);
 			if(updated.length){
-				store.save();
+				await store.save({notify:false});
 				updateRentabilidadViewState();
 			}
 			notUpdated=[...blocked,...error.details.notUpdated];
@@ -1591,7 +1914,7 @@ async function persistRentabilidadPricePlan(plan,operationType='masiva'){
 		}else{
 			try{
 				await hydrateCatalog(store.state,false,true);
-				store.save();
+				await store.save({notify:false});
 				eligible.forEach(item=>{
 					const product=store.collection.products.find(candidate=>String(candidate.id)===String(item.product.id));
 					const currentPrice=Number(product?.salePrice??product?.price);
@@ -1924,12 +2247,83 @@ function applySalesFilters(){
 async function readAttachment(file){if(!file)return null;if(file.size>5*1024*1024)throw new Error('El soporte no puede superar 5 MB.');return new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve({name:file.name,type:file.type,data:reader.result});reader.onerror=()=>reject(new Error('No se pudo leer el soporte.'));reader.readAsDataURL(file);});}
 function externalPayableModal(){const stores=store.collection.stores.map(item=>`<option value="${item.id}">${item.name}</option>`).join('');$('#modal-root').innerHTML=`<div class="modal-backdrop"><form class="modal" id="external-payable-form"><button type="button" class="modal-close">×</button><p class="eyebrow">FINANZAS</p><h2>Registrar factura pendiente</h2><p class="muted">Esta carga no recibe mercancía ni modifica el inventario.</p><label class="input-label">Tipo<select class="field" name="type" required><option value="SERVICIO">Servicio (luz, internet, etc.)</option><option value="GASTO">Gasto (pendones, publicidad, etc.)</option><option value="MERCANCIA_EXISTENTE">Mercancía ya registrada en inventario</option></select></label><label class="input-label">Proveedor / acreedor<input class="field" name="supplierName" required></label><label class="input-label">Número de factura o referencia<input class="field" name="invoiceNumber" required></label><label class="input-label">Valor total<input class="field" name="totalAmount" type="number" min="1" step="0.01" required></label><label class="input-label">Fecha de emisión<input class="field" name="issueDate" type="date" value="${new Date().toISOString().slice(0,10)}" required></label><label class="input-label">Fecha límite de pago<input class="field" name="dueDate" type="date" required></label><label class="input-label">Local<select class="field" name="storeId"><option value="">Sin local / empresa</option>${stores}</select></label><label class="input-label">Descripción<textarea class="field" name="description" rows="3" required></textarea></label><label class="input-label">Soporte de la factura<input class="field" name="attachment" type="file" accept="image/*,.pdf"></label><button class="primary wide">Guardar cuenta por pagar</button></form></div>`;$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';$('#external-payable-form').onsubmit=async event=>{event.preventDefault();const form=event.target;const button=form.querySelector('button.primary');button.disabled=true;try{const values=Object.fromEntries(new FormData(form));const attachment=await readAttachment(form.elements.attachment.files[0]);const account={id:generateId('CXP',store.collection.accountsPayable||[]),supplierId:`EXT-${Date.now()}`,supplierName:String(values.supplierName).trim(),invoiceNumber:String(values.invoiceNumber).trim(),type:values.type,description:String(values.description).trim(),storeId:values.storeId||'',issueDate:values.issueDate,dueDate:values.dueDate,totalAmount:Number(values.totalAmount),paidAmount:0,balance:Number(values.totalAmount),status:'PENDIENTE',paymentTerms:'Credito',noInventory:true,source:'external-invoice',attachment,createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()};if(!Number.isFinite(account.totalAmount)||account.totalAmount<=0)throw new Error('El valor total debe ser mayor que cero.');await persistDomainRecord('accountsPayable',account);store.collection.accountsPayable.push(account);$('#modal-root').innerHTML='';render();showToast('Factura pendiente registrada sin afectar inventario.');}catch(error){showToast(error.message,'error');}finally{button.disabled=false;}};}
 async function createExpenseFromPaidAccount(account,payment){if(!['SERVICIO','GASTO'].includes(String(account.type||'').toUpperCase())||account.expenseCreatedAt)return;if(!Array.isArray(store.collection.expenses))store.collection.expenses=[];const expense={id:generateId('GAS',store.collection.expenses),date:payment.date||new Date().toISOString().slice(0,10),storeId:account.storeId||'',category:String(account.type).toUpperCase()==='SERVICIO'?'Servicios':'Publicidad',description:account.description||account.invoiceNumber,amount:Number(account.totalAmount||0),paymentMethod:payment.method||'EFECTIVO',createdBy:'USR-00001',provider:account.supplierName||'',sourceAccountId:account.id};await persistDomainRecord('expenses',expense);store.collection.expenses.push(expense);account.expenseCreatedAt=new Date().toISOString();await persistDomainRecord('accountsPayable',account);}
-function payablePaymentModal(accountId){const account=store.collection.accountsPayable.find(item=>item.id===accountId);if(!account)return;$('#modal-root').innerHTML=`<div class="modal-backdrop"><form class="modal" id="payable-payment-form"><button type="button" class="modal-close">×</button><p class="eyebrow">FINANZAS</p><h2>Registrar pago</h2><p>Saldo: <strong>${money(calculateBalance(account))}</strong></p><label class="input-label">Fecha<input class="field" name="date" type="date" value="${new Date().toISOString().slice(0,10)}" required></label><label class="input-label">Monto<input class="field" name="amount" type="number" min="1" max="${calculateBalance(account)}" required></label><label class="input-label">Metodo<select class="field" name="method"><option>EFECTIVO</option><option>TRANSFERENCIA</option><option>CONSIGNACION</option><option>CHEQUE</option><option>OTRO</option></select></label><label class="input-label">Referencia<input class="field" name="reference" required></label><label class="input-label">Observacion<input class="field" name="note"></label><button class="primary wide">Guardar pago</button></form></div>`;$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';$('#payable-payment-form').onsubmit=async event=>{event.preventDefault();const form=event.target;try{const values=Object.fromEntries(new FormData(form));const payment=registerSupplierPayment(store.collection,accountId,values);await persistDomainRecord('supplierPayments',payment);await persistDomainRecord('accountsPayable',account);if(account.status==='PAGADA')await createExpenseFromPaidAccount(account,payment);store.save();$('#modal-root').innerHTML='';render();showToast(account.status==='PAGADA'&&['SERVICIO','GASTO'].includes(String(account.type||'').toUpperCase())?'Pago registrado y gasto creado.':'Pago registrado correctamente.');}catch(error){showToast(error.message,'error');}};}
+function payablePaymentModal(accountId){
+	const account=store.collection.accountsPayable.find(item=>item.id===accountId);
+	if(!account)return;
+	$('#modal-root').innerHTML=`<div class="modal-backdrop"><form class="modal" id="payable-payment-form"><button type="button" class="modal-close">×</button><p class="eyebrow">FINANZAS</p><h2>Registrar pago</h2><p>Saldo: <strong>${money(calculateBalance(account))}</strong></p><label class="input-label">Fecha<input class="field" name="date" type="date" value="${new Date().toISOString().slice(0,10)}" required></label><label class="input-label">Monto<input class="field" name="amount" type="number" min="1" max="${calculateBalance(account)}" required></label><label class="input-label">Metodo<select class="field" name="method"><option>EFECTIVO</option><option>TRANSFERENCIA</option><option>CONSIGNACION</option><option>CHEQUE</option><option>OTRO</option></select></label><label class="input-label">Referencia<input class="field" name="reference" required></label><label class="input-label">Observacion<input class="field" name="note"></label><button class="primary wide">Guardar pago</button></form></div>`;
+	$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';
+	$('#payable-payment-form').onsubmit=async event=>{
+		event.preventDefault();
+		const form=event.target;
+		const button=form.querySelector('button.primary');
+		button.disabled=true;
+		try{
+			const values=Object.fromEntries(new FormData(form));
+			const payment=registerSupplierPayment(store.collection,accountId,values);
+			await persistDomainRecord('supplierPayments',payment);
+			await persistDomainRecord('accountsPayable',account);
+			if(account.status==='PAGADA')await createExpenseFromPaidAccount(account,payment);
+			await store.save({notify:false});
+			$('#modal-root').innerHTML='';
+			render();
+			showToast(account.status==='PAGADA'&&['SERVICIO','GASTO'].includes(String(account.type||'').toUpperCase())?'Pago registrado y gasto creado.':'Pago registrado correctamente.');
+		}catch(error){
+			showToast(error.message,'error');
+		}finally{
+			button.disabled=false;
+		}
+	};
+}
 async function saveSupplierPayment(account, values, amount, reference){const payment=registerSupplierPayment(store.collection,account.id,{...values,amount,reference});await persistDomainRecord('supplierPayments',payment);await persistDomainRecord('accountsPayable',account);if(account.status==='PAGADA')await createExpenseFromPaidAccount(account,payment);return payment;}
 function externalPayableModalV2(){const stores=store.collection.stores.map(item=>`<option value="${item.id}">${item.name}</option>`).join('');const suppliers=store.collection.suppliers.slice().sort((left,right)=>String(left.name).localeCompare(String(right.name),'es')).map(item=>`<option value="${item.id}">${item.name}${item.document?' · '+item.document:''}</option>`).join('');$('#modal-root').innerHTML=`<div class="modal-backdrop"><form class="modal" id="external-payable-form"><button type="button" class="modal-close">×</button><p class="eyebrow">FINANZAS</p><h2>Registrar factura pendiente</h2><p class="muted">Esta factura no recibe mercancía ni modifica el inventario.</p><label class="input-label">Tipo<select class="field" name="type" required><option value="SERVICIO">Servicio</option><option value="GASTO">Gasto</option><option value="MERCANCIA_EXISTENTE">Mercancía ya registrada</option></select></label><label class="input-label">Proveedor<select class="field" name="supplierId" required><option value="">Selecciona un proveedor</option>${suppliers}</select></label><label class="input-label">Factura o referencia<input class="field" name="invoiceNumber" required></label><label class="input-label">Valor total<input class="field" name="totalAmount" type="number" min="1" step="0.01" required></label><label class="input-label">Fecha de emisión<input class="field" name="issueDate" type="date" value="${new Date().toISOString().slice(0,10)}" required></label><label class="input-label">Fecha límite de pago<input class="field" name="dueDate" type="date" required></label><label class="input-label">Local<select class="field" name="storeId"><option value="">Sin local / empresa</option>${stores}</select></label><label class="input-label">Descripción<textarea class="field" name="description" rows="3" required></textarea></label><label class="input-label">Soporte<input class="field" name="attachment" type="file" accept="image/*,.pdf"></label><button class="primary wide">Guardar cuenta por pagar</button></form></div>`;const form=$('#external-payable-form');$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';form.onsubmit=async event=>{event.preventDefault();const button=form.querySelector('button.primary');button.disabled=true;try{const values=Object.fromEntries(new FormData(form));const supplier=store.collection.suppliers.find(item=>String(item.id)===String(values.supplierId));if(!supplier)throw new Error('Selecciona un proveedor válido.');const attachment=await readAttachment(form.elements.attachment.files[0]);const account={id:generateId('CXP',store.collection.accountsPayable||[]),supplierId:supplier.id,supplierName:supplier.name,invoiceNumber:String(values.invoiceNumber).trim(),type:values.type,description:String(values.description).trim(),storeId:values.storeId||'',issueDate:values.issueDate,dueDate:values.dueDate,totalAmount:Number(values.totalAmount),paidAmount:0,balance:Number(values.totalAmount),status:'PENDIENTE',paymentTerms:'Credito',noInventory:true,source:'external-invoice',attachment,createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()};if(!Number.isFinite(account.totalAmount)||account.totalAmount<=0)throw new Error('El valor total debe ser mayor que cero.');await persistDomainRecord('accountsPayable',account);store.collection.accountsPayable.push(account);$('#modal-root').innerHTML='';render();showToast('Factura pendiente registrada sin afectar inventario.');}catch(error){showToast(error.message,'error');}finally{button.disabled=false;}};}
-function supplierPaymentModal(){const suppliers=store.collection.suppliers.filter(supplier=>store.collection.accountsPayable.some(account=>String(account.supplierId)===String(supplier.id)&&calculateBalance(account)>0)).sort((left,right)=>String(left.name).localeCompare(String(right.name),'es'));if(!suppliers.length)return showToast('No hay proveedores con saldo pendiente.','info');$('#modal-root').innerHTML=`<div class="modal-backdrop"><form class="modal" id="supplier-payment-form"><button type="button" class="modal-close">×</button><p class="eyebrow">FINANZAS</p><h2>Abonar a proveedor</h2><label class="input-label">Proveedor<select class="field" name="supplierId" required>${suppliers.map(supplier=>`<option value="${supplier.id}">${supplier.name}${supplier.document?' · '+supplier.document:''}</option>`).join('')}</select></label><div class="muted" data-supplier-balance></div><label class="input-label">Monto del abono<input class="field" name="amount" type="number" min="1" step="0.01" required></label><label class="input-label">Fecha<input class="field" name="date" type="date" value="${new Date().toISOString().slice(0,10)}" required></label><label class="input-label">Metodo<select class="field" name="method"><option>EFECTIVO</option><option>TRANSFERENCIA</option><option>CONSIGNACION</option><option>CHEQUE</option><option>OTRO</option></select></label><label class="input-label">Referencia<input class="field" name="reference" required></label><label class="input-label">Observacion<input class="field" name="note"></label><p class="muted">El abono se distribuirá entre las facturas pendientes más antiguas de este proveedor.</p><button class="primary wide">Guardar abono</button></form></div>`;const form=$('#supplier-payment-form');const updateBalance=()=>{const total=store.collection.accountsPayable.filter(account=>String(account.supplierId)===String(form.elements.supplierId.value)).reduce((sum,account)=>sum+calculateBalance(account),0);form.querySelector('[data-supplier-balance]').textContent=`Saldo pendiente: ${money(total)}`;};form.elements.supplierId.onchange=updateBalance;updateBalance();$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';form.onsubmit=async event=>{event.preventDefault();const button=form.querySelector('button.primary');button.disabled=true;try{const values=Object.fromEntries(new FormData(form));let remaining=Number(values.amount);if(!Number.isFinite(remaining)||remaining<=0)throw new Error('El abono debe ser mayor que cero.');const accounts=store.collection.accountsPayable.filter(account=>String(account.supplierId)===String(values.supplierId)&&calculateBalance(account)>0).sort((left,right)=>String(left.dueDate||left.issueDate||'').localeCompare(String(right.dueDate||right.issueDate||'')));const balance=accounts.reduce((sum,account)=>sum+calculateBalance(account),0);if(remaining>balance)throw new Error('El abono no puede superar el saldo total del proveedor.');for(let index=0;index<accounts.length&&remaining>0;index+=1){const account=accounts[index];const amount=Math.min(remaining,calculateBalance(account));await saveSupplierPayment(account,values,amount,`${values.reference}-${index+1}`);remaining-=amount;}store.save();$('#modal-root').innerHTML='';render();showToast('Abono distribuido entre las facturas del proveedor.');}catch(error){showToast(error.message,'error');}finally{button.disabled=false;}};}
+function supplierPaymentModal(){
+	const suppliers=store.collection.suppliers
+		.filter(supplier=>store.collection.accountsPayable.some(account=>String(account.supplierId)===String(supplier.id)&&calculateBalance(account)>0))
+		.sort((left,right)=>String(left.name).localeCompare(String(right.name),'es'));
+	if(!suppliers.length)return showToast('No hay proveedores con saldo pendiente.','info');
+	$('#modal-root').innerHTML=`<div class="modal-backdrop"><form class="modal" id="supplier-payment-form"><button type="button" class="modal-close">×</button><p class="eyebrow">FINANZAS</p><h2>Abonar a proveedor</h2><label class="input-label">Proveedor<select class="field" name="supplierId" required>${suppliers.map(supplier=>`<option value="${supplier.id}">${supplier.name}${supplier.document?' · '+supplier.document:''}</option>`).join('')}</select></label><div class="muted" data-supplier-balance></div><label class="input-label">Monto del abono<input class="field" name="amount" type="number" min="1" step="0.01" required></label><label class="input-label">Fecha<input class="field" name="date" type="date" value="${new Date().toISOString().slice(0,10)}" required></label><label class="input-label">Metodo<select class="field" name="method"><option>EFECTIVO</option><option>TRANSFERENCIA</option><option>CONSIGNACION</option><option>CHEQUE</option><option>OTRO</option></select></label><label class="input-label">Referencia<input class="field" name="reference" required></label><label class="input-label">Observacion<input class="field" name="note"></label><p class="muted">El abono se distribuirá entre las facturas pendientes más antiguas de este proveedor.</p><button class="primary wide">Guardar abono</button></form></div>`;
+	const form=$('#supplier-payment-form');
+	const updateBalance=()=>{
+		const total=store.collection.accountsPayable
+			.filter(account=>String(account.supplierId)===String(form.elements.supplierId.value))
+			.reduce((sum,account)=>sum+calculateBalance(account),0);
+		form.querySelector('[data-supplier-balance]').textContent=`Saldo pendiente: ${money(total)}`;
+	};
+	form.elements.supplierId.onchange=updateBalance;
+	updateBalance();
+	$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';
+	form.onsubmit=async event=>{
+		event.preventDefault();
+		const button=form.querySelector('button.primary');
+		button.disabled=true;
+		try{
+			const values=Object.fromEntries(new FormData(form));
+			let remaining=Number(values.amount);
+			if(!Number.isFinite(remaining)||remaining<=0)throw new Error('El abono debe ser mayor que cero.');
+			const accounts=store.collection.accountsPayable
+				.filter(account=>String(account.supplierId)===String(values.supplierId)&&calculateBalance(account)>0)
+				.sort((left,right)=>String(left.dueDate||left.issueDate||'').localeCompare(String(right.dueDate||right.issueDate||'')));
+			const balance=accounts.reduce((sum,account)=>sum+calculateBalance(account),0);
+			if(remaining>balance)throw new Error('El abono no puede superar el saldo total del proveedor.');
+			for(let index=0;index<accounts.length&&remaining>0;index+=1){
+				const account=accounts[index];
+				const amount=Math.min(remaining,calculateBalance(account));
+				await saveSupplierPayment(account,values,amount,`${values.reference}-${index+1}`);
+				remaining-=amount;
+			}
+			await store.save({notify:false});
+			$('#modal-root').innerHTML='';
+			render();
+			showToast('Abono distribuido entre las facturas del proveedor.');
+		}catch(error){
+			showToast(error.message,'error');
+		}finally{
+			button.disabled=false;
+		}
+	};
+}
 function showPayableDetail(accountId){$('#modal-root').innerHTML=accountsPayableDetail(store.collection,accountId);$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';}
-document.addEventListener('click',event=>{const action=event.target.closest('[data-action]')?.dataset.action;if(action==='new-external-payable')externalPayableModal();if(action==='payable-detail')showPayableDetail(event.target.closest('[data-payable-id]')?.dataset.payableId);if(action==='payable-payment')payablePaymentModal(event.target.closest('[data-payable-id]')?.dataset.payableId);if(action==='refresh-payables'){(store.collection.accountsPayable||[]).forEach(account=>updateAccountPayableStatus(store.collection,account));store.save();render();}});
+document.addEventListener('click',async event=>{const action=event.target.closest('[data-action]')?.dataset.action;if(action==='new-external-payable')externalPayableModal();if(action==='payable-detail')showPayableDetail(event.target.closest('[data-payable-id]')?.dataset.payableId);if(action==='payable-payment')payablePaymentModal(event.target.closest('[data-payable-id]')?.dataset.payableId);if(action==='refresh-payables'){const previousState=structuredClone(store.collection);(store.collection.accountsPayable||[]).forEach(account=>updateAccountPayableStatus(store.collection,account));try{await store.save({notify:false});render();}catch(error){store.state=previousState;render();showToast(error.message,'error');}}});
 document.addEventListener('input',event=>{if(event.target.matches('[data-filter="suppliers"]')){const query=event.target.value.toLowerCase();const items=supplierRecords(store.collection).filter(item=>`${item.code} ${item.name} ${item.document} ${item.contact} ${item.phone} ${item.email}`.toLowerCase().includes(query));if($('#suppliers-table'))$('#suppliers-table').innerHTML=supplierTable(store.collection,items);}});
 document.addEventListener('input',event=>{if(event.target.matches('[data-filter="customers"]')){const query=event.target.value.toLocaleLowerCase();const items=(store.collection.customers||[]).filter(item=>`${item.id} ${item.name} ${item.document} ${item.phone} ${item.email}`.toLocaleLowerCase().includes(query));if($('#customers-table'))$('#customers-table').innerHTML=customerTable(items);}});
 function transferSource(){return store.collection.transfers?.length ? store.collection.transfers : (store.collection.inventoryMovements||[]).filter(item=>String(item.tipo||'').toUpperCase()==='TRASLADO').map(item=>({...item,id:String(item.id),originStoreId:String(item.local_origen||''),destinationStoreId:String(item.local_destino||''),createdAt:item.fecha||item.creado_en||'',createdBy:item.usuario_id||item.empleado||'',status:String(item.estado||'RECIBIDO').toUpperCase()==='COMPLETADO'?'RECIBIDO':String(item.estado||'RECIBIDO').toUpperCase(),items:Array.isArray(item.items)&&item.items.length ? item.items : [{productId:item.codigo||'',quantity:Number(item.cantidad||0)}]}));}
@@ -1983,7 +2377,35 @@ document.addEventListener('click',event=>{const button=event.target.closest('[da
 	}
 };if(actions[button.dataset.action])actions[button.dataset.action]();});
 document.addEventListener('click',event=>{const button=event.target.closest('[data-action="edit-sale"]');if(!button)return;setTimeout(()=>{const sale=store.collection.sales.find(item=>String(item.id)===String(button.dataset.saleId));const form=$('#sale-edit-modal');if(!sale||!form||form.querySelector('[name="items"]'))return;const input=document.createElement('input');input.type='hidden';input.name='items';input.value=JSON.stringify((sale.items||[]).map(item=>({productId:item.productId,quantity:Number(item.quantity||0),unitPrice:Number(item.unitPrice??item.price??0),price:Number(item.unitPrice??item.price??0),taxRate:Number(item.taxRate||0)})));form.append(input);const lines=document.createElement('div');lines.innerHTML='<h3>Productos</h3>'+((sale.items||[]).map((item,index)=>`<label class="input-label">Producto ${index+1}<select class="field" data-sale-product="${index}">${store.collection.products.map(product=>`<option value="${product.id}" ${product.id===item.productId?'selected':''}>${product.name}</option>`).join('')}</select><input class="field" type="number" min="1" value="${item.quantity}" data-sale-quantity="${index}" placeholder="Cantidad"><input class="field" type="number" min="0" value="${item.unitPrice??item.price??0}" data-sale-price="${index}" placeholder="Precio"></label>`).join(''));form.querySelector('button.primary')?.before(lines);const sync=()=>{const items=(sale.items||[]).map((item,index)=>({productId:$(`[data-sale-product="${index}"]`).value,quantity:Number($(`[data-sale-quantity="${index}"]`).value||0),unitPrice:Number($(`[data-sale-price="${index}"]`).value||0),price:Number($(`[data-sale-price="${index}"]`).value||0),taxRate:Number(item.taxRate||0)}));input.value=JSON.stringify(items);};form.addEventListener('input',sync);form.addEventListener('change',sync);},0);});
-document.addEventListener('submit',async event=>{if(!event.target.matches('.transfer-modal'))return;event.preventDefault();if(!transferDraft.length)return showToast('Agrega al menos un producto.','error');const button=event.target.querySelector('button.primary');button.disabled=true;try{const result=await persistCatalogRecord('/api/shared-transfer',{originStoreId:transferField('origin').value,destinationStoreId:transferField('destination').value,items:transferDraft},'POST',transferRequestId);if(!result?.transfer||!Array.isArray(result.inventory))throw new Error('El servidor no confirmo el traslado.');for(const update of result.inventory){let row=inventoryEntry(store.collection,update.productId,update.storeId);if(!row){row={id:`TRANSFER-${result.transfer.sourceId}-${store.collection.inventoryByStore.length+1}`,productId:update.productId,storeId:update.storeId};store.collection.inventoryByStore.push(row);}row.quantity=Number(update.quantity);row.updatedAt=result.transfer.createdAt;}store.collection.transfers=(store.collection.transfers||[]).filter(item=>String(item.id)!==String(result.transfer.id));store.collection.transfers.push(result.transfer);store.save();$('#modal-root').innerHTML='';render();showToast(`Traslado ${result.transfer.id} realizado: inventario actualizado en ambos locales.`);}catch(error){button.disabled=false;showToast(error.message,'error');}});
+document.addEventListener('submit',async event=>{
+	if(!event.target.matches('.transfer-modal'))return;
+	event.preventDefault();
+	if(!transferDraft.length)return showToast('Agrega al menos un producto.','error');
+	const button=event.target.querySelector('button.primary');
+	button.disabled=true;
+	try{
+		const result=await persistCatalogRecord('/api/shared-transfer',{originStoreId:transferField('origin').value,destinationStoreId:transferField('destination').value,items:transferDraft},'POST',transferRequestId);
+		if(!result?.transfer||!Array.isArray(result.inventory))throw new Error('El servidor no confirmo el traslado.');
+		for(const update of result.inventory){
+			let row=inventoryEntry(store.collection,update.productId,update.storeId);
+			if(!row){
+				row={id:`TRANSFER-${result.transfer.sourceId}-${store.collection.inventoryByStore.length+1}`,productId:update.productId,storeId:update.storeId};
+				store.collection.inventoryByStore.push(row);
+			}
+			row.quantity=Number(update.quantity);
+			row.updatedAt=result.transfer.createdAt;
+		}
+		store.collection.transfers=(store.collection.transfers||[]).filter(item=>String(item.id)!==String(result.transfer.id));
+		store.collection.transfers.push(result.transfer);
+		await store.save({notify:false});
+		$('#modal-root').innerHTML='';
+		render();
+		showToast(`Traslado ${result.transfer.id} realizado: inventario actualizado en ambos locales.`);
+	}catch(error){
+		button.disabled=false;
+		showToast(error.message,'error');
+	}
+});
 function addSaleItemToEditForm(form,sale){
 	if(!canPerform('Ventas','edit'))return;
 	const storeId=sale.storeId||sale.local_id||sale.local;
@@ -2023,10 +2445,10 @@ function addSaleItemToEditForm(form,sale){
 	};
 }
 document.addEventListener('click',event=>{const button=event.target.closest('[data-action="edit-sale"]');if(!button)return;setTimeout(()=>{const sale=store.collection.sales.find(item=>String(item.id)===String(button.dataset.saleId));const form=$('#sale-edit-modal');if(sale&&form)addSaleItemToEditForm(form,sale);},0);});
-async function changeTransfer(id, action){const transfer=store.collection.transfers.find(item=>item.id===id);if(!transfer)return;if(action==='cancel'&&transfer.status==='BORRADOR')transfer.status='CANCELADO';else if(action==='send'&&transfer.status==='BORRADOR'){try{for(const item of transfer.items)await persistCatalogRecord('/api/catalog/inventory-movement',{id:`${transfer.id}-OUT-${item.productId}`,productId:item.productId,storeId:transfer.originStoreId,quantity:item.quantity,movementType:'TRASLADO_SALIDA',referenceId:transfer.id,note:`Traslado ${transfer.id}`});transfer.status='EN_TRANSITO';transfer.sentAt=new Date().toISOString();}catch(error){showToast(error.message,'error');return;}}else if(action==='receive'&&transfer.status==='EN_TRANSITO'){try{for(const item of transfer.items)await persistCatalogRecord('/api/catalog/inventory-movement',{id:`${transfer.id}-IN-${item.productId}`,productId:item.productId,storeId:transfer.destinationStoreId,quantity:item.quantity,movementType:'TRASLADO_ENTRADA',referenceId:transfer.id,note:`Traslado ${transfer.id}`});transfer.status='RECIBIDO';transfer.receivedAt=new Date().toISOString();}catch(error){showToast(error.message,'error');return;}}else return showToast('Transicion de traslado no permitida.','error');try{await persistDomainRecord('transfers',transfer);store.save();render();showToast(action==='send'?'Traslado enviado y descontado en PostgreSQL.':action==='receive'?'Traslado recibido y actualizado en PostgreSQL.':'Traslado cancelado.');}catch(error){showToast(error.message,'error');}}
+async function changeTransfer(id, action){const transfer=store.collection.transfers.find(item=>item.id===id);if(!transfer)return;if(action==='cancel'&&transfer.status==='BORRADOR')transfer.status='CANCELADO';else if(action==='send'&&transfer.status==='BORRADOR'){try{for(const item of transfer.items)await persistCatalogRecord('/api/catalog/inventory-movement',{id:`${transfer.id}-OUT-${item.productId}`,productId:item.productId,storeId:transfer.originStoreId,quantity:item.quantity,movementType:'TRASLADO_SALIDA',referenceId:transfer.id,note:`Traslado ${transfer.id}`});transfer.status='EN_TRANSITO';transfer.sentAt=new Date().toISOString();}catch(error){showToast(error.message,'error');return;}}else if(action==='receive'&&transfer.status==='EN_TRANSITO'){try{for(const item of transfer.items)await persistCatalogRecord('/api/catalog/inventory-movement',{id:`${transfer.id}-IN-${item.productId}`,productId:item.productId,storeId:transfer.destinationStoreId,quantity:item.quantity,movementType:'TRASLADO_ENTRADA',referenceId:transfer.id,note:`Traslado ${transfer.id}`});transfer.status='RECIBIDO';transfer.receivedAt=new Date().toISOString();}catch(error){showToast(error.message,'error');return;}}else return showToast('Transicion de traslado no permitida.','error');try{await persistDomainRecord('transfers',transfer);await store.save({notify:false});render();showToast(action==='send'?'Traslado enviado y descontado en PostgreSQL.':action==='receive'?'Traslado recibido y actualizado en PostgreSQL.':'Traslado cancelado.');}catch(error){showToast(error.message,'error');}}
 document.addEventListener('click',event=>{const action=event.target.closest('[data-action]')?.dataset.action;if(['transfer-send','transfer-receive','transfer-cancel'].includes(action))changeTransfer(event.target.closest('[data-transfer-id]')?.dataset.transferId,action.replace('transfer-',''));});
 document.addEventListener('click',event=>{const pageAction=event.target.closest('[data-product-page]')?.dataset.productPage;if(pageAction){productPage=Math.max(1,pageAction==='next'?productPage+1:productPage-1);refreshProducts();}});
-document.addEventListener('change',event=>{const input=event.target.closest('[data-permission-index] input');if(!input)return;const row=input.closest('[data-permission-index]');const item=store.collection.permissionMatrix[Number(row.dataset.permissionIndex)];if(item){item.actions[input.dataset.permissionAction]=input.checked;store.save();showToast('Permiso actualizado.');}});
+document.addEventListener('change',async event=>{const input=event.target.closest('[data-permission-index] input');if(!input)return;const row=input.closest('[data-permission-index]');const item=store.collection.permissionMatrix[Number(row.dataset.permissionIndex)];if(!item)return;const action=input.dataset.permissionAction,previous=item.actions[action];item.actions[action]=input.checked;try{await store.save({notify:false});showToast('Permiso actualizado.');}catch(error){item.actions[action]=previous;input.checked=previous;showToast(error.message,'error');}});
 	document.addEventListener('input',event=>{if(event.target.matches('[data-filter="products"]'))updateProductViewState();});
 document.addEventListener('change',event=>{if(event.target.matches('[data-product-store],[data-product-active]')){updateProductViewState();}});
 document.addEventListener('change',event=>{if(event.target.matches('#report-store,#report-type,#report-from,#report-to')){refreshReportPreview();updateReportControls();}});
@@ -2287,7 +2709,7 @@ document.addEventListener('click',async event=>{
 			active
 		},'PUT');
 		await hydrateUsers(store.state);
-		store.save();
+		await store.save({notify:false});
 		render();
 		showToast(`Usuario ${active?'activado':'desactivado'} correctamente.`);
 	}catch(error){
@@ -2303,15 +2725,43 @@ document.addEventListener('submit',async event=>{
 	try{
 		const values=Object.fromEntries(new FormData(event.target));
 		const draftState=structuredClone(store.collection);
-		const provisionalPurchaseId=isStaticDeployment()
-			? nextPurchaseEntryId([...(draftState.purchases||[]),...(draftState.entries||[])])
-			: `TMP-${globalThis.crypto?.randomUUID?crypto.randomUUID():`${Date.now()}-${Math.random()}`}`;
-		const purchase=createPurchase(draftState,{...values,id:provisionalPurchaseId,items:purchaseDraft});
-		const purchasePayload=structuredClone(purchase);
+		const purchaseFingerprint=JSON.stringify({values,items:purchaseDraft,tenantId:activeTenantId()});
+		pendingPurchaseSubmission=getOrCreatePendingOperation({
+			operation:'purchase',
+			tenantId:activeTenantId(),
+			fingerprint:purchaseFingerprint,
+			create:()=>{
+				const id=isStaticDeployment()
+					?nextPurchaseEntryId([...(store.collection.purchases||[]),...(store.collection.entries||[])])
+					:`TMP-${globalThis.crypto?.randomUUID?crypto.randomUUID():`${Date.now()}-${Math.random()}`}`;
+				const pendingState=structuredClone(store.collection);
+				const payload=createPurchase(pendingState,{...values,id,items:purchaseDraft});
+				return {
+					id,
+					requestId:`purchase-${globalThis.crypto?.randomUUID?crypto.randomUUID():`${Date.now()}-${Math.random()}`}`,
+					payload:structuredClone(payload),
+				};
+			},
+		});
+		const provisionalPurchaseId=pendingPurchaseSubmission.id;
+		const purchasePayload=structuredClone(pendingPurchaseSubmission.payload);
+		if(isStaticDeployment()&&(draftState.purchases||[]).some(item=>String(item.id)===String(provisionalPurchaseId))){
+			try{clearPendingOperation({operation:'purchase',tenantId:activeTenantId(),fingerprint:purchaseFingerprint});}
+			catch(error){console.error('[app] No se pudo limpiar la clave de la compra local confirmada:',error);}
+			pendingPurchaseSubmission=null;
+			purchaseDraft=[];
+			$('#modal-root').innerHTML='';
+			showToast('Esta compra ya se habia guardado en este dispositivo.');
+			return;
+		}
+		if(!isStaticDeployment()&&!draftState.purchases.some(item=>String(item.id)===String(purchasePayload.id))){
+			draftState.purchases.push(structuredClone(purchasePayload));
+		}
+		const purchase=purchasePayload;
 		const received=receivePurchase(draftState,purchase.id);
 		const result=isStaticDeployment()
 			? {id:purchase.id,purchase:received,accountPayable:draftState.accountsPayable.find(item=>String(item.purchaseId)===String(purchase.id))}
-			: await persistCatalogRecord('/api/shared-purchase',{purchase:purchasePayload,tenantId:activeTenantId()});
+			: await persistCatalogRecord('/api/shared-purchase',{purchase:purchasePayload,tenantId:activeTenantId()},'POST',pendingPurchaseSubmission.requestId);
 		Object.assign(received,result.purchase||{});
 		const entryId=String(result.id||'');
 		if(!/^\d+$/.test(entryId))throw new Error('El servidor no devolvió el consecutivo numérico de la entrada.');
@@ -2333,8 +2783,12 @@ document.addEventListener('submit',async event=>{
 				await persistCatalogRecord(`/api/domain/purchases/${encodeURIComponent(provisionalPurchaseId)}`,{},'DELETE');
 			}
 		}
+		if(isStaticDeployment())await saveState(draftState);
 		store.state=draftState;
-		store.save();
+		if(!isStaticDeployment())await store.save({notify:false});
+		try{clearPendingOperation({operation:'purchase',tenantId:activeTenantId(),fingerprint:purchaseFingerprint});}
+		catch(error){console.error('[app] No se pudo limpiar la clave de la compra confirmada:',error);}
+		pendingPurchaseSubmission=null;
 		purchaseDraft=[];
 		$('#modal-root').innerHTML='';
 		location.hash='#compras';
@@ -2345,7 +2799,16 @@ document.addEventListener('submit',async event=>{
 		showToast(error.message,'error');
 	}
 });
+function renderHydrationFailure(error){
+	appHydrating=false;
+	const appContent=$('#app-content');
+	if(!appContent)return;
+	appContent.innerHTML='<section class="panel app-loading"><strong data-hydration-module></strong><span data-hydration-error></span><p>Los datos anteriores no se marcaron como sincronizados. Puedes reintentar la carga.</p><button class="primary" type="button" data-action="retry-hydration">Reintentar carga</button></section>';
+	appContent.querySelector('[data-hydration-module]').textContent=`No se pudo cargar ${error.hydrationModule||'informacion del ERP'}.`;
+	appContent.querySelector('[data-hydration-error]').textContent=error.message||'Error inesperado durante la sincronizacion.';
+}
 async function boot() {
+	appHydrating=true;
 	const appContent = $('#app-content');
 	if (appContent) appContent.innerHTML = '<section class="page-shell"><p class="eyebrow">FAMIMUEBLES ERP</p><h1>Cargando informacion...</h1></section>';
 	const publishButton = $('#publish-local');
@@ -2392,30 +2855,48 @@ async function boot() {
 		render();
 		showToast('Mostrando los datos guardados mientras se actualizan los talonarios.');
 	}
-	const normalized = await hydrateStateWithRetry(3, bootstrap);
-	if (!normalized) {
-		appHydrating = false;
-		if(routerStarted){
-			initialDomainHydrationStarted=false;
-			scheduleInitialDomainHydration();
-			showToast('No fue posible actualizar los datos del servidor; se conservan los datos guardados.','error');
-			return;
+	let normalized;
+	try{
+		normalized=await hydrateStateWithRetry(3,bootstrap);
+		if(!normalized)throw new Error('El servidor no devolvio informacion valida.');
+		const hydratedState=structuredClone(normalized);
+		await hydrateCatalog(hydratedState,bootstrap,true);
+		const criticalCollections=['suppliers','purchases','accountsPayable'];
+		const criticalResults=await loadDomainCollections(hydratedState,criticalCollections,10000,3,1,true);
+		const failedCriticalCollections=criticalCollections.filter((_collection,index)=>!criticalResults[index]);
+		if(failedCriticalCollections.length){
+			const error=new Error(`No se pudieron actualizar los modulos: ${failedCriticalCollections.join(', ')}.`);
+			error.hydrationModule=failedCriticalCollections.join(', ');
+			throw error;
 		}
-		if (appContent) appContent.innerHTML = '<section class="panel app-loading"><strong>No se pudo cargar la informacion.</strong><span>El servidor tardo demasiado en responder.</span><button class="primary" type="button" onclick="location.reload()">Reintentar</button></section>';
+		if(sistecreditoLedgerEnabled&&['dashboard','paridad'].includes(currentRoute())){
+			const financeCollections=['sistecreditoAdjustments','sistecreditoSaleAmounts'];
+			const financeResults=await loadDomainCollections(hydratedState,financeCollections,5000,2,1,true);
+			const failedFinanceCollections=financeCollections.filter((_collection,index)=>!financeResults[index]);
+			if(failedFinanceCollections.length){
+				const error=new Error(`No se pudieron actualizar los modulos: ${failedFinanceCollections.join(', ')}.`);
+				error.hydrationModule=failedFinanceCollections.join(', ');
+				throw error;
+			}
+		}
+		normalized=hydratedState;
+	}catch(error){
+		console.error('[app] Fallo la sincronizacion inicial:',error);
+		if(routerStarted)initialDomainHydrationStarted=false;
+		renderHydrationFailure(error);
 		return;
 	}
 	store.state = normalized;
 	store.collection.demoMode = false;
-	await hydrateCatalog(store.state,bootstrap);
-	await loadDomainCollections(store.state,['suppliers','purchases','accountsPayable'],10000,3,1,true);
-	if(sistecreditoLedgerEnabled&&['dashboard','paridad'].includes(currentRoute())){
-		await loadDomainCollections(store.state,['sistecreditoAdjustments','sistecreditoSaleAmounts'],5000,2,1,true);
-	}
 	hydrateUsers(store.state).then(() => {
 		if (currentRoute() === 'usuarios') render();
 	}).catch(error => console.warn('No se pudieron actualizar los usuarios:', error.message));
 	await permissionsPromise;
-	store.save();
+	try{await store.save({notify:false});}
+	catch(error){
+		console.error('[app] No se pudo guardar el estado hidratado:',error);
+		showToast(`Datos sincronizados, pero no se pudo guardar el estado local: ${error.message}`,'error');
+	}
 	state.storeId = resolveActiveStore();
 	appHydrating = false;
 	if(!routerStarted)startRouter(renderApp);
@@ -2545,7 +3026,7 @@ document.addEventListener('click', event => {
 		}, 0);
 	}
 });
-async function deleteProduct(productId){const product=store.collection.products.find(item=>String(item.id)===String(productId));if(!product||!window.confirm(`¿Eliminar el producto ${product.name}?`))return;try{await persistCatalogRecord(`/api/catalog/product/${encodeURIComponent(product.id)}`,{},'DELETE');store.collection.products=store.collection.products.filter(item=>item.id!==product.id);store.collection.inventoryByStore=store.collection.inventoryByStore.filter(item=>item.productId!==product.id);store.save();$('#modal-root').innerHTML='';render();showToast('Producto eliminado correctamente.');}catch(error){showToast(error.message,'error');}}
+async function deleteProduct(productId){const product=store.collection.products.find(item=>String(item.id)===String(productId));if(!product||!window.confirm(`¿Eliminar el producto ${product.name}?`))return;try{await persistCatalogRecord(`/api/catalog/product/${encodeURIComponent(product.id)}`,{},'DELETE');store.collection.products=store.collection.products.filter(item=>item.id!==product.id);store.collection.inventoryByStore=store.collection.inventoryByStore.filter(item=>item.productId!==product.id);await store.save({notify:false});$('#modal-root').innerHTML='';render();showToast('Producto eliminado correctamente.');}catch(error){showToast(error.message,'error');}}
 function renderPurchaseDraft(){const container=$('.purchase-draft');if(!container)return;container.innerHTML=purchaseDraft.map((item,index)=>`<p>${store.collection.products.find(product=>product.id===item.productId)?.name} · ${item.quantity} · ${money(item.unitCost)} <button type="button" class="table-action" data-action="remove-purchase-line" data-purchase-line="${index}" aria-label="Quitar producto">×</button></p>`).join('');}
 document.addEventListener('click',event=>{if(event.target.closest('[data-action="add-purchase-line"]'))setTimeout(renderPurchaseDraft,0);const removeButton=event.target.closest('[data-action="remove-purchase-line"]');if(removeButton){purchaseDraft.splice(Number(removeButton.dataset.purchaseLine),1);renderPurchaseDraft();}});
 document.addEventListener('click',event=>{if(!event.target.closest('[data-action="new-purchase"]'))return;setTimeout(()=>{const selector=$('#purchase-modal [name="storeId"]');if(selector)selector.value=state.storeId;const fields=[['[data-purchase-quantity]','Cantidad'],['[data-purchase-cost]','Precio o costo unitario'],['[data-purchase-iva]','IVA (%)'],['[data-purchase-discount]','Descuento']];fields.forEach(([selector,placeholder])=>{const input=$(`#purchase-modal ${selector}`);if(input){input.value='';input.placeholder=placeholder;}});},0);});
@@ -2598,10 +3079,16 @@ function openCreditScheduleEditModal(id){
 	const rows=Array.from({length:Math.max(count,current.length)},(_,index)=>{const quota=current[index]||{};return `<div class="credit-quota-row"><strong>Cuota ${index+1}</strong><input class="field" type="date" data-quota-date value="${dateValue(quota.dueDate??quota.fecha_vencimiento)||defaultDate(index)}" required><input class="field" type="number" min="0" step="1" data-quota-amount value="${Number(quota.amount??quota.valor_programado??(financed/count))}" required><input class="field" type="number" min="0" step="1" data-quota-paid value="${Number(quota.paidAmount??quota.valor_pagado??0)}" required></div>`;}).join('');
 	$('#modal-root').innerHTML=`<div class="modal-backdrop"><form class="modal credit-edit-modal" id="credit-edit-form"><button type="button" class="modal-close">×</button><p class="eyebrow">CARTERA</p><h2>Editar credito ${item.id}</h2><label class="input-label">Valor total<input class="field" name="total" type="number" min="0" step="1" value="${total}" required></label><label class="input-label">Cuota inicial<input class="field" name="initial" type="number" min="0" step="1" value="${initial}" required></label><label class="input-label">Numero de cuotas<input class="field" name="installmentsCount" type="number" min="1" step="1" value="${Math.max(count,current.length)}" required></label><p class="muted">Cuotas: fecha de vencimiento, valor programado y valor pagado.</p><div class="credit-quota-list">${rows}</div><button type="button" class="outline wide" data-action="add-credit-quota">Agregar cuota</button><button class="primary wide">Guardar cambios</button></form></div>`;
 	$('.modal-close').onclick=()=>$('#modal-root').innerHTML='';
-	$('#credit-edit-form').onsubmit=async event=>{event.preventDefault();const form=event.target;const values=Object.fromEntries(new FormData(form));const nextTotal=Number(values.total),nextInitial=Number(values.initial),nextPaid=paid;const quotaRows=[...form.querySelectorAll('.credit-quota-row')];const installments=quotaRows.map((row,index)=>({number:index+1,dueDate:row.querySelector('[data-quota-date]').value,amount:Number(row.querySelector('[data-quota-amount]').value),paidAmount:Number(row.querySelector('[data-quota-paid]').value)}));if(!Number.isFinite(nextTotal)||nextTotal<0||!Number.isFinite(nextInitial)||nextInitial<0||nextInitial>nextTotal||!installments.length||installments.some(quota=>!quota.dueDate||quota.amount<0||quota.paidAmount<0||quota.paidAmount>quota.amount))return showToast('Revisa los valores y fechas de las cuotas.','error');const payload={id:item.id,total:nextTotal,initial:nextInitial,paid:nextPaid,installments};try{if(store.collection.remoteMode){await api.put(`/api/domain/credits/${encodeURIComponent(item.id)}/schedule`,payload,{headers:{'X-Tenant-ID':activeTenantId()}});}else{await persistDomainRecord('credits',{...item,total:nextTotal,originalAmount:nextTotal,initial:nextInitial,downPayment:nextInitial,installmentsCount:installments.length,installmentAmount:Math.round(Math.max(0,nextTotal-nextInitial)/installments.length)});}const updated={...item,total:nextTotal,originalAmount:nextTotal,initial:nextInitial,downPayment:nextInitial,paid:nextPaid,financedAmount:Math.max(0,nextTotal-nextInitial),installmentsCount:installments.length,installmentAmount:Math.round(Math.max(0,nextTotal-nextInitial)/installments.length),saldo_pendiente:Math.max(0,nextTotal-nextInitial-nextPaid),pending:Math.max(0,nextTotal-nextInitial-nextPaid),status:nextTotal-nextInitial-nextPaid<=0?'PAGADO':'PENDIENTE'};const creditIndex=store.collection.credits.findIndex(entry=>String(entry.id)===String(id));store.collection.credits[creditIndex]=updated;store.collection.installments=(store.collection.installments||[]).filter(entry=>String(entry.creditId??entry.credito_id??'')!==String(id)).concat(installments.map(quota=>({...quota,creditId:id})));store.save();$('#modal-root').innerHTML='';render();showToast('Credito y cuotas actualizados correctamente.');}catch(error){showToast(error.message,'error');}};
+	$('#credit-edit-form').onsubmit=async event=>{event.preventDefault();const form=event.target;const values=Object.fromEntries(new FormData(form));const nextTotal=Number(values.total),nextInitial=Number(values.initial),nextPaid=paid;const quotaRows=[...form.querySelectorAll('.credit-quota-row')];const installments=quotaRows.map((row,index)=>({number:index+1,dueDate:row.querySelector('[data-quota-date]').value,amount:Number(row.querySelector('[data-quota-amount]').value),paidAmount:Number(row.querySelector('[data-quota-paid]').value)}));if(!Number.isFinite(nextTotal)||nextTotal<0||!Number.isFinite(nextInitial)||nextInitial<0||nextInitial>nextTotal||!installments.length||installments.some(quota=>!quota.dueDate||quota.amount<0||quota.paidAmount<0||quota.paidAmount>quota.amount))return showToast('Revisa los valores y fechas de las cuotas.','error');const payload={id:item.id,total:nextTotal,initial:nextInitial,paid:nextPaid,installments};try{if(store.collection.remoteMode){await api.put(`/api/domain/credits/${encodeURIComponent(item.id)}/schedule`,payload,{headers:{'X-Tenant-ID':activeTenantId()}});}else{await persistDomainRecord('credits',{...item,total:nextTotal,originalAmount:nextTotal,initial:nextInitial,downPayment:nextInitial,installmentsCount:installments.length,installmentAmount:Math.round(Math.max(0,nextTotal-nextInitial)/installments.length)});}const updated={...item,total:nextTotal,originalAmount:nextTotal,initial:nextInitial,downPayment:nextInitial,paid:nextPaid,financedAmount:Math.max(0,nextTotal-nextInitial),installmentsCount:installments.length,installmentAmount:Math.round(Math.max(0,nextTotal-nextInitial)/installments.length),saldo_pendiente:Math.max(0,nextTotal-nextInitial-nextPaid),pending:Math.max(0,nextTotal-nextInitial-nextPaid),status:nextTotal-nextInitial-nextPaid<=0?'PAGADO':'PENDIENTE'};const creditIndex=store.collection.credits.findIndex(entry=>String(entry.id)===String(id));store.collection.credits[creditIndex]=updated;store.collection.installments=(store.collection.installments||[]).filter(entry=>String(entry.creditId??entry.credito_id??'')!==String(id)).concat(installments.map(quota=>({...quota,creditId:id})));await store.save({notify:false});$('#modal-root').innerHTML='';render();showToast('Credito y cuotas actualizados correctamente.');}catch(error){showToast(error.message,'error');}};
 	$('#credit-edit-form').addEventListener('click',event=>{if(!event.target.closest('[data-action="add-credit-quota"]'))return;const form=document.querySelector('#credit-edit-form'),list=form.querySelector('.credit-quota-list'),index=list.children.length;const row=document.createElement('div');row.className='credit-quota-row';row.innerHTML=`<strong>Cuota ${index+1}</strong><input class="field" type="date" data-quota-date value="${defaultDate(index)}" required><input class="field" type="number" min="0" step="1" data-quota-amount value="0" required><input class="field" type="number" min="0" step="1" data-quota-paid value="0" required>`;list.append(row);form.querySelector('[name="installmentsCount"]').value=list.children.length;});
 }
 function openCreditEditModal(id){return openCreditScheduleEditModal(id);}
+document.addEventListener('click',event=>{
+	const button=event.target.closest('[data-action="retry-hydration"]');
+	if(!button)return;
+	button.disabled=true;
+	boot();
+});
 boot();
 
 document.addEventListener('click',event=>{
@@ -2903,5 +3390,5 @@ async function saveTalonarioJustification(form){
 	if(existing)throw new Error('Este consecutivo ya tiene una justificacion.');
 	const justification={id:generateId('TJU',store.collection.talonarioJustifications),talonarioId:String(values.talonarioId),number,reason:String(values.reason),notes:String(values.notes).trim(),status:'JUSTIFICADA',createdAt:new Date().toISOString(),createdBy:'USR-00001'};
 	await persistDomainRecord('talonarioJustifications',justification);
-	store.collection.talonarioJustifications.push(justification);store.save();$('#modal-root').innerHTML='';render();showToast('Consecutivo justificado correctamente.');
+	store.collection.talonarioJustifications.push(justification);await store.save({notify:false});$('#modal-root').innerHTML='';render();showToast('Consecutivo justificado correctamente.');
 }

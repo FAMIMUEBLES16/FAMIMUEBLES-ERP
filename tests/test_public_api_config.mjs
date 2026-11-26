@@ -36,6 +36,10 @@ try {
   assert.equal(localApi.API_BASE_URL, 'http://127.0.0.1:8024/api');
   assert.equal(localApi.healthRequested, false);
 
+  const ipv6LocalApi = await loadConfig('[::1]', false);
+  assert.equal(ipv6LocalApi.API_BASE_URL, 'http://127.0.0.1:8024/api');
+  assert.equal(ipv6LocalApi.healthRequested, false);
+
   console.log('public API configuration checks passed');
 } finally {
   globalThis.fetch = originalFetch;

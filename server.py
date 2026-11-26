@@ -1332,6 +1332,10 @@ def tenant_id(handler: "AppHandler", payload: dict | None = None) -> str:
     return str(value).strip() or DEFAULT_TENANT
 
 
+def uses_shared_operational_schema(handler: "AppHandler", payload: dict | None = None) -> bool:
+    return _postgres_enabled() and tenant_id(handler, payload) == DEFAULT_TENANT
+
+
 def requested_tenant_allowed(handler: "AppHandler", payload: dict | None = None) -> bool:
     user = authenticated_user(handler)
     if not user:
@@ -1440,6 +1444,13 @@ def can_access(handler: "AppHandler", path: str, method: str = "GET") -> bool:
         return False
     if path.startswith("/api/domain/"):
         collection = normalize_collection_alias(path.split("/domain/", 1)[1].split("/", 1)[0])
+        if (
+            _postgres_enabled()
+            and tenant_id(handler) != DEFAULT_TENANT
+            and collection == "warranties"
+            and (path.endswith("/trace") or path.endswith("/action"))
+        ):
+            return False
         if collection in {"workschedules", "staffabsences"} and role != "ADMINISTRADOR":
             return False
     if path.startswith("/api/users/") and path.endswith("/permissions"):
@@ -3023,7 +3034,7 @@ class AppHandler(SimpleHTTPRequestHandler):
             self.send_header("Access-Control-Allow-Origin", origin)
             self.send_header("Vary", "Origin")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, Accept, Authorization, X-Tenant-ID, Idempotency-Key, ngrok-skip-browser-warning")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Accept, Authorization, X-Tenant-ID, X-User-ID, Idempotency-Key, ngrok-skip-browser-warning")
 
     def do_GET(self) -> None:
         parsed_url = urlparse(self.path)
@@ -3239,7 +3250,7 @@ class AppHandler(SimpleHTTPRequestHandler):
             })
             return
         if path == "/api/state":
-            if _postgres_enabled():
+            if uses_shared_operational_schema(self):
                 bootstrap = (parse_qs(parsed_url.query).get("bootstrap") or [""])[0] == "1"
                 with connection() as database:
                     state = _shared_state(database, bootstrap=bootstrap)
@@ -3255,7 +3266,7 @@ class AppHandler(SimpleHTTPRequestHandler):
             self.send_json(200, {"state": json.loads(row[0]), "updatedAt": row[1]})
             return
         if path == "/api/catalog":
-            if _postgres_enabled():
+            if uses_shared_operational_schema(self):
                 with connection() as database:
                     catalog = _shared_catalog(database)
                 self.send_json(200, {"tenantId": DEFAULT_TENANT, **catalog})
@@ -3355,7 +3366,7 @@ class AppHandler(SimpleHTTPRequestHandler):
                 self.send_json(404, {"error": "Coleccion no disponible"})
                 return
             with connection() as database:
-                if _postgres_enabled():
+                if uses_shared_operational_schema(self):
                     shared_items = _shared_domain_items(database, collection)
                     if shared_items is not None:
                         self.send_json(200, {"collection": collection, "items": shared_items})
@@ -3669,9 +3680,14 @@ class AppHandler(SimpleHTTPRequestHandler):
                 self.send_json(200, {"ok": True, "backend": "postgres"})
                 return
             if path in {"/api/catalog/store", "/api/catalog/product"}:
-                if _postgres_enabled():
+                if uses_shared_operational_schema(self, payload):
                     identifier = record_id(payload)
                     with connection() as database:
+                        if path.endswith("/product"):
+                            _, cached = claim_idempotency(database, self, payload, path)
+                            if cached is not None:
+                                self.send_json(200, cached)
+                                return
                         if path.endswith("/store"):
                             code = str(payload.get("code") or identifier).strip()
                             name = str(payload.get("name", "")).strip()
@@ -3687,6 +3703,7 @@ class AppHandler(SimpleHTTPRequestHandler):
                             existing_minimum_price = existing["precio_minimo"] if existing else 0
                             sale_price, minimum_price = _catalog_product_prices(payload, existing_minimum_price)
                             database.execute("INSERT INTO productos (codigo, nombre_producto, precio_compra, precio_venta, precio_minimo, activo) VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (codigo) DO UPDATE SET nombre_producto = EXCLUDED.nombre_producto, precio_compra = EXCLUDED.precio_compra, precio_venta = EXCLUDED.precio_venta, precio_minimo = EXCLUDED.precio_minimo, activo = EXCLUDED.activo", (code, name, int(float(payload.get("cost", 0) or 0)), sale_price, minimum_price, "NO" if payload.get("active") is False else "SI"))
+                            complete_idempotency(database, self, payload, path, 201, {"ok": True, "id": identifier})
                     self.send_json(201, {"ok": True, "id": identifier})
                     return
                 current_tenant = tenant_id(self, payload)
@@ -3703,8 +3720,16 @@ class AppHandler(SimpleHTTPRequestHandler):
                         name = str(payload.get("name", "")).strip()
                         if not code or not name:
                             raise ValueError("El producto requiere codigo y nombre")
+                        _, cached = claim_idempotency(database, self, payload, path)
+                        if cached is not None:
+                            self.send_json(200, cached)
+                            return
                         sale_price, minimum_price = _catalog_product_prices(payload)
-                        database.execute("INSERT INTO products (id, tenant_id, code, name, reference, barcode, category, cost, sale_price, minimum_price, tax_rate) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (identifier, current_tenant, code, name, str(payload.get("reference", "")), str(payload.get("barcode", "")), str(payload.get("category", "")), float(payload.get("cost", 0)), sale_price, minimum_price, float(payload.get("taxRate", 0))))
+                        saved = database.execute("INSERT INTO products (id, tenant_id, code, name, reference, barcode, category, cost, sale_price, minimum_price, tax_rate) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO UPDATE SET code = excluded.code, name = excluded.name, reference = excluded.reference, barcode = excluded.barcode, category = excluded.category, cost = excluded.cost, sale_price = excluded.sale_price, minimum_price = excluded.minimum_price, tax_rate = excluded.tax_rate WHERE products.tenant_id = excluded.tenant_id RETURNING id", (identifier, current_tenant, code, name, str(payload.get("reference", "")), str(payload.get("barcode", "")), str(payload.get("category", "")), float(payload.get("cost", 0)), sale_price, minimum_price, float(payload.get("taxRate", 0)))).fetchone()
+                        if not saved:
+                            raise ValueError("El identificador del producto ya pertenece a otra empresa")
+                        response = {"ok": True, "id": identifier}
+                        complete_idempotency(database, self, payload, path, 201, response)
                 self.send_json(201, {"ok": True, "id": identifier})
                 return
             if path == "/api/parity/conteo":
@@ -3912,7 +3937,7 @@ class AppHandler(SimpleHTTPRequestHandler):
                 self.send_json(201, result)
                 return
             if path == "/api/catalog/inventory-movement":
-                if _postgres_enabled():
+                if uses_shared_operational_schema(self, payload):
                     product_id = str(payload.get("productId", "")).strip()
                     store_id = str(payload.get("storeId", "")).strip()
                     raw_quantity = float(payload.get("quantity", 0) or 0)
@@ -3959,23 +3984,43 @@ class AppHandler(SimpleHTTPRequestHandler):
                 product_id = str(payload.get("productId", "")).strip()
                 store_id = str(payload.get("storeId", "")).strip()
                 enforce_user_store(self, store_id)
-                quantity = float(payload.get("quantity", 0))
-                if not product_id or not store_id or not quantity or not __import__("math").isfinite(quantity):
-                    raise ValueError("Producto, local y cantidad valida son obligatorios")
                 movement_type = str(payload.get("movementType", "ENTRADA")).upper()
-                signed_quantity = abs(quantity) if movement_type in {"ENTRADA", "COMPRA", "TRASLADO_ENTRADA", "DEVOLUCION_CLIENTE"} else -abs(quantity)
                 movement_id = record_id(payload)
+                if not product_id or not store_id:
+                    raise ValueError("Producto y local son obligatorios")
+                if movement_type == "AJUSTE":
+                    target_value = float(payload.get("targetQuantity", -1))
+                    if not __import__("math").isfinite(target_value) or target_value != int(target_value) or target_value < 0:
+                        raise ValueError("La nueva cantidad debe ser un entero mayor o igual a cero")
+                    target_quantity = int(target_value)
+                else:
+                    quantity = float(payload.get("quantity", 0))
+                    if not quantity or not __import__("math").isfinite(quantity):
+                        raise ValueError("La cantidad debe ser un numero finito mayor que cero")
+                    target_quantity = None
+                signed_quantity = 0 if movement_type == "AJUSTE" else (
+                    abs(quantity) if movement_type in {"ENTRADA", "COMPRA", "TRASLADO_ENTRADA", "DEVOLUCION_CLIENTE"} else -abs(quantity)
+                )
                 with connection() as database:
+                    _, cached = claim_idempotency(database, self, payload, path)
+                    if cached is not None:
+                        self.send_json(200, cached)
+                        return
                     if not database.execute("SELECT 1 FROM products WHERE id = ? AND tenant_id = ?", (product_id, current_tenant)).fetchone() or not database.execute("SELECT 1 FROM stores WHERE id = ? AND tenant_id = ?", (store_id, current_tenant)).fetchone():
                         raise ValueError("El producto o local no pertenece a la empresa")
                     database.execute("INSERT OR IGNORE INTO inventory (tenant_id, product_id, store_id) VALUES (?, ?, ?)", (current_tenant, product_id, store_id))
-                    row = database.execute("SELECT quantity FROM inventory WHERE tenant_id = ? AND product_id = ? AND store_id = ?", (current_tenant, product_id, store_id)).fetchone()
-                    next_quantity = float(row[0]) + signed_quantity
+                    row = database.execute("SELECT quantity FROM inventory WHERE tenant_id = ? AND product_id = ? AND store_id = ? FOR UPDATE", (current_tenant, product_id, store_id)).fetchone()
+                    current_quantity = float(row[0])
+                    if movement_type == "AJUSTE":
+                        signed_quantity = target_quantity - current_quantity
+                    next_quantity = current_quantity + signed_quantity
                     if next_quantity < 0:
                         raise ValueError("El stock no puede quedar negativo")
                     database.execute("UPDATE inventory SET quantity = ?, updated_at = CURRENT_TIMESTAMP WHERE tenant_id = ? AND product_id = ? AND store_id = ?", (next_quantity, current_tenant, product_id, store_id))
                     database.execute("INSERT INTO inventory_movements (id, tenant_id, product_id, store_id, movement_type, quantity, reference_id, note, user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", (movement_id, current_tenant, product_id, store_id, movement_type, signed_quantity, payload.get("referenceId"), str(payload.get("note", "")), authenticated_user(self)["id"]))
-                self.send_json(201, {"ok": True, "id": movement_id, "quantity": next_quantity})
+                    response = {"ok": True, "id": movement_id, "quantity": next_quantity}
+                    complete_idempotency(database, self, payload, path, 201, response)
+                self.send_json(201, response)
                 return
             if path == "/api/catalog/sale-item":
                 sale_id = str(payload.get("saleId", "")).strip()
@@ -3985,7 +4030,7 @@ class AppHandler(SimpleHTTPRequestHandler):
                 if not sale_id or not product_id or quantity <= 0 or quantity != int(quantity) or price < 0 or not __import__("math").isfinite(quantity + price):
                     raise ValueError("Venta, producto, cantidad y valor son obligatorios y validos")
                 quantity = int(quantity)
-                if _postgres_enabled():
+                if uses_shared_operational_schema(self, payload):
                     with connection() as database:
                         _, cached = claim_idempotency(database, self, payload, path)
                         if cached is not None:
@@ -4031,7 +4076,7 @@ class AppHandler(SimpleHTTPRequestHandler):
                 self.send_json(201, response)
                 return
             if path == "/api/catalog/sale":
-                if _postgres_enabled():
+                if uses_shared_operational_schema(self, payload):
                     with connection() as database:
                         result = _create_shared_sale(database, payload, authenticated_user(self), self)
                     self.send_json(201, {"ok": True, **result})
@@ -4285,9 +4330,9 @@ class AppHandler(SimpleHTTPRequestHandler):
                     store_id = str(payload.get("storeId", "")).strip()
                     quantity = float(payload.get("quantity", 0) or 0)
                     processed_statuses = {"PROCESADA", "RECIBIDA", "APROBADA"}
-                    if collection in {"returns", "supplierReturns", "damaged-stock"} and status in processed_statuses and previous_status not in processed_statuses and _postgres_enabled():
+                    if collection in {"returns", "supplierReturns", "damaged-stock"} and status in processed_statuses and previous_status not in processed_statuses and uses_shared_operational_schema(self, payload):
                         _apply_shared_domain_inventory_effect(database, collection, payload, identifier, authenticated_user(self))
-                    if collection in {"returns", "supplierReturns", "damaged-stock"} and status in processed_statuses and previous_status not in processed_statuses and not _postgres_enabled():
+                    if collection in {"returns", "supplierReturns", "damaged-stock"} and status in processed_statuses and previous_status not in processed_statuses and not uses_shared_operational_schema(self, payload):
                         if not product_id or not store_id or quantity <= 0 or not __import__("math").isfinite(quantity):
                             raise ValueError("La operacion requiere producto, local y cantidad valida")
                         if not database.execute("SELECT 1 FROM products WHERE id = ? AND tenant_id = ?", (product_id, current_tenant)).fetchone() or not database.execute("SELECT 1 FROM stores WHERE id = ? AND tenant_id = ?", (store_id, current_tenant)).fetchone():
@@ -4467,7 +4512,7 @@ class AppHandler(SimpleHTTPRequestHandler):
                 self.send_json(403, {"error": "Solo el administrador puede eliminar locales"})
                 return
             identifier = unquote(path.removeprefix("/api/catalog/store/")).strip()
-            if _postgres_enabled():
+            if uses_shared_operational_schema(self):
                 with connection() as database:
                     existing = database.execute("SELECT id, nombre FROM locales WHERE nombre = %s", (identifier,)).fetchone()
                     if not existing:
@@ -4504,7 +4549,7 @@ class AppHandler(SimpleHTTPRequestHandler):
                 self.send_json(403, {"error": "Solo el administrador puede anular ventas"})
                 return
             identifier = unquote(path.removeprefix("/api/catalog/sale/")).strip()
-            if _postgres_enabled():
+            if uses_shared_operational_schema(self):
                 with connection() as database:
                     sale = database.execute("SELECT id, local_origen, factura, estado FROM movimientos WHERE id = %s AND UPPER(COALESCE(tipo, '')) = 'VENTA' FOR UPDATE", (identifier,)).fetchone()
                     if not sale:
@@ -4793,7 +4838,7 @@ class AppHandler(SimpleHTTPRequestHandler):
             if not identifier:
                 self.send_json(400, {"error": "Producto invalido"})
                 return
-            if _postgres_enabled():
+            if uses_shared_operational_schema(self):
                 with connection() as database:
                     existing = database.execute("SELECT codigo FROM productos WHERE codigo = %s", (identifier,)).fetchone()
                     if not existing:
@@ -4830,7 +4875,7 @@ class AppHandler(SimpleHTTPRequestHandler):
         if collection not in DOMAIN_COLLECTIONS or not identifier:
             self.send_json(400, {"error": "Coleccion o id invalido"})
             return
-        if _postgres_enabled() and collection in {"credits", "apartados"}:
+        if uses_shared_operational_schema(self) and collection in {"credits", "apartados"}:
             table = "creditos" if collection == "credits" else "apartados"
             payments_table = "abonos_creditos" if collection == "credits" else "abonos_apartados"
             foreign_key = "credito_id" if collection == "credits" else "apartado_id"
@@ -4894,7 +4939,7 @@ class AppHandler(SimpleHTTPRequestHandler):
                     with connection() as database:
                         for item in items:
                             failed_identifier = item["id"]
-                            if _postgres_enabled():
+                            if uses_shared_operational_schema(self, payload):
                                 existing = database.execute(
                                     "SELECT BTRIM(codigo) AS id, nombre_producto AS name, COALESCE(precio_venta, 0) AS sale_price, COALESCE(precio_minimo, 0) AS minimum_price FROM productos WHERE BTRIM(codigo) = BTRIM(%s) FOR UPDATE",
                                     (item["id"],),
@@ -4915,7 +4960,7 @@ class AppHandler(SimpleHTTPRequestHandler):
                                     "reason": "El precio resultante es inferior al precio mínimo configurado.",
                                 })
                                 continue
-                            if _postgres_enabled():
+                            if uses_shared_operational_schema(self, payload):
                                 changed = database.execute(
                                     "UPDATE productos SET precio_venta = %s WHERE BTRIM(codigo) = BTRIM(%s)",
                                     (item["salePrice"], item["id"]),
@@ -4970,7 +5015,7 @@ class AppHandler(SimpleHTTPRequestHandler):
                 sale_price, minimum_price = _rentabilidad_product_prices(payload)
                 current_user = authenticated_user(self)
                 current_tenant = tenant_id(self, payload)
-                if _postgres_enabled():
+                if uses_shared_operational_schema(self, payload):
                     with connection() as database:
                         existing = database.execute(
                             "SELECT BTRIM(codigo) AS id, nombre_producto AS name, COALESCE(precio_venta, 0) AS sale_price, COALESCE(precio_minimo, 0) AS minimum_price FROM productos WHERE BTRIM(codigo) = BTRIM(%s) FOR UPDATE",
@@ -5400,7 +5445,7 @@ class AppHandler(SimpleHTTPRequestHandler):
                 items = payload.get("items", [])
                 if isinstance(items, str):
                     items = json.loads(items)
-                if _postgres_enabled():
+                if uses_shared_operational_schema(self, payload):
                     with connection() as database:
                         sale = database.execute("SELECT id, local_origen, cliente FROM movimientos WHERE id = %s AND UPPER(COALESCE(tipo, '')) = 'VENTA' FOR UPDATE", (identifier,)).fetchone()
                         if not sale:
@@ -5472,7 +5517,7 @@ class AppHandler(SimpleHTTPRequestHandler):
                     database.execute("INSERT INTO audit_events (user_id, action, collection, record_id, data_json) VALUES (?, ?, ?, ?, ?)", (current_user["id"], "UPDATE", "sales", identifier, json.dumps(payload, ensure_ascii=False)))
                 self.send_json(200, {"ok": True, "id": identifier})
                 return
-            if _postgres_enabled() and path in {"/api/catalog/product", "/api/catalog/store"}:
+            if uses_shared_operational_schema(self, payload) and path in {"/api/catalog/product", "/api/catalog/store"}:
                 identifier = record_id(payload)
                 with connection() as database:
                     if path.endswith("/product"):

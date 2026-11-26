@@ -1,4 +1,4 @@
-const CACHE = 'famimuebles-erp-v20261125-rentabilidad-v12';
+const CACHE = 'famimuebles-erp-v20261126-static-host-resolution-v1';
 const CORE = ['./', './index.html?v=public-summary-20260926', './css/main.css?v=20261104-talonario-scroll-v1', './css/attendance.css?v=3', './css/parity-report-fixes.css?v=20261019-sistecredito-ledger-v1', './js/app-v3.js?v=20261106-transactional-talonario-sale-v1', './js/modules/usuarios.js?v=24', './js/modules/descansos.js?v=20261015-dom-guard-v1', './js/modules/ventas.js?v=25', './js/modules/compras.js?v=20261019-preserve-supplier-history-v1', './js/modules/paridad.js?v=4', './js/modules/talonarios.js?v=28', './js/modules/gasolina.js?v=22', './js/modules/operaciones.js?v=3', './js/components/tables.js?v=1', './js/modules/dashboard-v3.js?v=27', './js/modules/facturacion.js?v=23', './js/services/product-service.js?v=18', './js/data/storage.js?v=29', './js/data/store.js?v=18', './js/router.js?v=18', './js/modules/proveedores.js?v=20261019-preserve-supplier-history-v1', './js/services/purchase-service.js?v=18', './js/services/accounts-payable-service.js?v=20261019-preserve-supplier-history-v1', './js/modules/cuentas-por-pagar.js?v=20261019-preserve-supplier-history-v1', './js/modules/accounts-payable-detail.js?v=20261019-preserve-supplier-history-v1', './js/data/demo-data.js?v=18', './js/modules/cartera.js?v=25', './js/modules/creditos.js?v=20261015-finance-identifiers-v1', './js/modules/apartados.js?v=20261015-finance-identifiers-v1', './js/utils/ids.js', './js/services/api-client.js?v=20261015-large-state-timeout-v1', './js/config.js?v=20261105-public-api-fallback-v1', './manifest.json', './offline.html', './Logo Famimuebles.png', './assets/icons/icon-192.png', './assets/icons/apple-touch-icon.png'];
 CORE.push('./js/app-v3.js?v=95', './js/components/sidebar.js?v=24', './js/services/accounts-payable-service.js?v=17', './js/modules/talonarios.js?v=15', './js/router.js?v=20', './js/modules/ventas.js?v=26');
 CORE.push('./js/app-v3.js?v=96', './js/modules/talonarios.js?v=16', './js/modules/talonarios.js?v=17');
@@ -25,6 +25,20 @@ CORE.push('./js/app-v3.js?v=20261009-talonario-next-range-v1', './js/modules/tal
 CORE.push('./css/attendance.css?v=3', './js/app-v3.js?v=20261015-finance-identifiers-v1', './js/modules/descansos.js?v=20261015-dom-guard-v1');
 CORE.unshift('./js/app-v3.js?v=20261020-sistecredito-hydrate-before-render-v1', './js/modules/dashboard-v3.js?v=20261019-sistecredito-card-v1', './js/modules/paridad.js?v=20261019-credinet-reconciliation-v1', './js/modules/facturacion.js?v=20261019-sistecredito-server-guard-v1', './js/modules/sistecredito-ledger.js?v=20261019-credinet-reconciliation-v1');
 CORE.push('./css/parity-report-fixes.css?v=20261019-sistecredito-ledger-v1', './js/modules/dashboard-v3.js?v=20261019-sistecredito-card-v1');
+CORE.push(
+  './index.html?v=20261126-critical-round-2',
+  './js/app-v3.js?v=20261126-critical-round-2',
+  './js/config.js?v=20261126-static-host-resolution-v1',
+  './js/data/storage.js?v=33',
+  './js/data/store.js?v=21',
+  './js/components/tables.js?v=2',
+  './js/modules/facturacion.js?v=20261126-critical-round-1',
+  './js/modules/productos.js?v=20261126-critical-round-1',
+  './js/modules/product-detail.js?v=15',
+  './js/services/product-service.js?v=23',
+  './js/utils/html.js',
+  './js/utils/pending-operations.js?v=1'
+);
 CORE.unshift('./js/app-v3.js?v=20261020-purchase-entry-sequence-v1', './js/services/purchase-service.js?v=20261020-purchase-entry-sequence-v2', './js/modules/compras.js?v=20261020-purchase-entry-sequence-v1');
 CORE.unshift('./js/app-v3.js?v=20261028-entry-payable-edit-v1');
 CORE.push('./js/app-v3.js?v=20261005195117','./js/modules/dashboard-v3.js?v=20261005195117');
@@ -44,6 +58,7 @@ CORE.push('./index.html?v=20261125-rentabilidad-v9', './js/app-v3.js?v=20261125-
 CORE.push('./index.html?v=20261125-rentabilidad-v10', './js/app-v3.js?v=20261125-rentabilidad-v10', './css/main.css?v=20261125-rentabilidad-v7', './js/modules/rentabilidad.js?v=10', './js/services/api-client.js?v=20261125-rentabilidad-bulk-v1', './js/data/storage.js?v=32');
 CORE.push('./index.html?v=20261125-rentabilidad-v11', './js/app-v3.js?v=20261125-rentabilidad-v11', './css/main.css?v=20261125-rentabilidad-v8', './js/modules/rentabilidad.js?v=11', './js/services/api-client.js?v=20261125-rentabilidad-bulk-v1', './js/data/storage.js?v=32');
 CORE.push('./index.html?v=20261125-rentabilidad-v12', './js/app-v3.js?v=20261125-rentabilidad-v12', './js/modules/rentabilidad.js?v=12', './js/utils/rentabilidad-calculations.js?v=1', './js/services/pricing-service.js?v=1', './js/services/api-client.js?v=20261125-rentabilidad-bulk-v1', './js/data/storage.js?v=32');
+CORE.unshift('./index.html?v=20261126-critical-round-2','./js/app-v3.js?v=20261126-critical-round-2','./js/components/tables.js?v=2','./js/modules/facturacion.js?v=20261126-critical-round-1','./js/modules/productos.js?v=20261126-critical-round-1','./js/modules/product-detail.js?v=15','./js/data/storage.js?v=33','./js/data/store.js?v=21','./js/utils/html.js','./js/utils/pending-operations.js?v=1');
 const UNIQUE_CORE = [...new Map(CORE.map(path => [new URL(path, self.location.href).pathname, path])).values()];
 self.addEventListener('install', event => {
   event.waitUntil(
@@ -98,7 +113,7 @@ self.addEventListener('fetch', event => {
             if (response.ok) caches.open(CACHE).then(cache => cache.put(event.request, response.clone())).catch(() => {});
             return response;
           })
-          .catch(() => caches.match(event.request).then(cached => cached || caches.match('./offline.html')))
+          .catch(() => caches.match(event.request, { ignoreSearch: true }).then(cached => cached || caches.match('./offline.html')))
       );
       return;
     }
