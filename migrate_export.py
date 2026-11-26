@@ -169,7 +169,10 @@ def build_state(data: dict[str, list[dict[str, str]]]) -> dict[str, Any]:
             stated_price = historical_prices_by_code.get(key(code), 0)
         fallback_price = max(cost * 1.5, 100000.0) if cost > 0 else 700000.0
         sale_price = stated_price if stated_price > 0 else fallback_price
-        product = {"id": product_id, "sourceCode": code, "code": code, "reference": code, "name": row_value(row, "nombre_producto", "nombre") or f"Producto {code}", "category": "General", "categoryName": "General", "cost": cost, "price": sale_price, "salePrice": sale_price, "minimumPrice": max(sale_price * 0.8, cost), "minimum": 0, "minStock": 0, "maximum": 0, "maxStock": 0, "active": key(row_value(row, "activo")) not in {"FALSE", "NO", "0"}, "activo": key(row_value(row, "activo")) not in {"FALSE", "NO", "0"}, "estado": "Activo"}
+        minimum_price = row_value(row, "precio_minimo", "minimum_price", "minimumPrice")
+        if not minimum_price:
+            minimum_price = row_value(catalog_row, "precio_minimo", "minimum_price", "minimumPrice")
+        product = {"id": product_id, "sourceCode": code, "code": code, "reference": code, "name": row_value(row, "nombre_producto", "nombre") or f"Producto {code}", "category": "General", "categoryName": "General", "cost": cost, "price": sale_price, "salePrice": sale_price, "minimumPrice": number(minimum_price), "minimum": 0, "minStock": 0, "maximum": 0, "maxStock": 0, "active": key(row_value(row, "activo")) not in {"FALSE", "NO", "0"}, "activo": key(row_value(row, "activo")) not in {"FALSE", "NO", "0"}, "estado": "Activo"}
         products.append(product)
         product_by_code[key(code)] = product_id
     inventory: list[dict[str, Any]] = []

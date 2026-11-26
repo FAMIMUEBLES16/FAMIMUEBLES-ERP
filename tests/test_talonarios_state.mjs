@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { availableCentralTalonarios, configuredTalonarioOwnerLabel, configuredTalonarioOwnerMatches, currentTalonarioNumber, deduplicateTalonarioHistory, missingTalonarioNumbers, missingTalonarioNumbersForLocal, nextAvailableCentralTalonario, normalizeActiveTalonarios, renderTalonarios, talonarioModal, talonarioSalesDocuments } from '../js/modules/talonarios.js';
+import { availableCentralTalonarios, configuredTalonarioOwnerLabel, configuredTalonarioOwnerMatches, currentTalonarioNumber, deduplicateTalonarioHistory, justifiedTalonarioDocumentsForLocal, missingTalonarioNumbers, missingTalonarioNumbersForLocal, nextAvailableCentralTalonario, normalizeActiveTalonarios, renderTalonarios, talonarioModal, talonarioSalesDocuments } from '../js/modules/talonarios.js';
 
 assert.equal(configuredTalonarioOwnerLabel('REMISION', 15801, 15850), 'INV CRR 5 3 26');
 assert.equal(configuredTalonarioOwnerMatches('REMISION', 15801, 15850, ['INV CRR 5 3 26']), true);
@@ -130,6 +130,21 @@ assert.deepEqual(
   [],
   'an annulled invoice should no longer be treated as an unexplained gap'
 );
+const additionalJustifications = [
+  annulled16009,
+  { id: 'JUST-16010', talonarioId: crr5556Talonario.id, number: 16010, reason: 'DANADA', notes: 'Papel roto', status: 'JUSTIFICADA' },
+  { id: 'JUST-16011', talonarioId: crr5556Talonario.id, number: 16011, reason: 'OTRO', notes: 'Observación adicional', status: 'JUSTIFICADA' },
+  { id: 'JUST-PENDING', talonarioId: crr5556Talonario.id, number: 16012, reason: 'PERDIDA', status: 'PENDIENTE' },
+];
+assert.deepEqual(
+  justifiedTalonarioDocumentsForLocal(crr5556Talonario, [crr5556Talonario], additionalJustifications).map(({ number, reason, notes }) => ({ number, reason, notes })),
+  [
+    { number: 16009, reason: 'ANULADA', notes: 'Prueba de anulacion' },
+    { number: 16010, reason: 'DANADA', notes: 'Papel roto' },
+    { number: 16011, reason: 'OTRO', notes: 'Observación adicional' },
+  ],
+  'the justification list should include every saved reason with its observation and exclude pending entries'
+);
 const historicalTalonario = {
   id: 'HISTORICAL-2001',
   type: 'REMISION',
@@ -157,11 +172,10 @@ assert.deepEqual(
   [2002, 2005, 2007, 2008],
   'all historical gaps should be listed while justified numbers are excluded'
 );
-assert.match(
-  renderTalonarios({ talonarios: [crr5556Talonario], sales: crr5556Sales, talonarioJustifications: [annulled16009] }),
-  /16\.?009\s*·\s*Anulada/,
-  'the talonario summary should keep the annulled invoice visible with its number and status after it is justified'
-);
+const justifiedSummary = renderTalonarios({ talonarios: [crr5556Talonario], sales: crr5556Sales, talonarioJustifications: [annulled16009] });
+assert.match(justifiedSummary, /<th>Justificación<\/th>/, 'the summary column should be named Justificación');
+assert.match(justifiedSummary, /data-action="view-talonario-justifications"[^>]*>Justificación<\/button>/, 'the summary should open a justification list instead of showing annulled badges');
+assert.doesNotMatch(justifiedSummary, /16\.?009\s*·\s*Anulada/, 'the summary should not display individual annulled numbers inline');
 const receiptTalonario = {
   id: 'RECEIPT-ACTIVE',
   type: 'RECIBO',
