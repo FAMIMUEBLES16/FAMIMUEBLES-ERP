@@ -159,7 +159,7 @@ class CatalogProductPricingTests(unittest.TestCase):
              patch("server.requested_tenant_allowed", return_value=True), \
              patch("server.can_access", return_value=True), \
              patch("server._postgres_enabled", return_value=True), \
-             patch("server.tenant_id", return_value="TENANT-1"), \
+             patch("server.tenant_id", return_value=server.DEFAULT_TENANT), \
              patch("server.connection", return_value=database):
             server.AppHandler.do_PUT(handler)
 
@@ -475,7 +475,7 @@ class CatalogProductPricingTests(unittest.TestCase):
              patch("server.requested_tenant_allowed", return_value=True), \
              patch("server.can_access", return_value=True), \
              patch("server._postgres_enabled", return_value=True), \
-             patch("server.tenant_id", return_value="TENANT-1"), \
+             patch("server.tenant_id", return_value=server.DEFAULT_TENANT), \
              patch("server.connection", return_value=database):
             server.AppHandler.do_PUT(handler)
 

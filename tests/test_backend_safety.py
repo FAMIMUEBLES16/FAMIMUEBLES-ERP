@@ -1293,6 +1293,152 @@ class BackendSafetyTests(unittest.TestCase):
             self.assertFalse(server.can_access(FakeHandler(), "/api/parity/nomina", "GET"))
             self.assertFalse(server.can_access(FakeHandler(), "/api/report-pdf/sales.pdf", "GET"))
 
+    def test_company_state_and_catalog_reads_are_tenant_scoped(self):
+        class FakeResult:
+            def __init__(self, rows=None, row=None):
+                self.rows = rows or []
+                self.row = row
+
+            def __iter__(self):
+                return iter(self.rows)
+
+            def fetchone(self):
+                return self.row
+
+        class FakeDatabase:
+            def __init__(self):
+                self.queries = []
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def execute(self, query, params=()):
+                self.queries.append((query, params))
+                tenant = params[0] if params else ""
+                if "FROM tenant_states WHERE tenant_id = ?" in query:
+                    return FakeResult(row=(
+                        json.dumps({"company": tenant}),
+                        "2026-11-26T00:00:00Z",
+                    ))
+                if "FROM stores WHERE tenant_id = ?" in query:
+                    return FakeResult(rows=[{"id": f"{tenant}-store"}])
+                if "FROM products WHERE tenant_id = ?" in query:
+                    return FakeResult(rows=[{"id": f"{tenant}-product"}])
+                return FakeResult()
+
+        class FakeHandler:
+            def __init__(self, path, tenant):
+                self.path = path
+                self.headers = {"X-Tenant-ID": tenant}
+
+            def send_json(self, status, payload):
+                self.response = (status, payload)
+
+        database = FakeDatabase()
+        for tenant in ("tenant-alpha", "tenant-beta"):
+            fake_user = {"id": f"{tenant}-admin", "role": "ADMINISTRADOR", "tenant_id": tenant}
+            with self.subTest(tenant=tenant), \
+                 patch("server.authenticated_user", return_value=fake_user), \
+                 patch("server.requested_tenant_allowed", return_value=True), \
+                 patch("server.can_access", return_value=True), \
+                 patch("server.tenant_id", side_effect=lambda handler, _payload=None: handler.headers["X-Tenant-ID"]), \
+                 patch("server._postgres_enabled", return_value=True), \
+                 patch("server.connection", return_value=database), \
+                 patch("server._shared_state", side_effect=AssertionError("non-default tenant used shared state")), \
+                 patch("server._shared_catalog", side_effect=AssertionError("non-default tenant used shared catalog")):
+                state_handler = FakeHandler("/api/state", tenant)
+                server.AppHandler.do_GET(state_handler)
+                self.assertEqual(state_handler.response[1]["state"]["company"], tenant)
+
+                catalog_handler = FakeHandler("/api/catalog", tenant)
+                server.AppHandler.do_GET(catalog_handler)
+                catalog = catalog_handler.response[1]
+                self.assertEqual(catalog["tenantId"], tenant)
+                self.assertEqual(catalog["stores"][0]["id"], f"{tenant}-store")
+                self.assertEqual(catalog["products"][0]["id"], f"{tenant}-product")
+
+        scoped_queries = [
+            (query, params)
+            for query, params in database.queries
+            if "tenant_id = ?" in query
+        ]
+        self.assertTrue(scoped_queries)
+        self.assertEqual(
+            {params[0] for _, params in scoped_queries},
+            {"tenant-alpha", "tenant-beta"},
+        )
+
+    def test_company_cannot_update_another_tenants_product(self):
+        class FakeResult:
+            def __init__(self, row=None, rowcount=0):
+                self.row = row
+                self.rowcount = rowcount
+
+            def fetchone(self):
+                return self.row
+
+        class FakeDatabase:
+            def __init__(self):
+                self.product = {"tenant_id": "tenant-beta", "name": "Beta product"}
+                self.queries = []
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def execute(self, query, params=()):
+                self.queries.append((query, params))
+                if query.startswith("SELECT id, name, sale_price, minimum_price FROM products"):
+                    product_id, tenant = params
+                    if product_id == "product-beta" and tenant == self.product["tenant_id"]:
+                        return FakeResult(row={
+                            "id": product_id,
+                            "name": self.product["name"],
+                            "sale_price": 100,
+                            "minimum_price": 50,
+                        })
+                    return FakeResult()
+                if query.startswith("UPDATE products SET code"):
+                    product_id, tenant = params[-2:]
+                    if product_id == "product-beta" and tenant == self.product["tenant_id"]:
+                        self.product["name"] = params[1]
+                        return FakeResult(rowcount=1)
+                return FakeResult()
+
+        class FakeHandler:
+            path = "/api/catalog/product"
+            headers = {"X-Tenant-ID": "tenant-alpha"}
+
+            def send_json(self, status, payload):
+                self.response = (status, payload)
+
+        database = FakeDatabase()
+        handler = FakeHandler()
+        payload = {
+            "id": "product-beta",
+            "code": "BETA-EDITED",
+            "name": "Changed by alpha",
+            "salePrice": 150,
+        }
+        with patch("server.request_json", return_value=payload), \
+             patch("server.authenticated_user", return_value={"id": "alpha-admin", "role": "ADMINISTRADOR", "tenant_id": "tenant-alpha"}), \
+             patch("server.requested_tenant_allowed", return_value=True), \
+             patch("server.can_access", return_value=True), \
+             patch("server.tenant_id", return_value="tenant-alpha"), \
+             patch("server._postgres_enabled", return_value=True), \
+             patch("server.connection", return_value=database), \
+             patch("server.record_id", side_effect=lambda item: item["id"]):
+            server.AppHandler.do_PUT(handler)
+
+        self.assertEqual(handler.response[0], 404)
+        self.assertEqual(database.product["name"], "Beta product")
+        self.assertEqual(database.queries[0][1], ("product-beta", "tenant-alpha"))
+
     def test_default_tenant_can_access_shared_operational_routes(self):
         class FakeHandler:
             headers = {"X-Tenant-ID": "tenant-default"}
@@ -1389,6 +1535,204 @@ class BackendSafetyTests(unittest.TestCase):
 
                 self.assertEqual(handler.response, (404, {"error": "Entrada no encontrada"}))
                 open_database.assert_not_called()
+
+    def test_tenant_inventory_adjustment_is_idempotent(self):
+        class FakeResult:
+            def __init__(self, row=None):
+                self.row = row
+
+            def fetchone(self):
+                return self.row
+
+        class FakeDatabase:
+            def __init__(self):
+                self.quantity = 3
+                self.idempotency = {}
+                self.movements = []
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def execute(self, query, params=()):
+                if query.startswith("INSERT INTO idempotency_keys"):
+                    _tenant, key, request_hash = params
+                    self.idempotency.setdefault(key, {"hash": request_hash, "response": None})
+                elif query.startswith("SELECT request_hash, response_status, response_json FROM idempotency_keys"):
+                    key = params[1]
+                    entry = self.idempotency.get(key)
+                    return FakeResult((entry["hash"], 201, entry["response"]) if entry else None)
+                elif query.startswith("SELECT 1 FROM products") or query.startswith("SELECT 1 FROM stores"):
+                    return FakeResult((1,))
+                elif query.startswith("SELECT quantity FROM inventory"):
+                    return FakeResult((self.quantity,))
+                elif query.startswith("UPDATE inventory SET quantity"):
+                    self.quantity = params[0]
+                elif query.startswith("INSERT INTO inventory_movements"):
+                    self.movements.append(params)
+                elif query.startswith("UPDATE idempotency_keys SET response_status"):
+                    _status, response, _tenant, key = params
+                    self.idempotency[key]["response"] = response
+                return FakeResult()
+
+        class FakeHandler:
+            path = "/api/catalog/inventory-movement"
+            headers = {"X-Tenant-ID": "tenant-alpha"}
+
+            def __init__(self, lose_response=False):
+                self.lose_response = lose_response
+                self.send_count = 0
+
+            def send_json(self, status, payload):
+                self.send_count += 1
+                if self.lose_response:
+                    raise ConnectionError("simulated lost response")
+                self.response = (status, payload)
+
+        database = FakeDatabase()
+        payload = {
+            "id": "inventory-adjustment-1",
+            "requestId": "inventory-adjustment-1",
+            "tenantId": "tenant-alpha",
+            "productId": "product-alpha",
+            "storeId": "store-alpha",
+            "targetQuantity": 8,
+            "movementType": "AJUSTE",
+            "note": "Conteo",
+        }
+        handlers = []
+        for attempt in range(2):
+            handler = FakeHandler(lose_response=attempt == 0)
+            handlers.append(handler)
+            with patch("server.request_json", return_value=payload), \
+                 patch("server.authenticated_user", return_value={"id": "alpha-admin", "role": "ADMINISTRADOR", "tenant_id": "tenant-alpha"}), \
+                 patch("server.requested_tenant_allowed", return_value=True), \
+                 patch("server.can_access", return_value=True), \
+                 patch("server.tenant_id", return_value="tenant-alpha"), \
+                 patch("server.uses_shared_operational_schema", return_value=False), \
+                 patch("server.enforce_user_store"), \
+                 patch("server.connection", return_value=database):
+                if attempt == 0:
+                    with self.assertRaisesRegex(ConnectionError, "simulated lost response"):
+                        server.AppHandler.do_POST(handler)
+                else:
+                    server.AppHandler.do_POST(handler)
+
+        self.assertEqual(handlers[0].send_count, 2, "the failed response occurs after the idempotent write has completed")
+        self.assertEqual(handlers[1].response, (200, {"ok": True, "id": "inventory-adjustment-1", "quantity": 8}))
+        self.assertEqual(database.quantity, 8)
+        self.assertEqual(len(database.movements), 1)
+
+    def test_shared_sale_and_purchase_retries_use_cached_idempotency_results(self):
+        class FakeDatabase:
+            def __init__(self):
+                self.writes = 0
+
+            def execute(self, *_args, **_kwargs):
+                self.writes += 1
+                raise AssertionError("a cached retry must not perform business writes")
+
+        cases = (
+            (
+                server._create_shared_sale,
+                "/api/catalog/sale",
+                {"id": "VEN-1", "requestId": "sale-request-1"},
+                {"ok": True, "id": "VEN-1"},
+            ),
+            (
+                server._create_shared_purchase_entry,
+                "/api/shared-purchase",
+                {"purchase": {"id": "COM-1"}, "requestId": "purchase-request-1"},
+                {"ok": True, "id": "COM-1", "purchaseId": "COM-1"},
+            ),
+        )
+        for operation, expected_path, payload, cached in cases:
+            with self.subTest(path=expected_path):
+                database = FakeDatabase()
+
+                def return_cached(_database, _handler, _payload, path):
+                    self.assertEqual(path, expected_path)
+                    return "request-key", cached
+
+                with patch("server.claim_idempotency", side_effect=return_cached):
+                    result = operation(database, payload, {"id": "user-1"}, object())
+
+                self.assertEqual(result, cached)
+                self.assertEqual(database.writes, 0)
+
+    def test_tenant_product_creation_retry_does_not_duplicate_product(self):
+        class FakeResult:
+            def __init__(self, row=None):
+                self.row = row
+
+            def fetchone(self):
+                return self.row
+
+        class FakeDatabase:
+            def __init__(self):
+                self.idempotency = {}
+                self.products = {}
+                self.insert_count = 0
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def execute(self, query, params=()):
+                if query.startswith("INSERT INTO idempotency_keys"):
+                    _tenant, key, request_hash = params
+                    self.idempotency.setdefault(key, {"hash": request_hash, "response": None})
+                elif query.startswith("SELECT request_hash, response_status, response_json FROM idempotency_keys"):
+                    entry = self.idempotency.get(params[1])
+                    return FakeResult((entry["hash"], 201, entry["response"]) if entry else None)
+                elif query.startswith("INSERT INTO products"):
+                    self.insert_count += 1
+                    self.products[params[0]] = params[1:]
+                    return FakeResult((params[0],))
+                elif query.startswith("UPDATE idempotency_keys SET response_status"):
+                    _status, response, _tenant, key = params
+                    self.idempotency[key]["response"] = response
+                return FakeResult()
+
+        class FakeHandler:
+            path = "/api/catalog/product"
+            headers = {"X-Tenant-ID": "tenant-alpha", "Idempotency-Key": "product-create-1"}
+
+            def send_json(self, status, payload):
+                self.response = (status, payload)
+
+        database = FakeDatabase()
+        payload = {
+            "id": "product-alpha-1",
+            "tenantId": "tenant-alpha",
+            "requestId": "product-create-1",
+            "code": "ALPHA-1",
+            "name": "Alpha chair",
+            "price": 100,
+            "salePrice": 100,
+            "minimumPrice": 50,
+        }
+        handlers = []
+        for _ in range(2):
+            handler = FakeHandler()
+            handlers.append(handler)
+            with patch("server.request_json", return_value=payload), \
+                 patch("server.authenticated_user", return_value={"id": "alpha-admin", "role": "ADMINISTRADOR", "tenant_id": "tenant-alpha"}), \
+                 patch("server.requested_tenant_allowed", return_value=True), \
+                 patch("server.can_access", return_value=True), \
+                 patch("server.tenant_id", return_value="tenant-alpha"), \
+                 patch("server.uses_shared_operational_schema", return_value=False), \
+                 patch("server.connection", return_value=database):
+                server.AppHandler.do_POST(handler)
+
+        self.assertEqual(handlers[0].response, (201, {"ok": True, "id": "product-alpha-1"}))
+        self.assertEqual(handlers[1].response, (200, {"ok": True, "id": "product-alpha-1"}))
+        self.assertEqual(database.insert_count, 1)
+        self.assertEqual(len(database.products), 1)
 
 
 if __name__ == "__main__":

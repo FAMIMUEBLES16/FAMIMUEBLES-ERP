@@ -6,9 +6,10 @@ const configuredApiBase = String(
 ).trim();
 const hasDeprecatedApiBase = configuredApiBase.includes('artwork-charges-wiley-sort.trycloudflare.com') || configuredApiBase.includes('joy-rendering-whereas-clean.trycloudflare.com') || configuredApiBase.includes('richards-mug-pure-mattress.trycloudflare.com');
 const hostname = globalThis.window?.location?.hostname || '';
+const normalizedHostname = hostname.replace(/^\[|\]$/g, '');
 const protocol = globalThis.window?.location?.protocol || '';
 const isFileOrigin = protocol === 'file:' || hostname === '';
-const isLocalHostname = ['localhost', '127.0.0.1', '::1'].includes(hostname) || isFileOrigin;
+const isLocalHostname = ['localhost', '127.0.0.1', '::1'].includes(normalizedHostname) || isFileOrigin;
 
 let publicApiUrl = '';
 if (!isLocalHostname && !configuredApiBase && hostname.endsWith('.github.io')) {

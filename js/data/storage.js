@@ -1,13 +1,14 @@
 import { createAccountPayable } from '../services/accounts-payable-service.js?v=14';
 import { demoState } from './demo-data.js';
 import { api } from '../services/api-client.js?v=20261125-rentabilidad-bulk-v1';
-import { API_BASE_URL } from '../config.js?v=20261105-public-api-fallback-v1';
+import { API_BASE_URL } from '../config.js?v=20261126-static-host-resolution-v1';
 
 export const TENANT_STORAGE_KEY = 'famimuebles-tenant-id';
 const REMOTE_DOMAIN_COLLECTIONS = ['customers','suppliers','purchases','credits','expenses','accountsPayable','supplierPayments','customerAccounts','returns','supplierReturns','stockCounts','reservations','warranties','damagedStock','cashSessions','cashMovements','bankAccounts','quotes','orders','deliveries','creditNotes','transfers','talonarios','talonarioJustifications','workSchedules','staffAbsences','sistecreditoAdjustments','sistecreditoSaleAmounts'];
+let saveQueue = Promise.resolve();
 export function activeTenantId() { return localStorage.getItem(TENANT_STORAGE_KEY) || 'tenant-default'; }
 export function authHeaders() { const token = localStorage.getItem('famimuebles-auth-token'); return token ? { Authorization: `Bearer ${token}` } : {}; }
-export function isStaticDeployment() { return !API_BASE_URL && window.location.hostname.endsWith('.github.io'); }
+export function isStaticDeployment() { return !API_BASE_URL; }
 
 function createEmptyState() {
   return {
@@ -114,15 +115,36 @@ export function loadState() {
     return normalizeState(structuredClone(demoState));
   }
 }
-export function saveState(state) {
-  if (!state || typeof state !== 'object') return Promise.resolve(false);
-  if (isStaticDeployment()) {
-    localStorage.setItem('famimuebles-static-state', JSON.stringify(state));
-    return Promise.resolve(true);
+async function persistState(snapshot, tenantId, staticDeployment) {
+  if (staticDeployment) {
+    localStorage.setItem('famimuebles-static-state', JSON.stringify(snapshot));
+    return true;
   }
-  const snapshot = { ...state };
-  REMOTE_DOMAIN_COLLECTIONS.forEach(collection => delete snapshot[collection]);
-  return api.post('/api/state', { state: snapshot, tenantId: activeTenantId() }, { headers: { 'X-Tenant-ID': activeTenantId() } }).then(() => true);
+  const remoteState = { ...snapshot };
+  REMOTE_DOMAIN_COLLECTIONS.forEach(collection => delete remoteState[collection]);
+  const response = await api.post('/api/state', { state: remoteState, tenantId }, { headers: { 'X-Tenant-ID': tenantId } });
+  if (response?.ok !== true) throw new Error('El servidor no confirmo el guardado del estado.');
+  return true;
+}
+
+export function saveState(state) {
+  if (!state || typeof state !== 'object' || Array.isArray(state)) {
+    return Promise.reject(new TypeError('El estado que se va a guardar debe ser un objeto.'));
+  }
+  let snapshot;
+  try {
+    snapshot = structuredClone(state);
+  } catch (error) {
+    return Promise.reject(error);
+  }
+  const tenantId = activeTenantId();
+  const staticDeployment = isStaticDeployment();
+  const request = saveQueue.then(
+    () => persistState(snapshot, tenantId, staticDeployment),
+    () => persistState(snapshot, tenantId, staticDeployment),
+  );
+  saveQueue = request;
+  return request;
 }
 function mergeCatalogProducts(currentProducts, catalogProducts) {
   const previousById = new Map((Array.isArray(currentProducts) ? currentProducts : []).map(product => [String(product.id), product]));
@@ -140,68 +162,99 @@ function mergeCatalogProducts(currentProducts, catalogProducts) {
     };
   });
 }
-export async function hydrateState(bootstrap = false) {
+function hydrationError(module, error) {
+  const wrapped = new Error(`No se pudo cargar ${module}: ${error?.message || 'respuesta del servidor no valida.'}`);
+  wrapped.name = 'HydrationError';
+  wrapped.hydrationModule = module;
+  wrapped.code = error?.code || 'HYDRATION_ERROR';
+  wrapped.cause = error;
+  return wrapped;
+}
+
+export async function hydrateState(bootstrap = false, throwOnError = false) {
   if (!API_BASE_URL) return null;
   try {
     const endpoint = bootstrap ? '/api/state?bootstrap=1' : '/api/state';
     const payload = await api.get(endpoint, { headers: { 'X-Tenant-ID': activeTenantId() }, cache: 'no-store' });
-    if (!payload?.state || typeof payload.state !== 'object') return null;
-    const remoteState = { ...createEmptyState(), ...payload.state, demoMode: false };
-    Object.keys(createEmptyState()).forEach(collection => {
-      if (collection !== 'demoMode' && !Array.isArray(remoteState[collection])) remoteState[collection] = [];
+    if (!payload?.state || typeof payload.state !== 'object' || Array.isArray(payload.state)) {
+      throw new Error('El servidor devolvio un estado vacio o con formato invalido.');
+    }
+    const emptyState = createEmptyState();
+    Object.keys(emptyState).forEach(collection => {
+      if (collection !== 'demoMode' && Object.hasOwn(payload.state, collection) && !Array.isArray(payload.state[collection])) {
+        throw new Error(`La coleccion "${collection}" tiene un formato invalido.`);
+      }
     });
+    const remoteState = { ...emptyState, ...payload.state, demoMode: false };
     remoteState.demoMode = false;
     return remoteState;
-  } catch (error) {
-    if (error.status === 401 || error.status === 403) {
+  } catch (cause) {
+    let error = hydrationError('estado principal', cause);
+    if (cause.status === 401 || cause.status === 403) {
       localStorage.removeItem('famimuebles-auth-token');
       localStorage.removeItem('famimuebles-user');
       location.reload();
-      return null;
+      error = hydrationError('sesion', cause);
     }
+    if (throwOnError) throw error;
+    console.error('[storage] Error de hidratacion de estado principal:', error);
     return null;
   }
 }
 
 export async function hydrateStateWithRetry(attempts = 3, bootstrap = false) {
-  let lastResult = null;
+  let lastError = null;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
-    lastResult = await hydrateState(bootstrap);
-    if (lastResult) return lastResult;
+    try {
+      const state = await hydrateState(bootstrap, true);
+      if (state) return state;
+      lastError = hydrationError('estado principal', new Error('No se recibio un estado valido.'));
+    } catch (error) {
+      lastError = error;
+      console.warn(`[storage] Fallo de hidratacion ${attempt + 1}/${attempts}:`, error);
+    }
     if (attempt < attempts - 1) await new Promise(resolve => setTimeout(resolve, 800 * (attempt + 1)));
   }
-  return lastResult;
+  throw lastError || hydrationError('estado principal', new Error('No se recibio un estado valido.'));
 }
+
 export async function hydrateCatalog(state, useStateCatalog = false, throwOnError = false) {
   if (!API_BASE_URL) return state;
   if (useStateCatalog) {
-    const catalog = { products: state.products, stores: state.stores, sales: state.sales, inventory: state.inventoryByStore || state.inventory };
-    if (!Array.isArray(catalog.products) || !Array.isArray(catalog.stores)) {
-      if (throwOnError) throw new Error('El servidor devolvio un catalogo incompleto.');
+    try {
+      const catalog = { products: state.products, stores: state.stores, sales: state.sales, inventory: state.inventoryByStore || state.inventory };
+      if (!Array.isArray(catalog.products) || !Array.isArray(catalog.stores) || !Array.isArray(catalog.sales) || !Array.isArray(catalog.inventory)) {
+        throw new Error('El servidor devolvio un catalogo incompleto o con colecciones invalidas.');
+      }
+      state.products = mergeCatalogProducts(state.products, catalog.products);
+      state.stores = catalog.stores;
+      state.sales = catalog.sales;
+      state.inventoryByStore = catalog.inventory;
+      state.inventory = state.inventoryByStore;
+      return state;
+    } catch (cause) {
+      const error = hydrationError('catalogo', cause);
+      if (throwOnError) throw error;
+      console.error('[storage] Error de hidratacion de catalogo:', error);
       return state;
     }
-    state.products = mergeCatalogProducts(state.products, catalog.products);
-    state.stores = catalog.stores;
-    if (Array.isArray(catalog.sales)) state.sales = catalog.sales;
-    state.inventoryByStore = catalog.inventory || [];
-    state.inventory = state.inventoryByStore;
-    return state;
   }
   try {
     const catalog = await api.get('/api/catalog', { headers: { 'X-Tenant-ID': activeTenantId() }, cache: 'no-store', timeout: 5000 });
-    if (!Array.isArray(catalog.products) || !Array.isArray(catalog.stores)) {
-      if (throwOnError) throw new Error('El servidor devolvio un catalogo incompleto.');
-      return state;
+    if (!Array.isArray(catalog.products) || !Array.isArray(catalog.stores) || !Array.isArray(catalog.sales) || !Array.isArray(catalog.inventory)) {
+      throw new Error('El servidor devolvio un catalogo incompleto o con colecciones invalidas.');
     }
     state.products = mergeCatalogProducts(state.products, catalog.products);
     state.stores = catalog.stores;
-    if (Array.isArray(catalog.sales)) state.sales = catalog.sales;
-    state.inventoryByStore = catalog.inventory || [];
+    state.sales = catalog.sales;
+    state.inventoryByStore = catalog.inventory;
     state.inventory = state.inventoryByStore;
     return state;
-  } catch (error) {
+  } catch (cause) {
+    const error = hydrationError('catalogo', cause);
     if (throwOnError) throw error;
+    console.error('[storage] Error de hidratacion de catalogo:', error);
     return state;
   }
 }
-export function resetState() { const state = createEmptyState(); saveState(state); return state; }
+export async function resetState() { const state = createEmptyState(); await saveState(state); return state; }

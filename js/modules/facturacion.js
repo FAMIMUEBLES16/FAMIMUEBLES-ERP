@@ -1,13 +1,47 @@
-import { money, page } from '../components/tables.js';
-import { averageSalePrices } from '../utils/pricing.js';
+import { money, page } from '../components/tables.js?v=2';
+import { escapeHtml } from '../utils/html.js';
 
 export const paymentMethods = ['Efectivo', 'Transferencia', 'Tarjeta', 'Sistecrédito', 'Credito', 'Apartado', 'Mixto'];
 export function cartTotal(cart, transport = 0) { return cart.reduce((sum, item) => sum + (item.priceVenta ?? item.price) * item.quantity, 0) + Number(transport || 0); }
 export function stockStatus(product) { if (product.stock <= 0) return 'Agotado'; if (product.stock === 1) return 'Bajo'; if (product.stock === 2) return 'Poco'; return 'Bien'; }
-export function customerResults(customers, selectedId) { return customers.map(customer => '<button type="button" class="customer-result ' + (customer.id === selectedId ? 'selected' : '') + '" data-customer-id="' + customer.id + '"><span class="customer-avatar">' + customer.name.split(' ').map(name => name[0]).slice(0,2).join('') + '</span><span><strong>' + customer.name + '</strong><small>' + customer.document + ' · ' + customer.phone + '</small></span><b>' + (customer.balance > 0 ? money(customer.balance) : 'Sin saldo') + '</b></button>').join('') || '<p class="empty-state">No se encontraron clientes.</p>'; }
-export function productResults(products, storeId, state, query = '', onlyAvailable = true) { const term=String(query).trim().toLocaleLowerCase(); const selectedInventory = Array.isArray(state?.inventoryByStore) ? state.inventoryByStore.filter(item => String(item.storeId) === String(storeId)) : []; const stockByProduct = new Map(selectedInventory.map(item => [String(item.productId), Number(item.quantity || 0)])); const averagePrices=averageSalePrices(state||{}); const frequentIds = Array.isArray(state?.frequentProductIds) ? state.frequentProductIds : []; const fallbackProducts = products.filter(product => String(product.active ?? product.activo ?? true) !== 'false'); const candidates = term ? fallbackProducts.filter(product => [product.name, product.code, product.barcode, product.reference, product.category, product.brand].some(value => String(value || '').toLocaleLowerCase().includes(term))) : (frequentIds.length ? fallbackProducts.filter(product => frequentIds.includes(product.id)) : fallbackProducts); const visible = candidates.filter(product => !onlyAvailable || Number(stockByProduct.get(String(product.id)) || 0) > 0).slice(0, 8); return visible.map(product => { const row = selectedInventory.find(item => String(item.productId) === String(product.id)); const stock = Number(row?.quantity ?? stockByProduct.get(String(product.id)) ?? 0); const price=averagePrices.get(product.id)??Number(product.price||0); return '<article class="product-result"><span class="product-art">' + (product.name ? product.name[0] : 'P') + '</span><span class="product-info"><strong>' + product.name + '</strong><small>' + product.code + ' · ' + (product.reference || product.code) + ' · ' + product.category + '</small></span><span class="product-price"><strong>' + money(price) + '</strong><small>' + (row ? stockStatus({...product, stock}) : 'Sin inventario') + ' · ' + stock + ' und.</small></span><button class="add-product-button" data-product-id="' + product.id + '" ' + (stock === 0 ? 'disabled' : '') + '>＋</button></article>'; }).join('') || '<p class="empty-state">' + (term ? 'No se encontraron productos disponibles.' : 'No hay productos disponibles en este local.') + '</p>'; }
-export function cartMarkup(cart) { if (!cart.length) return '<div class="empty-state">Selecciona un producto para comenzar la factura.</div>'; return cart.map(item => { const listPrice = Number(item.priceLista ?? item.price); const salePrice = Number(item.priceVenta ?? item.price); const discount = Math.max(0, listPrice - salePrice) * Number(item.quantity || 0); return '<div class="invoice-line"><div class="line-product"><span class="product-art small-art">' + item.name[0] + '</span><span><strong>' + item.name + '</strong><small>' + (item.reference || item.code) + ' · Lista ' + money(listPrice) + '</small></span></div><div class="quantity-control"><button data-decrease="' + item.id + '">−</button><input type="number" min="1" max="' + item.stock + '" value="' + item.quantity + '" data-quantity="' + item.id + '"><button data-increase="' + item.id + '">＋</button></div><label class="price-edit"><span>Venta</span><input type="number" min="0" max="' + listPrice + '" value="' + salePrice + '" data-price="' + item.id + '"></label><span class="line-discount">Descuento: ' + money(discount) + '</span><strong>' + money(salePrice * item.quantity) + '</strong><button class="remove-line" data-remove="' + item.id + '">×</button></div>'; }).join(''); }
-function paymentMarkup(payment, enableMixedPayment) { return '<div class="payment-options">' + paymentMethods.filter(method => method !== 'Mixto' || enableMixedPayment).map(method => { const value = method === 'Credito' ? 'Crédito interno FAMIMUEBLES' : method; return '<button type="button" class="payment-option ' + (payment === value || payment === method ? 'selected' : '') + '" data-payment="' + value + '">' + method + '</button>'; }).join('') + '</div>'; }
+export function customerResults(customers, selectedId) {
+	return customers.map(customer=>{
+		const initials=String(customer.name||'').split(' ').map(name=>name[0]).slice(0,2).join('');
+		return `<button type="button" class="customer-result ${customer.id===selectedId?'selected':''}" data-customer-id="${escapeHtml(customer.id)}"><span class="customer-avatar">${escapeHtml(initials)}</span><span><strong>${escapeHtml(customer.name)}</strong><small>${escapeHtml(customer.document)} · ${escapeHtml(customer.phone)}</small></span><b>${customer.balance>0?money(customer.balance):'Sin saldo'}</b></button>`;
+	}).join('')||'<p class="empty-state">No se encontraron clientes.</p>';
+}
+export function productResults(products, storeId, state, query = '', onlyAvailable = true) {
+	const term=String(query).trim().toLocaleLowerCase();
+	const selectedInventory=Array.isArray(state?.inventoryByStore)?state.inventoryByStore.filter(item=>String(item.storeId)===String(storeId)):[];
+	const stockByProduct=new Map(selectedInventory.map(item=>[String(item.productId),Number(item.quantity||0)]));
+	const frequentIds=Array.isArray(state?.frequentProductIds)?state.frequentProductIds:[];
+	const fallbackProducts=products.filter(product=>String(product.active??product.activo??true)!=='false');
+	const candidates=term?fallbackProducts.filter(product=>[product.name,product.code,product.barcode,product.reference,product.category,product.brand].some(value=>String(value||'').toLocaleLowerCase().includes(term))):(frequentIds.length?fallbackProducts.filter(product=>frequentIds.includes(product.id)):fallbackProducts);
+	const visible=candidates.filter(product=>!onlyAvailable||Number(stockByProduct.get(String(product.id))||0)>0).slice(0,8);
+	return visible.map(product=>{
+		const row=selectedInventory.find(item=>String(item.productId)===String(product.id));
+		const stock=Number(row?.quantity??stockByProduct.get(String(product.id))??0);
+		const price=Number(product.salePrice??product.price??0);
+		return `<article class="product-result"><span class="product-art">${escapeHtml(product.name?product.name[0]:'P')}</span><span class="product-info"><strong>${escapeHtml(product.name)}</strong><small>${escapeHtml(product.code)} · ${escapeHtml(product.reference||product.code)} · ${escapeHtml(product.category)}</small></span><span class="product-price"><strong>${money(price)}</strong><small>${row?stockStatus({...product,stock}):'Sin inventario'} · ${escapeHtml(stock)} und.</small></span><button class="add-product-button" data-product-id="${escapeHtml(product.id)}" ${stock===0?'disabled':''}>＋</button></article>`;
+	}).join('')||`<p class="empty-state">${term?'No se encontraron productos disponibles.':'No hay productos disponibles en este local.'}</p>`;
+}
+export function cartMarkup(cart) {
+	if(!cart.length)return '<div class="empty-state">Selecciona un producto para comenzar la factura.</div>';
+	return cart.map(item=>{
+		const listPrice=Number(item.priceLista??item.price);
+		const salePrice=Number(item.priceVenta??item.price);
+		const quantity=Number(item.quantity||0);
+		const discount=Math.max(0,listPrice-salePrice)*quantity;
+		const id=escapeHtml(item.id);
+		return `<div class="invoice-line"><div class="line-product"><span class="product-art small-art">${escapeHtml(item.name?item.name[0]:'P')}</span><span><strong>${escapeHtml(item.name)}</strong><small>${escapeHtml(item.reference||item.code)} · Lista ${money(listPrice)}</small></span></div><div class="quantity-control"><button data-decrease="${id}">−</button><input type="number" min="1" max="${escapeHtml(item.stock)}" value="${escapeHtml(quantity)}" data-quantity="${id}"><button data-increase="${id}">＋</button></div><label class="price-edit"><span>Venta</span><input type="number" min="0" max="${escapeHtml(listPrice)}" value="${escapeHtml(salePrice)}" data-price="${id}"></label><span class="line-discount">Descuento: ${money(discount)}</span><strong>${money(salePrice*quantity)}</strong><button class="remove-line" data-remove="${id}">×</button></div>`;
+	}).join('');
+}
+function paymentMarkup(payment, enableMixedPayment) {
+	return '<div class="payment-options">'+paymentMethods.filter(method=>method!=='Mixto'||enableMixedPayment).map(method=>{
+		const value=method==='Credito'?'Crédito interno FAMIMUEBLES':method;
+		return `<button type="button" class="payment-option ${payment===value||payment===method?'selected':''}" data-payment="${escapeHtml(value)}">${escapeHtml(method)}</button>`;
+	}).join('')+'</div>';
+}
 export function renderFacturacion(data, cart, payment, selectedCustomerId, transport = 0, destination = '', note = '', storeId = '', mixedSistecreditoAmount = 0, mixedOtherMethod = 'Efectivo', enableMixedPayment = false) {
 	const subtotal = cartTotal(cart);
 	const total = subtotal + Number(transport || 0);
@@ -17,7 +51,7 @@ export function renderFacturacion(data, cart, payment, selectedCustomerId, trans
 	const mixedPayment = payment === 'Mixto'
 		? '<div class="credit-flow"><p class="eyebrow">PAGO MIXTO</p><label>Valor pagado con Sistecrédito<input class="field" type="number" name="sistecreditoAmount" min="1" step="1" max="' + total + '" value="' + Number(mixedSistecreditoAmount || 0) + '" data-sistecredito-mixed-amount required></label><label>Otro medio de pago<select class="field" data-mixed-other-method>' + ['Efectivo', 'Transferencia', 'Tarjeta'].map(method => '<option value="' + method + '" ' + (method === mixedOtherMethod ? 'selected' : '') + '>' + method + '</option>').join('') + '</select></label><p class="muted">Valor restante por el otro medio: <strong data-mixed-other-amount>' + money(Math.max(0, total - Number(mixedSistecreditoAmount || 0))) + '</strong></p></div>'
 		: '';
-	const stores = data.stores.map(store => `<option value="${store.id}" ${store.id === storeId ? 'selected' : ''}>${store.name}</option>`).join('');
+	const stores = data.stores.map(store => `<option value="${escapeHtml(store.id)}" ${store.id === storeId ? 'selected' : ''}>${escapeHtml(store.name)}</option>`).join('');
 	return page(
 		'VENTA RAPIDA',
 		'Nueva factura',
